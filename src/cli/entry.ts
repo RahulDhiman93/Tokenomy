@@ -3,15 +3,20 @@ import { runInit } from "./init.js";
 import { runUninstall } from "./uninstall.js";
 import { runDoctor } from "./doctor.js";
 import { configGet, configSet } from "./config-cmd.js";
+import { runGraph } from "./graph.js";
 import type { Config } from "../core/types.js";
-
-const VERSION = "0.1.0-alpha.0";
+import { TOKENOMY_VERSION } from "../core/version.js";
 
 const HELP = `tokenomy — transparent MCP tool-output trimmer for Claude Code
 
 Usage:
-  tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup]
+  tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>]
   tokenomy doctor
+  tokenomy graph build [--force] [--path=<dir>]
+  tokenomy graph status [--path=<dir>]
+  tokenomy graph serve [--path=<dir>]
+  tokenomy graph purge [--path=<dir>|--all]
+  tokenomy graph query <minimal|impact|review> ...
   tokenomy uninstall [--purge] [--no-backup]
   tokenomy config get <key>
   tokenomy config set <key> <value>
@@ -25,11 +30,22 @@ interface ArgMap {
 
 const parseArgs = (argv: string[]): ArgMap => {
   const out: ArgMap = { _: [], flags: {} };
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === undefined) continue;
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
-      if (eq === -1) out.flags[a.slice(2)] = true;
-      else out.flags[a.slice(2, eq)] = a.slice(eq + 1);
+      if (eq !== -1) {
+        out.flags[a.slice(2, eq)] = a.slice(eq + 1);
+        continue;
+      }
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        out.flags[a.slice(2)] = next;
+        i++;
+      } else {
+        out.flags[a.slice(2)] = true;
+      }
     } else {
       out._.push(a);
     }
@@ -57,7 +73,7 @@ const main = async (): Promise<number> => {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.flags["version"] || args.flags["v"]) {
-    process.stdout.write(`tokenomy ${VERSION}\n`);
+    process.stdout.write(`tokenomy ${TOKENOMY_VERSION}\n`);
     return 0;
   }
   if (args.flags["help"] || args.flags["h"] || args._.length === 0) {
@@ -72,7 +88,9 @@ const main = async (): Promise<number> => {
     const aggression =
       typeof aggRaw === "string" && isAggression(aggRaw) ? aggRaw : undefined;
     const backup = args.flags["no-backup"] !== true;
-    const result = runInit({ aggression, backup });
+    const graphPath =
+      typeof args.flags["graph-path"] === "string" ? args.flags["graph-path"] : undefined;
+    const result = runInit({ aggression, backup, graphPath });
     process.stdout.write(
       [
         `✓ Tokenomy installed`,
@@ -80,6 +98,9 @@ const main = async (): Promise<number> => {
         `  settings: ${result.settingsPath}`,
         `  backup:   ${result.backupPath ?? "(none)"}`,
         `  config:   ${result.configPath}`,
+        ...(result.graphServerPath
+          ? [`  graph:    tokenomy-graph -> ${result.graphServerPath}`]
+          : []),
         `  manifest: ${result.manifestPath}`,
         `  Run: tokenomy doctor`,
         ``,
@@ -104,6 +125,7 @@ const main = async (): Promise<number> => {
   }
 
   if (cmd === "doctor") return printDoctor();
+  if (cmd === "graph") return runGraph(process.argv.slice(3));
 
   if (cmd === "config") {
     const sub = args._[1];

@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "../core/types.js";
 import {
@@ -22,18 +22,24 @@ import { DEFAULT_CONFIG } from "../core/config.js";
 import { atomicWrite } from "../util/atomic.js";
 import { backupFile } from "../util/backup.js";
 import { safeParse, stableStringify } from "../util/json.js";
-import { addHook, removeHookByCommandPath } from "../util/settings-patch.js";
+import {
+  addHook,
+  removeHookByCommandPath,
+  upsertMcpServer,
+} from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { readManifest, upsertEntry, writeManifest } from "../util/manifest.js";
 
 export interface InitOptions {
   aggression?: Config["aggression"];
   backup?: boolean;
+  graphPath?: string;
 }
 
 const POST_MATCHER = "mcp__.*";
 const PRE_MATCHER = "Read";
 const TIMEOUT_SECONDS = 10;
+const GRAPH_SERVER_NAME = "tokenomy-graph";
 
 const stageHookBinary = (): string => {
   mkdirSync(tokenomyBinDir(), { recursive: true });
@@ -84,6 +90,7 @@ export const runInit = (opts: InitOptions = {}): {
   settingsPath: string;
   configPath: string;
   manifestPath: string;
+  graphServerPath: string | null;
 } => {
   const hookPath = stageHookBinary();
   const settingsPath = claudeSettingsPath();
@@ -105,6 +112,13 @@ export const runInit = (opts: InitOptions = {}): {
   settings = removeHookByCommandPath(settings, hookPath);
   settings = addHook(settings, "PostToolUse", hookPath, POST_MATCHER, TIMEOUT_SECONDS);
   settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
+  const graphServerPath = opts.graphPath ? resolve(opts.graphPath) : null;
+  if (graphServerPath) {
+    settings = upsertMcpServer(settings, GRAPH_SERVER_NAME, {
+      command: "tokenomy",
+      args: ["graph", "serve", "--path", graphServerPath],
+    });
+  }
 
   atomicWrite(settingsPath, stableStringify(settings) + "\n");
 
@@ -125,5 +139,6 @@ export const runInit = (opts: InitOptions = {}): {
     settingsPath,
     configPath,
     manifestPath: manifestPath(),
+    graphServerPath,
   };
 };

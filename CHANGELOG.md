@@ -6,6 +6,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] — 2026-04-17
+
+Major release: **local code-graph MCP server** (Phase 3 of the roadmap) lands end-to-end. Tokenomy grows from a pair of transparent hooks into an opt-in context-retrieval toolkit: the agent queries a pre-built graph of your TS/JS codebase and gets focused snippets instead of brute-forcing `Read` calls.
+
+### Added
+
+- **Graph schema + persistent store** (`src/graph/schema.ts`, `store.ts`) — versioned JSON snapshot at `~/.tokenomy/graphs/<sha256(git-root)>/snapshot.json`. Node kinds: `file`, `external-module`, `function`, `class`, `method`, `exported-symbol`, `imported-symbol`, `test-file`. Edge kinds: `imports`, `exports`, `contains`, `calls`, `references`, `tests`. Every edge carries `confidence: "definite" | "inferred"` from day one.
+- **TypeScript / JavaScript parser** (`src/parsers/ts/*`) using the TypeScript compiler API via AST-only (`ts.createSourceFile`) — no type checker, no program. Extracts imports/re-exports, named/default/namespace symbols, top-level functions/classes/methods, call edges, and `require()` / dynamic `import()` (flagged inferred). Type-only imports and JSX skipped in v1 (documented).
+- **Repo identity** (`src/graph/repo-id.ts`) — `sha256(git-root)` so one cache per unique checkout, shared across Claude Code and Codex on the same machine. Falls back to `sha256(cwd)` if not in a git repo.
+- **Stale detection with mtime fast-path** (`src/graph/stale.ts`) — only re-hashes files whose mtime changed. Queries always serve stale + emit `{stale, stale_files}` per the "serve stale + loud warning" policy.
+- **Scale caps enforced inline** — hardcoded ignore list (`node_modules`, `.next`, `.turbo`, `.yarn`, `dist`, `coverage`, `.git`, `.nuxt`) plus a 5 000-file hard cap that trips during enumeration, not post-facto. Per-file edge cap (default 1 000) and snapshot byte cap (default 20 MB) checked pre-write.
+- **Build concurrency safety** — `.build.lock` file via `openSync(path, "wx")` (`O_CREAT|O_EXCL`); concurrent builds return `{ok: false, reason: "build-in-progress"}` cleanly.
+- **Pure-function queries** (`src/graph/query/{minimal,impact,review,budget,common}.ts`) — BFS over the graph with rank + pre-clip + budget-clip safety net. All three queries return `{stale, stale_files, data, truncated?}`.
+- **MCP stdio server** (`src/mcp/*`) — exposes 4 tools: `build_or_update_graph`, `get_minimal_context`, `get_impact_radius`, `get_review_context`. Each tool's output is hard-capped by `budget-clip.ts` (4 KB / 4 KB / 6 KB / 1 KB respectively).
+- **CLI subcommands** (`src/cli/graph{,-build,-status,-serve,-query,-purge}.ts`): `tokenomy graph build [--force] [--path]`, `graph status`, `graph serve` (spawns the MCP server), `graph query <minimal|impact|review>` (dev helper), `graph purge [--all]`.
+- **Graph-aware Read-clamp hint** — `pre-dispatch.ts` now appends a nudge toward `get_minimal_context` / `get_impact_radius` / `get_review_context` when a graph snapshot exists for the current repo. Gated behind `cfg.graph.enabled` and a cheap `existsSync(~/.tokenomy/graphs/)` pre-check so the git subprocess in `resolveRepoId` is skipped on installs with no graph.
+- **`tokenomy init --graph-path <dir>`** — registers the `tokenomy-graph` MCP server in `~/.claude/settings.json` alongside the existing PostToolUse / PreToolUse hooks. `tokenomy uninstall` now strips the server entry too.
+- **`tokenomy doctor` gains a "Graph MCP registration" check** — reports whether the server is registered and flags path/args drift.
+- **`typescript` is a `peerDependencies` + `peerDependenciesMeta.optional`** — core install stays zero-runtime-deps. Users who want the graph run `npm i -g typescript` alongside. `loader.ts` falls back with a structured error if missing.
+- **Config extension** — new `DEFAULT_CONFIG.graph` section: `enabled`, `max_files`, `hard_max_files`, `build_timeout_ms`, `max_edges_per_file`, `max_snapshot_bytes`, `query_budget_bytes.{build_or_update_graph, get_minimal_context, get_impact_radius, get_review_context}`. Aggression multiplier scales all numeric budgets.
+- **Graph build log** — best-effort JSONL at `~/.tokenomy/graphs/<id>/build.jsonl` via `appendGraphBuildLog`.
+- **Fixture repo for tests** (`tests/fixtures/graph-fixture-repo/`) — 8-file synthetic TS/JS repo exercising imports, re-exports, default exports, require, dynamic import, and a co-located test file.
+- **23 new tests** across unit (schema, repo-id, store, enumerate, stale, resolve, parser loader, parser import extraction, pre-dispatch) and integration (graph-build-cli, graph-status-cli, graph-mcp, init-uninstall graph-path path). Total: 67 passing.
+
+### Fixed
+
+- **Resolver silently dropped `.js` imports to `.ts` sources** (TypeScript NodeNext convention). The specifier-already-has-extension branch short-circuited the probe loop, so `import … from "./foo.js"` never tried `./foo.ts`. On Tokenomy's own source: **146 phantom parse errors → 0**. Resolver now also tries `.tsx` for `.jsx`, `.mts` for `.mjs`, `.cts` for `.cjs`. Regression tests added.
+- **`tokenomy graph query … --file <path>`** with space-separated flags returned `invalid-input`. The outer CLI parser consumed `--file` / `--files` into its own flags map before forwarding to `runGraphQuery`. Fix: forward raw argv for the `query` subcommand; let the inner parser own its flags end-to-end.
+- **`resolveRepoId` was called (spawning `git`) on every Read hook invocation**, even when no graph had ever been built. Fix: early-return `graphHint` if `~/.tokenomy/graphs/` directory doesn't exist.
+
+### Notes
+
+- `@modelcontextprotocol/sdk` is now a **runtime dependency**. This is the first non-zero-deps addition. The core hook path still has zero deps at runtime (typescript / @modelcontextprotocol/sdk are loaded dynamically only when the graph path is exercised).
+
 ## [0.1.0-alpha.4] — 2026-04-17
 
 ### Changed
@@ -74,7 +108,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.4...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.5...HEAD
+[0.1.0-alpha.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.2

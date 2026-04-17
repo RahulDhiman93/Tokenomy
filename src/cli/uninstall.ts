@@ -3,7 +3,7 @@ import { claudeSettingsPath, hookBinaryPath, tokenomyDir } from "../core/paths.j
 import { atomicWrite } from "../util/atomic.js";
 import { backupFile } from "../util/backup.js";
 import { safeParse, stableStringify } from "../util/json.js";
-import { removeHookByCommandPath } from "../util/settings-patch.js";
+import { removeHookByCommandPath, removeMcpServerByName } from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { deleteManifestFile, readManifest, writeManifest, removeEntryByCommand } from "../util/manifest.js";
 
@@ -31,7 +31,8 @@ export const runUninstall = (opts: UninstallOptions = {}): {
         `Could not parse ${settingsPath}. Manual cleanup required; backup at ${backupPath ?? "<none>"}`,
       );
     }
-    const cleaned = removeHookByCommandPath(parsed, hookPath);
+    let cleaned = removeHookByCommandPath(parsed, hookPath);
+    cleaned = removeMcpServerByName(cleaned, "tokenomy-graph");
     if (JSON.stringify(cleaned) !== JSON.stringify(parsed)) {
       atomicWrite(settingsPath, stableStringify(cleaned) + "\n");
       hooksRemoved = true;

@@ -1,7 +1,28 @@
+import { existsSync } from "node:fs";
 import type { Config, PreHookInput, PreHookOutput, SavingsLogEntry } from "../core/types.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
+import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
+import { resolveRepoId } from "../graph/repo-id.js";
+
+const graphHint = (cwd: string, cfg: Config): string | null => {
+  if (!cfg.graph.enabled) return null;
+  // Cheap gate before we pay for resolveRepoId (git subprocess):
+  // if no graphs dir exists at all, bail without spawning git.
+  if (!existsSync(tokenomyGraphRootDir())) return null;
+  try {
+    const { repoId } = resolveRepoId(cwd);
+    if (!existsSync(graphMetaPath(repoId))) return null;
+    return (
+      "[tokenomy: a local code graph snapshot exists for this repo. " +
+      "If the `tokenomy-graph` MCP server is connected, prefer `get_minimal_context`, " +
+      "`get_impact_radius`, or `get_review_context` before retrying broad `Read` calls.]"
+    );
+  } catch {
+    return null;
+  }
+};
 
 export const preDispatch = (
   input: PreHookInput,
@@ -29,11 +50,14 @@ export const preDispatch = (
   };
   appendSavingsLog(cfg.log_path, entry);
 
+  const hint = graphHint(input.cwd, cfg);
+  const additionalContext = [r.additionalContext, hint].filter(Boolean).join(" ");
+
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       updatedInput: r.updatedInput,
-      ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}),
+      ...(additionalContext ? { additionalContext } : {}),
     },
   };
 };

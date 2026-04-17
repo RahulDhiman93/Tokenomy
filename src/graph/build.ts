@@ -1,0 +1,251 @@
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { Config } from "../core/types.js";
+import { graphBuildLogPath, graphLockPath } from "../core/paths.js";
+import { stableStringify } from "../util/json.js";
+import { TOKENOMY_VERSION } from "../core/version.js";
+import { enumerateGraphFiles } from "./enumerate.js";
+import { sha256FileSync } from "./hash.js";
+import { resolveRepoId } from "./repo-id.js";
+import {
+  GRAPH_SCHEMA_VERSION,
+  normalizeGraph,
+  type Edge,
+  type Graph,
+  type GraphMeta,
+  type Node,
+} from "./schema.js";
+import { getGraphStaleStatus } from "./stale.js";
+import { JsonGraphStore } from "./store.js";
+import type { BuildGraphResult, FailOpen } from "./types.js";
+import { loadTypescript } from "../parsers/ts/loader.js";
+import { extractTsFileGraph } from "../parsers/ts/extract.js";
+import { appendGraphBuildLog } from "../core/log.js";
+
+export interface BuildGraphOptions {
+  cwd: string;
+  force?: boolean;
+  config: Config;
+}
+
+const fail = (reason: string, hint?: string): FailOpen => ({ ok: false, reason, hint });
+
+const logGraphBuild = (
+  repoId: string,
+  repoPath: string,
+  result: BuildGraphResult,
+): void => {
+  appendGraphBuildLog(graphBuildLogPath(repoId), {
+    ts: new Date().toISOString(),
+    repo_id: repoId,
+    repo_path: repoPath,
+    built: result.ok ? result.data.built : false,
+    node_count: result.ok ? result.data.node_count : 0,
+    edge_count: result.ok ? result.data.edge_count : 0,
+    parse_error_count: result.ok ? result.data.parse_error_count : 0,
+    duration_ms: result.ok ? result.data.duration_ms : 0,
+    ...(result.ok ? {} : { reason: result.reason }),
+  });
+};
+
+const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
+  const path = graphLockPath(repoId);
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    const fd = openSync(path, "wx");
+    return () => {
+      closeSync(fd);
+      rmSync(path, { force: true });
+    };
+  } catch {
+    return fail("build-in-progress");
+  }
+};
+
+const buildGraphFromFiles = async (
+  repoId: string,
+  repoPath: string,
+  files: string[],
+  skipped_files: string[],
+  cfg: Config,
+): Promise<BuildGraphResult> => {
+  const tsLoaded = await loadTypescript(repoPath);
+  if (!tsLoaded.ok) return tsLoaded;
+
+  const deadline = Date.now() + cfg.graph.build_timeout_ms;
+  const fileSet = new Set(files);
+  const nodes: Node[] = [];
+  const edges: Edge[] = [];
+  const parse_errors: Graph["parse_errors"] = [];
+  const file_hashes: Record<string, string> = {};
+  const file_mtimes: Record<string, number> = {};
+
+  for (const file of files) {
+    if (Date.now() > deadline) return fail("timeout");
+    const absPath = join(repoPath, ...file.split("/"));
+    const st = statSync(absPath);
+    file_hashes[file] = sha256FileSync(absPath);
+    file_mtimes[file] = st.mtimeMs;
+    const source = readFileSync(absPath, "utf8");
+    const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts);
+    if (extracted.edges.length > cfg.graph.max_edges_per_file) {
+      return fail("graph-too-large", `Edge cap exceeded in ${file}`);
+    }
+    nodes.push(...extracted.nodes);
+    edges.push(...extracted.edges);
+    parse_errors.push(...extracted.parse_errors);
+  }
+
+  const graph = normalizeGraph({
+    schema_version: GRAPH_SCHEMA_VERSION,
+    repo_id: repoId,
+    nodes,
+    edges,
+    parse_errors,
+  });
+  const serialized = `${stableStringify(graph)}\n`;
+  const snapshotBytes = Buffer.byteLength(serialized, "utf8");
+  if (snapshotBytes > cfg.graph.max_snapshot_bytes) {
+    return fail("graph-too-large", "Snapshot exceeded graph.max_snapshot_bytes");
+  }
+
+  const meta: GraphMeta = {
+    schema_version: GRAPH_SCHEMA_VERSION,
+    repo_id: repoId,
+    repo_path: repoPath,
+    built_at: new Date().toISOString(),
+    tokenomy_version: TOKENOMY_VERSION,
+    node_count: graph.nodes.length,
+    edge_count: graph.edges.length,
+    file_hashes,
+    file_mtimes,
+    soft_cap: cfg.graph.max_files,
+    hard_cap: cfg.graph.hard_max_files,
+    parse_error_count: graph.parse_errors.length,
+  };
+  new JsonGraphStore().save(repoId, graph, meta);
+
+  return {
+    ok: true,
+    stale: false,
+    stale_files: [],
+    data: {
+      repo_id: repoId,
+      built: true,
+      node_count: graph.nodes.length,
+      edge_count: graph.edges.length,
+      parse_error_count: graph.parse_errors.length,
+      duration_ms: 0,
+      skipped_files,
+    },
+  };
+};
+
+export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraphResult> => {
+  const start = Date.now();
+  const identity = resolveRepoId(options.cwd);
+  const store = new JsonGraphStore();
+
+  if (!options.config.graph.enabled) {
+    const result = fail("graph-disabled");
+    logGraphBuild(identity.repoId, identity.repoPath, result);
+    return result;
+  }
+
+  const unlock = acquireBuildLock(identity.repoId);
+  if (typeof unlock !== "function") {
+    logGraphBuild(identity.repoId, identity.repoPath, unlock);
+    return unlock;
+  }
+
+  try {
+    if (!options.force) {
+      const existingMeta = store.loadMeta(identity.repoId);
+      const existingGraph = store.loadGraph(identity.repoId);
+      if (existingMeta && existingGraph) {
+        const stale = getGraphStaleStatus(identity.repoPath, existingMeta, options.config);
+        if (!stale.ok) {
+          logGraphBuild(identity.repoId, identity.repoPath, stale);
+          return stale;
+        }
+        if (!stale.stale) {
+          const result: BuildGraphResult = {
+            ok: true,
+            stale: false,
+            stale_files: [],
+            data: {
+              repo_id: identity.repoId,
+              built: false,
+              node_count: existingMeta.node_count,
+              edge_count: existingMeta.edge_count,
+              parse_error_count: existingMeta.parse_error_count,
+              duration_ms: Date.now() - start,
+              skipped_files: [],
+            },
+          };
+          logGraphBuild(identity.repoId, identity.repoPath, result);
+          return result;
+        }
+      }
+    }
+
+    const enumerated = enumerateGraphFiles(identity.repoPath, options.config);
+    if (!enumerated.ok) {
+      logGraphBuild(identity.repoId, identity.repoPath, enumerated);
+      return enumerated;
+    }
+    if (enumerated.files.length === 0) {
+      const result = fail("no-files");
+      logGraphBuild(identity.repoId, identity.repoPath, result);
+      return result;
+    }
+
+    const built = await buildGraphFromFiles(
+      identity.repoId,
+      identity.repoPath,
+      enumerated.files,
+      enumerated.skipped_files,
+      options.config,
+    );
+    if (!built.ok) {
+      logGraphBuild(identity.repoId, identity.repoPath, built);
+      return built;
+    }
+    built.data.duration_ms = Date.now() - start;
+    logGraphBuild(identity.repoId, identity.repoPath, built);
+    return built;
+  } catch (error) {
+    const result = fail("io-error", (error as Error).message);
+    logGraphBuild(identity.repoId, identity.repoPath, result);
+    return result;
+  } finally {
+    unlock();
+  }
+};
+
+export const readGraphStatus = (cwd: string, config: Config): import("./types.js").GraphStatusResult => {
+  if (!config.graph.enabled) return fail("graph-disabled");
+  const identity = resolveRepoId(cwd);
+  const store = new JsonGraphStore();
+  const meta = store.loadMeta(identity.repoId);
+  const graph = store.loadGraph(identity.repoId);
+  if (!meta || !graph) return fail("graph-not-built");
+
+  const stale = getGraphStaleStatus(identity.repoPath, meta, config);
+  if (!stale.ok) return stale;
+
+  return {
+    ok: true,
+    stale: stale.stale,
+    stale_files: stale.stale_files,
+    data: {
+      repo_id: identity.repoId,
+      repo_path: meta.repo_path,
+      built_at: meta.built_at,
+      file_count: Object.keys(meta.file_hashes).length,
+      node_count: meta.node_count,
+      edge_count: meta.edge_count,
+      parse_error_count: meta.parse_error_count,
+    },
+  };
+};

@@ -6,10 +6,20 @@ export const expandHome = (p: string): string =>
 
 export const tokenomyDir = (): string => join(homedir(), ".tokenomy");
 export const tokenomyBinDir = (): string => join(tokenomyDir(), "bin");
+export const tokenomyGraphRootDir = (): string => join(tokenomyDir(), "graphs");
 export const hookBinaryPath = (): string => join(tokenomyBinDir(), "tokenomy-hook");
 export const globalConfigPath = (): string => join(tokenomyDir(), "config.json");
 export const manifestPath = (): string => join(tokenomyDir(), "installed.json");
 export const defaultLogPath = (): string => join(tokenomyDir(), "savings.jsonl");
+export const graphDir = (repoId: string): string => join(tokenomyGraphRootDir(), repoId);
+export const graphSnapshotPath = (repoId: string): string =>
+  join(graphDir(repoId), "snapshot.json");
+export const graphMetaPath = (repoId: string): string =>
+  join(graphDir(repoId), "meta.json");
+export const graphBuildLogPath = (repoId: string): string =>
+  join(graphDir(repoId), "build.jsonl");
+export const graphLockPath = (repoId: string): string =>
+  join(graphDir(repoId), ".build.lock");
 
 export const claudeSettingsPath = (): string =>
   join(homedir(), ".claude", "settings.json");
