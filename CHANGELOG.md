@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] — 2026-04-17
+
+First release cut via the new `publish.yml` workflow. End-to-end verification of the OIDC trusted-publishing flow + provenance attestation.
+
 ### Added
 
 - CONTRIBUTING.md with pick-a-task guide, local dev loop, code conventions, testing philosophy, PR workflow, bug-report and code-of-conduct sections.
@@ -51,5 +55,6 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.0...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.1
 [0.1.0-alpha.0]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.0
