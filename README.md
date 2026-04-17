@@ -45,10 +45,8 @@ Each trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-in / 
 
 ## ⚡ Quickstart
 
-Install from npm (pre-release, opt-in via `@alpha`):
-
 ```bash
-npm install -g tokenomy@alpha
+npm install -g tokenomy
 tokenomy init          # patches ~/.claude/settings.json (backed up first)
 tokenomy doctor        # 9/9 ✓
 # restart Claude Code
@@ -56,7 +54,9 @@ tokenomy doctor        # 9/9 ✓
 
 That's it. Use Claude Code normally. Tokenomy does the rest.
 
-> **Upgrading?** `npm install -g tokenomy@alpha` again — the install runs idempotently; existing config + logs are preserved.
+> **Still pre-`1.0`.** Every release carries an `-alpha.N` suffix and breaking changes may land on minor bumps — the [CHANGELOG](./CHANGELOG.md) calls them out. Users who want stability should pin a specific version: `npm install -g tokenomy@0.1.0-alpha.4`.
+
+> **Upgrading?** `npm install -g tokenomy` again — the install runs idempotently; existing config + logs are preserved.
 
 > **Want the bleeding edge?** Scroll to [Development](#development) for the clone-build-link flow.
 
@@ -245,7 +245,7 @@ npm link             # overrides any installed `tokenomy` with your local build
 tokenomy doctor      # 9/9 ✓
 ```
 
-Revert to the published version later with `npm unlink -g tokenomy && npm install -g tokenomy@alpha`.
+Revert to the published version later with `npm unlink -g tokenomy && npm install -g tokenomy`.
 
 Current coverage: **96 % statements · 85 % branches · 100 % functions.**
 

@@ -205,6 +205,51 @@ Stylistic notes are last, not first.
 
 ---
 
+## Cutting a release
+
+Maintainer-only. For now only `@RahulDhiman93` has publish rights on npmjs.com.
+
+The publish flow is fully automated via `.github/workflows/publish.yml` using **npm trusted publishing (OIDC)** — no long-lived `NPM_TOKEN` secret is stored in the repo. Each publish exchanges a short-lived GitHub OIDC token for a one-shot npm publish credential, scoped to this package only.
+
+### Every release
+
+1. Branch off `main`, bump `package.json` version (e.g. `0.1.0-alpha.N` → `0.1.0-alpha.(N+1)`).
+2. Add a CHANGELOG section for the new version, listing Added / Changed / Fixed items.
+3. `npm run prepublishOnly` — clean + build + test + typecheck must be green.
+4. Commit with `chore(release): X.Y.Z — <one-line summary>`.
+5. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"`.
+6. Push main + tag. Open a PR if you branched; otherwise skip straight to (7).
+7. Create a GitHub Release at https://github.com/RahulDhiman93/Tokenomy/releases/new — select the new tag, title = version, ✓ pre-release, Publish.
+
+### What the workflow does
+
+Two jobs run sequentially on `release: published`:
+
+| Job | Registry | How it auths |
+|---|---|---|
+| `publish` | **npmjs.com** (`tokenomy`) | OIDC trusted publishing + `--provenance` |
+| `publish-gpr` | **GitHub Packages** (`@rahuldhiman93/tokenomy`) | Workflow-scoped `GITHUB_TOKEN` |
+
+Both jobs also run the full pre-publish gate inside the workflow (clean + build + test + typecheck) so what ships matches what was tested.
+
+### Dist-tag strategy
+
+During the alpha phase, **all release-triggered publishes go to `--tag latest`**. This keeps `npm install tokenomy` (no tag) current and the npm badge fresh. Manual `workflow_dispatch` runs honour the user-picked tag (`alpha` / `beta` / `rc` / `latest`) — useful for canary builds.
+
+When `1.0.0` ships, this will split: stable releases go to `latest`, pre-releases go to their respective `alpha` / `beta` / `rc` tags.
+
+### If the workflow fails
+
+- **`ENEEDAUTH`** during publish → trusted publishing config mismatch. Check https://www.npmjs.com/package/tokenomy/access → Trusted Publishers → the workflow filename must read exactly `publish.yml` and the repo name is case-sensitive.
+- **`Cannot find module 'promise-retry'`** → npm self-upgrade bug. The workflow uses `npx -y npm@11` to side-step it; if this error returns, confirm the step hasn't been rewritten to `npm install -g npm@latest`.
+- **`version already published`** → the tag points at a commit where `package.json` still has a previously-shipped version. Delete the release (keep the tag for history), bump the version in a new commit, retag, re-release.
+
+### Manual republishes
+
+If you need to rerun without changing code, use the Actions tab → **Publish** → **Run workflow**, optionally toggling **dry run** to verify end-to-end without shipping. The workflow's "version already published" check is the safety net against accidental double-publishes.
+
+---
+
 ## Reporting bugs
 
 Open a GitHub Issue with:
