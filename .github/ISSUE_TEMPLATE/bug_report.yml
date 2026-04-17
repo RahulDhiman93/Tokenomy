@@ -1,0 +1,156 @@
+name: Bug report
+description: Something's broken or behaves unexpectedly. File here for regressions, hook misfires, shape mismatches, install/uninstall breakage, etc.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing! A few tips to make this land faster:
+        - **Don't paste real tool content verbatim.** Scrub secrets, tokens, PII.
+        - If Tokenomy misbehaves, the single most useful thing you can attach is a recent stretch of `~/.tokenomy/debug.jsonl`.
+        - For security-sensitive bugs (arbitrary code execution via crafted `tool_response`, etc.), email the maintainer directly — don't file publicly.
+
+  - type: input
+    id: tokenomy_version
+    attributes:
+      label: Tokenomy version
+      description: Output of `tokenomy --version`.
+      placeholder: "0.1.0-alpha.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node_version
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+      placeholder: "v22.5.1"
+    validations:
+      required: true
+
+  - type: input
+    id: claude_code_version
+    attributes:
+      label: Claude Code version
+      description: From the Claude Code "About" screen, or `~/.claude/VERSION` if present.
+      placeholder: "2.1.90"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (experimental)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface?
+      description: Where does the bug manifest?
+      multiple: true
+      options:
+        - PostToolUse MCP trim hook
+        - PreToolUse Read clamp hook
+        - CLI (init / doctor / uninstall / config)
+        - Savings log / debug log
+        - Settings.json patch / manifest
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: Describe the actual behavior concisely.
+      placeholder: |
+        e.g. "tokenomy doctor reports 'Hook binary not executable' even though chmod shows 0755."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands / actions. Code/log blocks welcome.
+      placeholder: |
+        1. `tokenomy init`
+        2. Restart Claude Code
+        3. Trigger an MCP call to <tool>
+        4. Observe ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor_output
+    attributes:
+      label: `tokenomy doctor` output
+      description: Paste the full output. Remediation hints help diagnosis.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: debug_log
+    attributes:
+      label: Debug log excerpt
+      description: A few lines from `~/.tokenomy/debug.jsonl` around the incident. Scrub any sensitive content.
+      render: jsonl
+    validations:
+      required: false
+
+  - type: textarea
+    id: savings_log
+    attributes:
+      label: Savings log excerpt
+      description: If relevant, a few lines from `~/.tokenomy/savings.jsonl`.
+      render: jsonl
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: Contents of `~/.tokenomy/config.json` (and `./.tokenomy.json` if present).
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, related PRs, wild guesses, recent changes to your environment.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: I'm using a supported Node version (≥ 20).
+          required: true
+        - label: I've scrubbed secrets / PII / proprietary content from all pasted logs.
+          required: true

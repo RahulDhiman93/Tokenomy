@@ -1,0 +1,126 @@
+name: Feature request
+description: Propose a new rule, CLI flag, hook event, config knob, or roadmap item.
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tokenomy stays small on purpose. Good feature requests explain the **problem first**, then the proposed solution. See the [Contribute section](../../blob/main/CONTRIBUTING.md) for the bar.
+
+        **Before filing:**
+        - Check the [roadmap](../../blob/main/README.md#roadmap) — it may already be planned.
+        - Scan open issues and discussions for duplicates.
+        - For architectural proposals (new hook event, new surface), consider opening a [Discussion](../../discussions) first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do? What burns tokens or breaks today? Concrete scenarios land better than abstract wishes.
+      placeholder: |
+        e.g. "Claude re-reads the same file 4 times in a session. Each Read is 15 KB. Over 10-minute sessions that's ~60 K wasted tokens."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you fix it? Which Claude Code hook event? Which rule file? What API surface?
+      placeholder: |
+        e.g. "Add a session-scoped Read-dedup rule: if the same file_path was Read within the last N turns, inject `offset` + small `limit` to return only the diff since the last read."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why they're worse.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Roadmap alignment
+      description: Which phase does this belong to? If unsure, pick "unsure".
+      options:
+        - Phase 1 — transparent trim (MCP + Read)
+        - Phase 2 — analyze / statusline
+        - Phase 3 — portable MCP companion server
+        - Phase 4 — Bash input-bounder / hinting
+        - Phase 5 — polish / effort nudges / publish
+        - Not on the current roadmap
+        - Unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface affected
+      description: Which part of Tokenomy would change?
+      multiple: true
+      options:
+        - PostToolUse hook (MCP trim)
+        - PreToolUse hook (Read clamp)
+        - New rule
+        - CLI
+        - Config schema
+        - Savings/debug log format
+        - Documentation only
+        - External (MCP server, statusline, analyze command)
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure_mode
+    attributes:
+      label: What can go wrong?
+      description: Fail-open is non-negotiable. How does your proposal preserve it on malformed input, unexpected response shapes, or file-system errors?
+      placeholder: |
+        e.g. "If the session store is corrupt, the rule falls back to passthrough. No new exit codes introduced. Worst case: same behavior as today."
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Before/after example
+      description: Ideally a short tool I/O snippet or CLI invocation showing today's behavior vs the proposed behavior.
+      render: markdown
+    validations:
+      required: false
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to implement this?
+      options:
+        - "Yes, I'll open a PR"
+        - "Maybe, with some guidance"
+        - "No — just proposing"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Related work, prior art, references to Anthropic hook docs, etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I checked the roadmap and this isn't already planned.
+          required: true
+        - label: I searched existing issues and discussions for duplicates.
+          required: true
+        - label: The proposal preserves the fail-open guarantee (malformed input → passthrough, exit code 2 never used).
+          required: true

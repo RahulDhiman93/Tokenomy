@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussion (architecture / ideas / questions)
+    url: https://github.com/RahulDhiman93/Tokenomy/discussions
+    about: For architectural proposals, open-ended questions, or help requests.
+  - name: Security issue
+    url: https://github.com/RahulDhiman93/Tokenomy/blob/main/CONTRIBUTING.md#reporting-bugs
+    about: Don't file security issues publicly. Email the maintainer instead.

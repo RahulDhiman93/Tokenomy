@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `c8` dev dependency + `npm run coverage` script (json-summary + lcov + html reporters).
 - Self-hosted coverage badge via `shields.io` dynamic endpoint backed by `.github/badges/coverage.json` — no third-party account required; CI auto-commits the JSON on main pushes.
 - README badges for CI status, self-hosted coverage, and npm version.
+- `.github/ISSUE_TEMPLATE/bug_report.yml` and `feature_request.yml` as GitHub Issue Forms, plus `config.yml` routing architectural discussions to Discussions and security issues to email.
 
 ## [0.1.0-alpha.0] — 2026-04-17
 
