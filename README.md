@@ -45,15 +45,20 @@ Each trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-in / 
 
 ## ⚡ Quickstart
 
+Install from npm (pre-release, opt-in via `@alpha`):
+
 ```bash
-git clone <this-repo> && cd tokenomy
-npm install && npm run build && npm link
-tokenomy init        # patches ~/.claude/settings.json (backed up first)
-tokenomy doctor      # 9/9 ✓
+npm install -g tokenomy@alpha
+tokenomy init          # patches ~/.claude/settings.json (backed up first)
+tokenomy doctor        # 9/9 ✓
 # restart Claude Code
 ```
 
 That's it. Use Claude Code normally. Tokenomy does the rest.
+
+> **Upgrading?** `npm install -g tokenomy@alpha` again — the install runs idempotently; existing config + logs are preserved.
+
+> **Want the bleeding edge?** Scroll to [Development](#development) for the clone-build-link flow.
 
 To watch the magic live:
 
@@ -226,14 +231,21 @@ Rules are pure functions: `(toolName, toolInput, toolResponse, config) → { kin
 
 ### Development
 
+Clone, build, and `npm link` so the `tokenomy` command points at your local checkout:
+
 ```bash
+git clone https://github.com/RahulDhiman93/Tokenomy.git
+cd Tokenomy
 npm install
 npm run build        # tsc + chmod +x
 npm test             # node:test runner, 41 tests, <1 s
 npm run coverage     # c8 → coverage/lcov.info + HTML report
 npm run typecheck    # tsc --noEmit
-npm run build && npm link && tokenomy doctor    # end-to-end smoke
+npm link             # overrides any installed `tokenomy` with your local build
+tokenomy doctor      # 9/9 ✓
 ```
+
+Revert to the published version later with `npm unlink -g tokenomy && npm install -g tokenomy@alpha`.
 
 Current coverage: **96 % statements · 85 % branches · 100 % functions.**
 

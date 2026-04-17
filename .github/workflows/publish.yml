@@ -101,3 +101,57 @@ jobs:
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Dry run: \`${{ inputs.dry_run }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-gpr:
+    name: publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: publish
+    if: ${{ inputs.dry_run != true }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@rahuldhiman93"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Rewrite package name for GitHub Packages scope
+        run: |
+          set -euo pipefail
+          jq '.name = "@rahuldhiman93/tokenomy"
+              | .publishConfig = {registry: "https://npm.pkg.github.com"}
+              | del(.publishConfig.tag)' package.json > package.json.tmp
+          mv package.json.tmp package.json
+          echo "Rewritten package.json name:"
+          jq -r .name package.json
+
+      - name: Determine dist-tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            version="$(jq -r .version package.json)"
+            if [[ "$version" == *"-alpha"* ]]; then tag="alpha"
+            elif [[ "$version" == *"-beta"* ]]; then tag="beta"
+            elif [[ "$version" == *"-rc"* ]]; then tag="rc"
+            else tag="latest"; fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to GitHub Packages
+        run: npm publish --tag ${{ steps.tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

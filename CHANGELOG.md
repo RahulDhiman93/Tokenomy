@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] — 2026-04-17
+
+### Added
+- Dual-publish to GitHub Packages (`@rahuldhiman93/tokenomy`) in the `publish.yml` workflow, alongside the primary npmjs.com publish. Populates the repo's "Packages" sidebar on GitHub.
+
+### Changed
+- README prioritizes `npm install -g tokenomy@alpha` over the local clone-build-link flow. The Development section now clearly frames source installs as the bleeding-edge / contributor path, not the default.
+
 ## [0.1.0-alpha.1] — 2026-04-17
 
 First release cut via the new `publish.yml` workflow. End-to-end verification of the OIDC trusted-publishing flow + provenance attestation.
@@ -55,6 +63,7 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.1
 [0.1.0-alpha.0]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.0
