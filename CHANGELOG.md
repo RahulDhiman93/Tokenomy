@@ -16,6 +16,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Self-hosted coverage badge via `shields.io` dynamic endpoint backed by `.github/badges/coverage.json` — no third-party account required; CI auto-commits the JSON on main pushes.
 - README badges for CI status, self-hosted coverage, and npm version.
 - `.github/ISSUE_TEMPLATE/bug_report.yml` and `feature_request.yml` as GitHub Issue Forms, plus `config.yml` routing architectural discussions to Discussions and security issues to email.
+- `.github/workflows/publish.yml` — OIDC-based npm trusted publishing on GitHub Release (auto-infers dist-tag from pre-release suffix: `*-alpha* → alpha`, `*-beta* → beta`, `*-rc* → rc`, stable → `latest`). Manual `workflow_dispatch` supports a dry-run toggle. No npm token needed; uses `id-token: write` + `--provenance` for supply-chain attestation.
+- Initial npm publish: `tokenomy@0.1.0-alpha.0` under the `@alpha` dist-tag.
 
 ## [0.1.0-alpha.0] — 2026-04-17
 

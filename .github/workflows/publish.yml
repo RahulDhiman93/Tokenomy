@@ -1,0 +1,103 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "npm dist-tag for this publish"
+        required: true
+        default: "alpha"
+        type: choice
+        options:
+          - alpha
+          - beta
+          - rc
+          - latest
+      dry_run:
+        description: "Dry run (no actual publish)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Pre-publish gate (build + test + typecheck)
+        run: npm run prepublishOnly
+
+      - name: Determine dist-tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            version="$(jq -r .version package.json)"
+            if [[ "$version" == *"-alpha"* ]]; then
+              tag="alpha"
+            elif [[ "$version" == *"-beta"* ]]; then
+              tag="beta"
+            elif [[ "$version" == *"-rc"* ]]; then
+              tag="rc"
+            else
+              tag="latest"
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing with dist-tag: $tag"
+
+      - name: Verify version not already published
+        run: |
+          set -euo pipefail
+          name="$(jq -r .name package.json)"
+          version="$(jq -r .version package.json)"
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "::error::$name@$version is already published; bump the version in package.json"
+            exit 1
+          fi
+          echo "Ready to publish $name@$version"
+
+      - name: Publish (dry run)
+        if: ${{ inputs.dry_run == true }}
+        run: npm publish --tag ${{ steps.tag.outputs.tag }} --provenance --access public --dry-run
+
+      - name: Publish
+        if: ${{ inputs.dry_run != true }}
+        run: npm publish --tag ${{ steps.tag.outputs.tag }} --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Publish summary"
+            echo ""
+            echo "- Package: \`$(jq -r .name package.json)\`"
+            echo "- Version: \`$(jq -r .version package.json)\`"
+            echo "- Tag: \`${{ steps.tag.outputs.tag }}\`"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            echo "- Dry run: \`${{ inputs.dry_run }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
