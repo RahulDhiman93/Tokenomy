@@ -1,0 +1,70 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readBoundRule } from "../../src/rules/read-bound.js";
+import type { Config } from "../../src/core/types.js";
+
+const CFG: Config = {
+  aggression: "balanced",
+  gate: { always_trim_above_bytes: 40_000, min_saved_bytes: 4_000, min_saved_pct: 0.25 },
+  mcp: { max_text_bytes: 16_000, per_block_head: 4_000, per_block_tail: 2_000 },
+  read: { enabled: true, clamp_above_bytes: 1_000, injected_limit: 100 },
+  log_path: "/tmp/nope",
+  disabled_tools: [],
+};
+
+test("read-bound: passthrough when explicit limit given", () => {
+  const r = readBoundRule({ file_path: "/tmp/any", limit: 50 }, CFG);
+  assert.equal(r.kind, "passthrough");
+});
+
+test("read-bound: passthrough when explicit offset given", () => {
+  const r = readBoundRule({ file_path: "/tmp/any", offset: 100 }, CFG);
+  assert.equal(r.kind, "passthrough");
+});
+
+test("read-bound: passthrough when file missing", () => {
+  const r = readBoundRule({ file_path: "/tmp/does-not-exist-tokenomy" }, CFG);
+  assert.equal(r.kind, "passthrough");
+});
+
+test("read-bound: passthrough when file small", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tok-read-"));
+  try {
+    const f = join(dir, "small.txt");
+    writeFileSync(f, "tiny");
+    const r = readBoundRule({ file_path: f }, CFG);
+    assert.equal(r.kind, "passthrough");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("read-bound: clamps when file exceeds threshold", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tok-read-"));
+  try {
+    const f = join(dir, "big.txt");
+    writeFileSync(f, "X".repeat(5_000));
+    const r = readBoundRule({ file_path: f }, CFG);
+    assert.equal(r.kind, "clamp");
+    assert.equal(r.updatedInput!["limit"], 100);
+    assert.equal(r.updatedInput!["file_path"], f);
+    assert.match(r.additionalContext!, /clamped Read to 100 lines/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("read-bound: disabled config short-circuits", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tok-read-"));
+  try {
+    const f = join(dir, "big.txt");
+    writeFileSync(f, "X".repeat(5_000));
+    const r = readBoundRule({ file_path: f }, { ...CFG, read: { ...CFG.read, enabled: false } });
+    assert.equal(r.kind, "passthrough");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

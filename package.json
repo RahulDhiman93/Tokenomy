@@ -1,0 +1,36 @@
+{
+  "name": "tokenomy",
+  "version": "0.1.0-alpha.0",
+  "description": "Token-reduction tool for Claude Code: transparent MCP tool-output trim via PostToolUse hook.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "tokenomy": "dist/cli/entry.js",
+    "tokenomy-hook": "dist/hook/entry.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
+    "test:perf": "node --import tsx --test tests/perf/*.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "tokens",
+    "hook"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

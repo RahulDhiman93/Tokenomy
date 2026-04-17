@@ -1,0 +1,8 @@
+src/
+tests/
+scripts/
+tsconfig.json
+.gitignore
+.gitattributes
+node_modules/
+coverage/
