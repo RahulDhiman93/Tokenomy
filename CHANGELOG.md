@@ -47,5 +47,5 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/rahuldhiman/tokenomy/compare/v0.1.0-alpha.0...HEAD
-[0.1.0-alpha.0]: https://github.com/rahuldhiman/tokenomy/releases/tag/v0.1.0-alpha.0
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.0...HEAD
+[0.1.0-alpha.0]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.0
