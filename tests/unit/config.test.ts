@@ -24,6 +24,11 @@ test("config: defaults when no files exist (conservative aggression ×2)", () =>
     assert.equal(cfg.aggression, DEFAULT_CONFIG.aggression);
     assert.equal(cfg.gate.always_trim_above_bytes, DEFAULT_CONFIG.gate.always_trim_above_bytes * 2);
     assert.equal(cfg.mcp.max_text_bytes, DEFAULT_CONFIG.mcp.max_text_bytes * 2);
+    assert.equal(cfg.graph.build_timeout_ms, DEFAULT_CONFIG.graph.build_timeout_ms * 2);
+    assert.equal(
+      cfg.graph.query_budget_bytes.get_minimal_context,
+      DEFAULT_CONFIG.graph.query_budget_bytes.get_minimal_context * 2,
+    );
   });
 });
 
@@ -45,6 +50,10 @@ test("config: global file controls aggression; project overrides thresholds; agg
     assert.equal(cfg.mcp.max_text_bytes, 1000);
     assert.equal(cfg.mcp.per_block_head, 100);
     assert.equal(cfg.mcp.per_block_tail, 50);
+    assert.equal(
+      cfg.graph.query_budget_bytes.get_review_context,
+      512,
+    );
   });
 });
 

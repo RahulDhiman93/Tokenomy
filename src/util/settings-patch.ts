@@ -11,12 +11,21 @@ interface HookMatcherEntry {
   [k: string]: unknown;
 }
 
+interface McpServerEntry {
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  [k: string]: unknown;
+}
+
 interface SettingsShape {
   hooks?: {
     PostToolUse?: HookMatcherEntry[];
     PreToolUse?: HookMatcherEntry[];
     [event: string]: HookMatcherEntry[] | undefined;
   };
+  mcpServers?: Record<string, McpServerEntry>;
   [k: string]: unknown;
 }
 
@@ -128,4 +137,34 @@ export const hasOverlappingMcpHook = (
   return false;
 };
 
-export type { SettingsShape, HookMatcherEntry, HookCommandEntry };
+export const upsertMcpServer = (
+  settings: SettingsShape,
+  name: string,
+  server: McpServerEntry,
+): SettingsShape => ({
+  ...settings,
+  mcpServers: {
+    ...(settings.mcpServers ?? {}),
+    [name]: server,
+  },
+});
+
+export const removeMcpServerByName = (
+  settings: SettingsShape,
+  name: string,
+): SettingsShape => {
+  if (!settings.mcpServers?.[name]) return settings;
+  const nextServers = { ...(settings.mcpServers ?? {}) };
+  delete nextServers[name];
+  const next: SettingsShape = { ...settings };
+  if (Object.keys(nextServers).length === 0) delete next.mcpServers;
+  else next.mcpServers = nextServers;
+  return next;
+};
+
+export const getMcpServer = (
+  settings: SettingsShape,
+  name: string,
+): McpServerEntry | undefined => settings.mcpServers?.[name];
+
+export type { SettingsShape, HookMatcherEntry, HookCommandEntry, McpServerEntry };

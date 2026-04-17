@@ -9,7 +9,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runInit } from "../../src/cli/init.js";
 import { runUninstall } from "../../src/cli/uninstall.js";
 import {
@@ -116,6 +116,28 @@ test("uninstall --purge removes ~/.tokenomy/", () => {
     runInit({});
     runUninstall({ purge: true });
     assert.equal(existsSync(join(h.home, ".tokenomy")), false);
+  } finally {
+    h.restore();
+  }
+});
+
+test("init --graph-path registers tokenomy-graph and uninstall removes it", () => {
+  const h = setupHome();
+  try {
+    mkdirSync(join(h.home, ".claude"), { recursive: true });
+    const repo = join(h.home, "repo");
+    mkdirSync(repo, { recursive: true });
+
+    runInit({ graphPath: repo });
+    const settings = JSON.parse(readFileSync(claudeSettingsPath(), "utf8"));
+    assert.deepEqual(settings.mcpServers["tokenomy-graph"], {
+      command: "tokenomy",
+      args: ["graph", "serve", "--path", resolve(repo)],
+    });
+
+    runUninstall({ backup: false });
+    const after = JSON.parse(readFileSync(claudeSettingsPath(), "utf8"));
+    assert.equal(after.mcpServers, undefined);
   } finally {
     h.restore();
   }

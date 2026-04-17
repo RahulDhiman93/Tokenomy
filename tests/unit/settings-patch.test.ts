@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   addHook,
   countHooksForPath,
+  getMcpServer,
   hasOverlappingMcpHook,
+  removeMcpServerByName,
   removeHookByCommandPath,
+  upsertMcpServer,
 } from "../../src/util/settings-patch.js";
 
 const HOOK = "/Users/me/.tokenomy/bin/tokenomy-hook";
@@ -83,4 +86,19 @@ test("idempotent: init-then-init keeps exactly one entry per event", () => {
   s = addHook(s, "PreToolUse", HOOK, "Read", 10);
   assert.equal(countHooksForPath(s, HOOK, "PostToolUse"), 1);
   assert.equal(countHooksForPath(s, HOOK, "PreToolUse"), 1);
+});
+
+test("mcp server helpers: upsert and remove tokenomy-graph entry", () => {
+  const withServer = upsertMcpServer({}, "tokenomy-graph", {
+    command: "tokenomy",
+    args: ["graph", "serve", "--path", "/repo"],
+  });
+  assert.deepEqual(getMcpServer(withServer, "tokenomy-graph"), {
+    command: "tokenomy",
+    args: ["graph", "serve", "--path", "/repo"],
+  });
+
+  const removed = removeMcpServerByName(withServer, "tokenomy-graph");
+  assert.equal(getMcpServer(removed, "tokenomy-graph"), undefined);
+  assert.equal(removed.mcpServers, undefined);
 });

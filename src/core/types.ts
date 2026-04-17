@@ -82,11 +82,29 @@ export interface ReadRuleConfig {
   injected_limit: number;
 }
 
+export interface GraphQueryBudgetConfig {
+  build_or_update_graph: number;
+  get_minimal_context: number;
+  get_impact_radius: number;
+  get_review_context: number;
+}
+
+export interface GraphConfig {
+  enabled: boolean;
+  max_files: number;
+  hard_max_files: number;
+  build_timeout_ms: number;
+  max_edges_per_file: number;
+  max_snapshot_bytes: number;
+  query_budget_bytes: GraphQueryBudgetConfig;
+}
+
 export interface Config {
   aggression: "conservative" | "balanced" | "aggressive";
   gate: GateConfig;
   mcp: McpRuleConfig;
   read: ReadRuleConfig;
+  graph: GraphConfig;
   log_path: string;
   disabled_tools: string[];
 }

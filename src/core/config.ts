@@ -19,6 +19,20 @@ export const DEFAULT_CONFIG: Config = {
     clamp_above_bytes: 40_000,
     injected_limit: 500,
   },
+  graph: {
+    enabled: true,
+    max_files: 2_000,
+    hard_max_files: 5_000,
+    build_timeout_ms: 30_000,
+    max_edges_per_file: 1_000,
+    max_snapshot_bytes: 20_000_000,
+    query_budget_bytes: {
+      build_or_update_graph: 4_000,
+      get_minimal_context: 4_000,
+      get_impact_radius: 6_000,
+      get_review_context: 1_000,
+    },
+  },
   log_path: defaultLogPath(),
   disabled_tools: [],
 };
@@ -86,6 +100,28 @@ const applyAggression = (cfg: Config): Config => {
       // larger injected limit). Aggressive (×0.5) is stricter on both.
       clamp_above_bytes: Math.round(cfg.read.clamp_above_bytes * m),
       injected_limit: Math.max(50, Math.round(cfg.read.injected_limit * m)),
+    },
+    graph: {
+      ...cfg.graph,
+      build_timeout_ms: Math.max(1_000, Math.round(cfg.graph.build_timeout_ms * m)),
+      query_budget_bytes: {
+        build_or_update_graph: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.build_or_update_graph * m),
+        ),
+        get_minimal_context: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.get_minimal_context * m),
+        ),
+        get_impact_radius: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.get_impact_radius * m),
+        ),
+        get_review_context: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.get_review_context * m),
+        ),
+      },
     },
   };
 };

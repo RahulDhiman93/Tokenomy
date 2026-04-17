@@ -11,6 +11,7 @@ import {
 import { safeParse } from "../util/json.js";
 import {
   countHooksForPath,
+  getMcpServer,
   hasOverlappingMcpHook,
 } from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
@@ -210,6 +211,44 @@ const overlapWarnCheck = (settings: SettingsShape | undefined): CheckResult => {
   };
 };
 
+const graphRegistrationCheck = (settings: SettingsShape | undefined): CheckResult => {
+  if (!settings) return { name: "Graph MCP registration", ok: true, detail: "no settings" };
+  const entry = getMcpServer(settings, "tokenomy-graph");
+  if (!entry) {
+    return {
+      name: "Graph MCP registration",
+      ok: true,
+      detail: "not configured",
+    };
+  }
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  const ok = entry.command === "tokenomy" && args[0] === "graph" && args[1] === "serve";
+  return {
+    name: "Graph MCP registration",
+    ok,
+    detail: ok ? "tokenomy-graph configured" : "tokenomy-graph entry is malformed",
+    remediation: ok ? undefined : "Re-run `tokenomy init --graph-path=<repo>` to repair it.",
+  };
+};
+
+const mcpSdkCheck = async (): Promise<CheckResult> => {
+  try {
+    await import("@modelcontextprotocol/sdk/server/index.js");
+    return {
+      name: "Graph MCP SDK available",
+      ok: true,
+      detail: "@modelcontextprotocol/sdk import ok",
+    };
+  } catch (error) {
+    return {
+      name: "Graph MCP SDK available",
+      ok: false,
+      detail: (error as Error).message,
+      remediation: "Install dependencies and rebuild Tokenomy.",
+    };
+  }
+};
+
 export const runDoctor = async (): Promise<CheckResult[]> => {
   const out: CheckResult[] = [];
   out.push(nodeVersionCheck());
@@ -226,5 +265,7 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   out.push(logDirWritableCheck(cfgRaw));
   out.push(manifestDriftCheck(s.settings));
   out.push(overlapWarnCheck(s.settings));
+  out.push(graphRegistrationCheck(s.settings));
+  out.push(await mcpSdkCheck());
   return out;
 };
