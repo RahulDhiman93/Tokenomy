@@ -11,9 +11,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CONTRIBUTING.md with pick-a-task guide, local dev loop, code conventions, testing philosophy, PR workflow, bug-report and code-of-conduct sections.
 - `.github/pull_request_template.md` with surface checklist, test-plan block, and invariant preservation checklist.
 - `CHANGELOG.md` (this file).
-- GitHub Actions CI workflow running `build`, `test`, and `c8` coverage on Node 20 + 22; Codecov upload.
-- `c8` dev dependency + `npm run coverage` script.
-- README badges for CI status, Codecov coverage, and npm version.
+- GitHub Actions CI workflow running `build`, `test`, and `c8` coverage on Node 20 + 22.
+- `c8` dev dependency + `npm run coverage` script (json-summary + lcov + html reporters).
+- Self-hosted coverage badge via `shields.io` dynamic endpoint backed by `.github/badges/coverage.json` — no third-party account required; CI auto-commits the JSON on main pushes.
+- README badges for CI status, self-hosted coverage, and npm version.
 
 ## [0.1.0-alpha.0] — 2026-04-17
 

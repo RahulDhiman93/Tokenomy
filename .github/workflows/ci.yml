@@ -43,6 +43,8 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     needs: build-test
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -60,16 +62,37 @@ jobs:
       - name: Run coverage
         run: npm run coverage
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage/lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: coverage/
           retention-days: 14
+
+      - name: Generate coverage badge JSON
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          pct=$(jq -r '.total.statements.pct' coverage/coverage-summary.json)
+          pct_rounded=$(printf '%.1f' "$pct")
+          if awk "BEGIN { exit !($pct >= 90) }"; then color=brightgreen
+          elif awk "BEGIN { exit !($pct >= 80) }"; then color=green
+          elif awk "BEGIN { exit !($pct >= 70) }"; then color=yellowgreen
+          elif awk "BEGIN { exit !($pct >= 60) }"; then color=yellow
+          else color=red
+          fi
+          mkdir -p .github/badges
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' \
+            "$pct_rounded" "$color" > .github/badges/coverage.json
+          echo "Generated badge:"
+          cat .github/badges/coverage.json
+
+      - name: Commit badge if changed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: .github/badges/coverage.json
+          commit_message: "chore(ci): update coverage badge"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          skip_dirty_check: false
