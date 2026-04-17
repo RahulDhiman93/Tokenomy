@@ -1,7 +1,7 @@
 {
   "name": "tokenomy",
   "version": "0.1.0-alpha.0",
-  "description": "Token-reduction tool for Claude Code: transparent MCP tool-output trim via PostToolUse hook.",
+  "description": "Surgical Claude Code hook that transparently trims bloated MCP tool responses and clamps oversized file reads — stop burning tokens on tool chatter.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -16,19 +16,42 @@
     "LICENSE",
     "CHANGELOG.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RahulDhiman93/Tokenomy.git"
+  },
+  "homepage": "https://github.com/RahulDhiman93/Tokenomy#readme",
+  "bugs": {
+    "url": "https://github.com/RahulDhiman93/Tokenomy/issues"
+  },
+  "author": {
+    "name": "Rahul Dhiman",
+    "url": "https://github.com/RahulDhiman93"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
   "scripts": {
     "build": "bash scripts/build.sh",
     "test": "node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
     "test:perf": "node --import tsx --test tests/perf/*.test.ts",
     "coverage": "c8 --reporter=text --reporter=lcov --reporter=html --reporter=json-summary --include='src/**/*.ts' --exclude='src/**/*.d.ts' node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist coverage"
+    "clean": "rm -rf dist coverage",
+    "prepublishOnly": "npm run clean && npm run build && npm test && npm run typecheck"
   },
   "keywords": [
     "claude-code",
+    "anthropic",
     "mcp",
     "tokens",
-    "hook"
+    "cost-reduction",
+    "hook",
+    "agent",
+    "llm",
+    "tool-output",
+    "cli"
   ],
   "license": "MIT",
   "devDependencies": {
