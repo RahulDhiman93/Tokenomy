@@ -1,8 +1,12 @@
 src/
 tests/
 scripts/
+.github/
 tsconfig.json
 .gitignore
 .gitattributes
+.npmignore
 node_modules/
 coverage/
+CHANGELOG.md
+CONTRIBUTING.md

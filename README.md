@@ -6,10 +6,12 @@
 
 A surgical Claude Code hook that transparently trims bloated MCP responses and clamps oversized file reads — so your agent spends tokens on *thinking*, not on parsing 40 KB of Jira JSON for the third time.
 
+[![CI](https://github.com/rahuldhiman/tokenomy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rahuldhiman/tokenomy/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/rahuldhiman/tokenomy/branch/main/graph/badge.svg)](https://codecov.io/gh/rahuldhiman/tokenomy)
+[![npm](https://img.shields.io/npm/v/tokenomy.svg?label=npm&color=cb0000)](https://www.npmjs.com/package/tokenomy)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#quickstart)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#)
-[![Tests](https://img.shields.io/badge/tests-41%20passing-success)](#testing)
-[![Status](https://img.shields.io/badge/phase%201-alpha-blue)](#roadmap)
+[![Phase](https://img.shields.io/badge/phase%201-alpha-blue)](#roadmap)
 
 </div>
 
@@ -228,8 +230,12 @@ Rules are pure functions: `(toolName, toolInput, toolResponse, config) → { kin
 npm install
 npm run build        # tsc + chmod +x
 npm test             # node:test runner, 41 tests, <1 s
+npm run coverage     # c8 → coverage/lcov.info + HTML report
+npm run typecheck    # tsc --noEmit
 npm run build && npm link && tokenomy doctor    # end-to-end smoke
 ```
+
+Current coverage: **96 % statements · 85 % branches · 100 % functions.**
 
 ### Guiding principles
 
