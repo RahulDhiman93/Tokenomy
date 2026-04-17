@@ -51,19 +51,14 @@ jobs:
         id: tag
         run: |
           set -euo pipefail
+          # Release-triggered runs always publish to `latest` — every version's
+          # -alpha/-beta/-rc suffix is the pre-release signal, and keeping latest
+          # current is what `npm install tokenomy` (no tag) and the npm badge both
+          # follow. Manual runs respect the user's explicit choice.
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag }}"
           else
-            version="$(jq -r .version package.json)"
-            if [[ "$version" == *"-alpha"* ]]; then
-              tag="alpha"
-            elif [[ "$version" == *"-beta"* ]]; then
-              tag="beta"
-            elif [[ "$version" == *"-rc"* ]]; then
-              tag="rc"
-            else
-              tag="latest"
-            fi
+            tag="latest"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Publishing with dist-tag: $tag"
@@ -88,16 +83,6 @@ jobs:
       - name: Publish
         if: ${{ inputs.dry_run != true }}
         run: npx -y npm@11 publish --tag ${{ steps.tag.outputs.tag }} --provenance --access public
-
-      - name: Keep `latest` tracking the newest version
-        # Ensures `npm install tokenomy` (no tag) always pulls the most recent release.
-        # Safe to re-run: idempotent on the npm side.
-        if: ${{ inputs.dry_run != true && steps.tag.outputs.tag != 'latest' }}
-        run: |
-          set -euo pipefail
-          pkg="$(jq -r .name package.json)"
-          version="$(jq -r .version package.json)"
-          npx -y npm@11 dist-tag add "$pkg@$version" latest
 
       - name: Summary
         if: always()

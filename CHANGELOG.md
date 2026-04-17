@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] — 2026-04-17
+
+### Changed
+- Publish workflow simplified: release-triggered publishes always use `--tag latest`. The previous approach (publish to `alpha`, then a separate `npm dist-tag add … latest` step) fails because npm's OIDC trusted publishing only covers the `publish` command, not `dist-tag` mutations. During the alpha phase, `latest` == newest is the right semantic anyway — the `-alpha.N` suffix in the version string is the only pre-release signal users need. When stable 1.0 ships, we'll revisit split tags.
+- Manual `workflow_dispatch` runs still respect the user's explicit tag choice (useful for canary beta/rc publishes without moving `latest`).
+
 ## [0.1.0-alpha.3] — 2026-04-17
 
 ### Added
@@ -68,7 +74,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.1
