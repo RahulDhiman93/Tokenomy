@@ -32,12 +32,13 @@ Assistant → read src/config.ts    ← 14 KB
 
 200 K tokens gone before Claude did any real work. **Compaction kicks in too late, and it's lossy.**
 
-Tokenomy plugs two holes the Claude Code hook contract actually lets you close — with zero proxy, no monkey-patching, and a total of ~800 lines of TypeScript:
+Tokenomy plugs the holes the Claude Code hook contract lets you close — with zero proxy, no monkey-patching:
 
 | Surface | Mechanism | What it kills |
 |---|---|---|
 | `PostToolUse` on `mcp__.*` | `updatedMCPToolOutput` | 10–50 KB MCP responses from Atlassian, Notion, Gmail, Asana, HubSpot, Intercom… |
 | `PreToolUse` on `Read` | `updatedInput` | Unbounded reads on huge source files |
+| `tokenomy-graph` MCP server | 4 tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context by querying a pre-built graph |
 
 Each trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-in / bytes-out, so you can prove the savings.
 
@@ -168,11 +169,73 @@ Config changes take effect **immediately** — no Claude Code restart needed. On
 ✓ Log directory writable
 ✓ Manifest drift — clean
 ✓ No overlapping mcp__ hook
+✓ Graph MCP registration — not configured
 
-9/9 checks passed
+10/10 checks passed
 ```
 
 Every check has an actionable remediation hint on failure.
+
+---
+
+## 🕸️ Code-graph MCP server (opt-in, Phase 3)
+
+Once the two hooks stop bleeding tokens on tool chatter, the next waste is Claude reading half a codebase to find one function. The optional **`tokenomy-graph` MCP server** gives the agent four surgical tools over stdio — the graph is built once, queries return focused neighborhoods, budgets are hard-capped.
+
+### Install + register
+
+```bash
+npm install -g typescript              # peer-optional; required for the graph
+tokenomy init --graph-path "$PWD"      # adds tokenomy-graph to ~/.claude/settings.json
+tokenomy graph build --path "$PWD"     # parses TS/JS into ~/.tokenomy/graphs/<id>/
+tokenomy doctor                        # 10/10 ✓
+# restart Claude Code
+```
+
+### The four tools
+
+| Tool | Input | Output | Budget |
+|---|---|---|---|
+| `build_or_update_graph` | `{force?, path?}` | build stats | 4 KB |
+| `get_minimal_context` | `{target: {file, symbol?}, depth?}` | focal + ranked neighbors (imports/exports/contains) | 4 KB |
+| `get_impact_radius` | `{changed: [{file, symbols?}], max_depth?}` | reverse deps + suggested tests | 6 KB |
+| `get_review_context` | `{files: [...]}` | fanout + hotspots across changed files | 1 KB |
+
+Stale detection is always-on: queries return `{stale, stale_files}` so the agent knows whether to trust the result. `tokenomy graph build --force` regenerates.
+
+### Good prompt to test it
+
+> First call `build_or_update_graph` if needed.
+> Then call `get_minimal_context` for `{"target":{"file":"src/index.ts"},"depth":1}`.
+> Then call `get_review_context` for `{"files":["src/index.ts","src/foo.ts"]}`.
+> Only use `Read` if the graph result is insufficient.
+
+### Dev CLI (no MCP needed)
+
+```bash
+tokenomy graph status --path "$PWD"
+tokenomy graph query minimal --path "$PWD" --file src/index.ts
+tokenomy graph query impact  --path "$PWD" --file src/index.ts
+tokenomy graph query review  --path "$PWD" --files src/index.ts,src/foo.ts
+tokenomy graph purge [--all]
+```
+
+### Codex
+
+The MCP server ports cleanly:
+
+```bash
+codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
+codex mcp list
+```
+
+### Scope + limits (v1)
+
+- **TypeScript + JavaScript only** (`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`, with `.mts`/`.cts` probed). Python / 23-lang support explicitly out of scope.
+- **Soft cap 2 000 files, hard cap 5 000** — larger repos abort cleanly with `repo-too-large`.
+- **AST-only** via the TypeScript compiler API (no type checker); type-only imports and JSX element references skipped in v1.
+- **No `tsconfig.paths`, no `node_modules` resolution** — bare specifiers become `external-module` nodes. Will revisit in v2.
+- **Fail-open always:** every tool and CLI subcommand returns `{ok: false, reason}` rather than throwing; graph features never break the core hook path.
 
 ---
 
@@ -188,9 +251,9 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 
 ## 🧭 Roadmap
 
-- [x] **Phase 1.** `PostToolUse` MCP trim + `PreToolUse` Read clamp + CLI + 9-check doctor + savings log
+- [x] **Phase 1.** `PostToolUse` MCP trim + `PreToolUse` Read clamp + CLI + 10-check doctor + savings log
 - [ ] **Phase 2.** `tokenomy analyze` — walk `~/.claude/projects/**/*.jsonl`, surface waste patterns, benchmark real savings with a real tokenizer
-- [ ] **Phase 3.** Portable MCP companion server — `tokenomy_summarize`, `tokenomy_read_slice`, `tokenomy_grep_bucketed`. Works in Codex via `~/.codex/config.toml`
+- [x] **Phase 3.** Local code-graph MCP server: `tokenomy-graph` stdio server + `graph build|status|serve|query|purge` CLI + `init --graph-path` + doctor check. TypeScript AST, 4 tools, hard budget caps, fail-open everywhere.
 - [ ] **Phase 4.** `PreToolUse` Bash input-bounder (auto-append `| head -N` on verbose commands) + hinting layer nudging Claude toward Tokenomy MCP alternatives
 - [ ] **Phase 5.** Polish — statusline with live savings counter, `UserPromptSubmit` prompt-classifier for effort-level nudges, npm publish
 
