@@ -89,6 +89,16 @@ jobs:
         if: ${{ inputs.dry_run != true }}
         run: npx -y npm@11 publish --tag ${{ steps.tag.outputs.tag }} --provenance --access public
 
+      - name: Keep `latest` tracking the newest version
+        # Ensures `npm install tokenomy` (no tag) always pulls the most recent release.
+        # Safe to re-run: idempotent on the npm side.
+        if: ${{ inputs.dry_run != true && steps.tag.outputs.tag != 'latest' }}
+        run: |
+          set -euo pipefail
+          pkg="$(jq -r .name package.json)"
+          version="$(jq -r .version package.json)"
+          npx -y npm@11 dist-tag add "$pkg@$version" latest
+
       - name: Summary
         if: always()
         run: |
