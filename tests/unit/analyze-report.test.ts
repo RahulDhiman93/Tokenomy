@@ -54,16 +54,19 @@ test("aggregator: hotspots are session-scoped (same key in two sessions isn't a 
   assert.equal(r.hotspots.length, 0);
 });
 
-test("aggregator: hotspots only list keys with >1 call, sum wasted tokens", () => {
+test("aggregator: hotspots only surface simulator-confirmed duplicates", () => {
   const a = agg();
   a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100 }));
-  a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100 }));
-  a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100 }));
+  // These repeats were flagged as duplicates by the simulator → counted.
+  a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100, duplicate_of_index: 1 }));
+  a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100, duplicate_of_index: 1 }));
+  // A second key with only "repeat" count but no duplicate flag — should
+  // be filtered out of the hotspots list (simulator didn't credit savings).
+  a.feed(mk({ call_key: "k2", tool_name: "t2", observed_tokens: 500 }));
   a.feed(mk({ call_key: "k2", tool_name: "t2", observed_tokens: 500 }));
   const r = a.build();
   assert.equal(r.hotspots.length, 1);
   assert.equal(r.hotspots[0]!.calls, 3);
-  // 2 repeats * 100 = 200 wasted
   assert.equal(r.hotspots[0]!.wasted_tokens, 200);
 });
 

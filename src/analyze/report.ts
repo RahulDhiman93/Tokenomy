@@ -140,7 +140,10 @@ export class Aggregator {
 
     // Hotspots are session-scoped because real dedup is session-scoped.
     // Two separate sessions each calling the same tool once isn't a hotspot
-    // dedup can fix, so we must not count them together.
+    // dedup can fix, so we must not count them together. We also only count
+    // repeats that the SIMULATOR actually flagged as duplicates — otherwise
+    // we'd rank calls the live hook would miss (outside window_seconds,
+    // below min_bytes, or with dedup disabled) as savable waste.
     const hotspotKey = `${e.session_id}\u0000${e.call_key}`;
     const kb = this.byKey.get(hotspotKey) ?? {
       tool: e.tool_name,
@@ -149,8 +152,7 @@ export class Aggregator {
       wasted_tokens: 0,
     };
     kb.calls++;
-    if (kb.calls > 1) {
-      // Every repeat is waste — the first call is a necessary lookup.
+    if (e.duplicate_of_index !== undefined) {
       kb.wasted_tokens += e.observed_tokens;
     }
     this.byKey.set(hotspotKey, kb);
@@ -210,7 +212,11 @@ export class Aggregator {
       .sort((a, b) => a.day.localeCompare(b.day));
 
     const hotspots = [...this.byKey.values()]
-      .filter((k) => k.calls > 1)
+      // Only surface keys the simulator actually credited as duplicates
+      // (wasted_tokens > 0). A call_key that appeared twice but fell out
+      // of the dedup window or was below min_bytes is not something the
+      // live hook would save, so it doesn't belong on this list.
+      .filter((k) => k.calls > 1 && k.wasted_tokens > 0)
       .map((k) => ({ tool: k.tool, calls: k.calls, wasted_tokens: k.wasted_tokens }))
       .sort((a, b) => b.wasted_tokens - a.wasted_tokens)
       .slice(0, top);

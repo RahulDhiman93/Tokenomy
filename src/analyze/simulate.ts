@@ -4,7 +4,7 @@ import type { Config } from "../core/types.js";
 import { mcpContentRule } from "../rules/mcp-content.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { shouldApply } from "../core/gate.js";
-import { configForTool, loadConfig } from "../core/config.js";
+import { configForTool, loadConfig, resolveToolOverride } from "../core/config.js";
 import type { ToolCall } from "./parse.js";
 import type { Tokenizer } from "./tokens.js";
 
@@ -129,9 +129,12 @@ export class Simulator {
   private readonly cfg: Config;
   private readonly tokenizer: Tokenizer;
   private readonly scoped: boolean;
-  private currentSession: string | null = null;
-  private dedupLedger = new Map<string, DedupEntry>();
-  private sessionCounter = 0;
+  // Nested per-session dedup ledgers so events can stream in any order
+  // (including sidechain files that revisit a parent session) without
+  // resetting state. Memory is bounded by unique (session, call_key)
+  // pairs — not raw response bodies — so this scales to large corpora.
+  private readonly ledgers = new Map<string, Map<string, DedupEntry>>();
+  private readonly sessionCounters = new Map<string, number>();
   // Per-project config cache: avoid re-loading + re-scaling on every event.
   // Key is the absolute project path (ToolCall.project_hint) when it
   // resolves to an existing directory; otherwise the fallback cfg is used.
@@ -141,6 +144,31 @@ export class Simulator {
     this.cfg = opts.cfg;
     this.tokenizer = opts.tokenizer;
     this.scoped = opts.session_scoped_dedup !== false;
+  }
+
+  private ledgerFor(sessionId: string): Map<string, DedupEntry> {
+    if (!this.scoped) {
+      // All events share one ledger.
+      let ledger = this.ledgers.get("_global");
+      if (!ledger) {
+        ledger = new Map();
+        this.ledgers.set("_global", ledger);
+      }
+      return ledger;
+    }
+    let ledger = this.ledgers.get(sessionId);
+    if (!ledger) {
+      ledger = new Map();
+      this.ledgers.set(sessionId, ledger);
+    }
+    return ledger;
+  }
+
+  private nextCounter(sessionId: string): number {
+    const key = this.scoped ? sessionId : "_global";
+    const n = (this.sessionCounters.get(key) ?? 0) + 1;
+    this.sessionCounters.set(key, n);
+    return n;
   }
 
   private configForEvent(call: ToolCall): Config {
@@ -159,12 +187,8 @@ export class Simulator {
   }
 
   feed(call: ToolCall): SimEvent {
-    if (this.scoped && call.session_id !== this.currentSession) {
-      this.currentSession = call.session_id;
-      this.dedupLedger.clear();
-      this.sessionCounter = 0;
-    }
-    this.sessionCounter++;
+    const ledger = this.ledgerFor(call.session_id);
+    const counter = this.nextCounter(call.session_id);
 
     const text = asText(call.tool_response);
     const observed_tokens = this.tokenizer.count(text || JSON.stringify(call.tool_response ?? ""));
@@ -214,11 +238,15 @@ export class Simulator {
     // PostToolUse rules only fire for mcp__* tools in the real dispatch.
     // Non-MCP tools get only the Read-clamp path (handled separately below).
     if (isMcp) {
-      // Rule 1: dedup with session scope + window_seconds gate.
-      if (toolCfg.dedup?.enabled !== false) {
+      // Rule 1: dedup with session scope + window_seconds gate + per-tool
+      // `disable_dedup` override (matches the live dispatch path).
+      const toolOverride = resolveToolOverride(projectCfg, call.tool_name);
+      const dedupEnabled =
+        toolCfg.dedup?.enabled !== false && toolOverride?.disable_dedup !== true;
+      if (dedupEnabled) {
         const minBytes = toolCfg.dedup?.min_bytes ?? 2_000;
         const windowSeconds = toolCfg.dedup?.window_seconds ?? 1_800;
-        const prev = this.dedupLedger.get(key);
+        const prev = ledger.get(key);
         if (
           prev &&
           observed_bytes >= minBytes &&
@@ -234,8 +262,8 @@ export class Simulator {
           duplicate_of_index = prev.index;
         } else if (observed_bytes >= minBytes) {
           // Record (or refresh) for future-duplicate detection.
-          this.dedupLedger.set(key, {
-            index: this.sessionCounter,
+          ledger.set(key, {
+            index: counter,
             ts: call.ts,
             tokens: observed_tokens,
             bytes: observed_bytes,
@@ -275,19 +303,30 @@ export class Simulator {
       }
     } else if (isRead && toolCfg.read.enabled) {
       // Rule 6: Read clamp. Mirrors preDispatch logic: no clamp if the user
-      // passed explicit limit/offset, and only fires above clamp_above_bytes.
+      // passed explicit limit/offset, only fires above clamp_above_bytes,
+      // AND — unlike the earlier naive "injected_limit * 50 B" estimate —
+      // uses the actual newline count from the observed transcript text so
+      // we don't falsely credit savings on minified or single-line files.
       const input = call.tool_input;
       const hasExplicit =
         typeof input["limit"] === "number" || typeof input["offset"] === "number";
       if (!hasExplicit && observed_bytes >= toolCfg.read.clamp_above_bytes) {
-        // Estimated post-clamp size: injected_limit lines at ~50 B/line.
-        const keptBytes = toolCfg.read.injected_limit * 50;
-        const keptText = "x".repeat(keptBytes);
-        const keptTokens = this.tokenizer.count(keptText);
-        const saved = Math.max(0, observed_tokens - keptTokens);
-        perRule.read_clamp = saved;
-        savings_tokens += saved;
-        savings_bytes += Math.max(0, observed_bytes - keptBytes);
+        const body = text;
+        // Count lines; if there aren't more than injected_limit there's
+        // nothing to clamp — a single-line 80KB minified bundle stays
+        // 80KB after `limit:500`.
+        let newlines = 0;
+        for (let i = 0; i < body.length; i++) if (body.charCodeAt(i) === 10) newlines++;
+        const totalLines = newlines + 1;
+        const kept = Math.min(totalLines, toolCfg.read.injected_limit);
+        if (kept < totalLines) {
+          const kept_ratio = kept / totalLines;
+          const keptTokens = Math.ceil(observed_tokens * kept_ratio);
+          const saved = Math.max(0, observed_tokens - keptTokens);
+          perRule.read_clamp = saved;
+          savings_tokens += saved;
+          savings_bytes += Math.max(0, observed_bytes - Math.ceil(observed_bytes * kept_ratio));
+        }
       }
     }
 

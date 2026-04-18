@@ -180,27 +180,42 @@ test("simulator: dedup respects window_seconds", () => {
   assert.equal(second.per_rule.dedup, 0);
 });
 
-test("simulator: Read with no explicit limit + large response fires read_clamp", () => {
+test("simulator: Read with no explicit limit + many-line large response fires read_clamp", () => {
   const sim = makeSim();
-  const text = "x".repeat(80_000);
+  // 2000 lines × 50 chars = 100 KB; default injected_limit is 500 lines.
+  const text = Array.from({ length: 2000 }, (_, i) => `line-${i}-padding-padding-padding-padding`).join("\n");
   const call = mkCall({
     tool_name: "Read",
     tool_input: { file_path: "/big" },
     tool_response: text,
-    response_bytes: text.length,
+    response_bytes: Buffer.byteLength(text, "utf8"),
   });
   const r = sim.feed(call);
   assert.ok(r.per_rule.read_clamp > 0);
 });
 
+test("simulator: Read of single-line minified bundle does NOT credit read_clamp", () => {
+  const sim = makeSim();
+  // One long line — limit: 500 lines returns the whole file, no savings.
+  const text = "x".repeat(80_000);
+  const call = mkCall({
+    tool_name: "Read",
+    tool_input: { file_path: "/minified" },
+    tool_response: text,
+    response_bytes: text.length,
+  });
+  const r = sim.feed(call);
+  assert.equal(r.per_rule.read_clamp, 0);
+});
+
 test("simulator: Read with explicit limit does not fire read_clamp", () => {
   const sim = makeSim();
-  const text = "x".repeat(80_000);
+  const text = Array.from({ length: 2000 }, () => "x".repeat(40)).join("\n");
   const call = mkCall({
     tool_name: "Read",
     tool_input: { file_path: "/big", limit: 100 },
     tool_response: text,
-    response_bytes: text.length,
+    response_bytes: Buffer.byteLength(text, "utf8"),
   });
   const r = sim.feed(call);
   assert.equal(r.per_rule.read_clamp, 0);
