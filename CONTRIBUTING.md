@@ -1,6 +1,6 @@
 # Contributing to Tokenomy
 
-Thanks for wanting to make Claude Code lighter on tokens. Tokenomy is small by design (≈800 LOC, zero runtime deps) — which means almost any contribution lands in shippable scope within a day.
+Thanks for wanting to make coding agents (Claude Code, Codex CLI) lighter on tokens. Tokenomy is small by design (zero runtime deps in the hot path) — which means almost any contribution lands in shippable scope within a day.
 
 This document goes deeper than the README's "Contribute" section: setup, conventions, testing philosophy, and the PR process.
 
@@ -10,7 +10,7 @@ This document goes deeper than the README's "Contribute" section: setup, convent
 
 Before you open a PR, make sure:
 
-- [ ] `npm test` is green (existing 41+ tests pass)
+- [ ] `npm test` is green (existing 161+ tests pass)
 - [ ] New rule? Add at least one passthrough and one trim test case
 - [ ] Touched `init`/`uninstall`? Extend the round-trip integration test
 - [ ] New config field? Document it in `README.md` and `DEFAULT_CONFIG`
@@ -37,11 +37,11 @@ Pick a row from the **Good first issues** table in the README. The 🟡 medium /
 ### Proposing a new phase / surface
 
 Open a GitHub Discussion (not a PR) with:
-- What behavior changes Claude sees
-- Which Claude Code hook event or mechanism is used
+- What behavior changes the agent sees (Claude Code, Codex, or both)
+- Which hook event or agent mechanism is used
 - What can *go wrong* and how the fail-open guarantee is preserved
 
-Architecture changes get reviewed the same way v1 of the plan did — cross-checked against primary Anthropic docs before any code lands.
+Architecture changes get reviewed the same way v1 of the plan did — cross-checked against primary docs before any code lands.
 
 ---
 
@@ -62,10 +62,11 @@ Node 20+ required (we use `node:test`, `cpSync`, fsync on directories).
 
 ```bash
 # write code
-npm test                         # ~1 s unit + integration
+npm test                         # ~2 s unit + integration
 npm run build                    # re-emit dist/
-tokenomy doctor                  # 9/9 ✓ if things are wired
+tokenomy doctor                  # 12/12 ✓ if things are wired
 tail -f ~/.tokenomy/debug.jsonl  # see every hook invocation in your live session
+tokenomy analyze --since 1d      # sanity-check changes against real transcripts
 ```
 
 ### End-to-end smoke
@@ -101,27 +102,32 @@ Tokenomy is TypeScript + Node ESM + `node:test`. No build magic.
 
 ```
 src/
-  core/     — types, config, paths, gate, log, recovery hint
-  rules/    — pure transforms: (toolName, toolInput, toolResponse, cfg) → RuleResult
-  hook/     — entry.ts + dispatch.ts + pre-dispatch.ts (stdin → rule → stdout)
-  cli/      — init, doctor, uninstall, config-cmd, entry
+  core/     — types, config, paths, gate, log, dedup, recovery hint
+  rules/    — pure transforms: mcp-content, read-bound, text-trim, profiles, stacktrace, redact
+  hook/     — entry.ts + dispatch.ts + pre-dispatch.ts (stdin → rule → stdout, Claude Code)
+  analyze/  — transcript scanner (Claude Code + Codex), parse, tokens, simulate, report, render
+  graph/    — code-graph schema, build, query (minimal, impact, review, usages)
+  mcp/      — stdio server, tool handlers, schemas, query LRU cache, budget-clip
+  parsers/  — TS/JS AST extraction
+  cli/      — init, doctor (+ --fix), uninstall, config-cmd, report, analyze, graph, entry
   util/     — settings-patch, manifest, atomic-write, backup, json helpers
 
 tests/
   unit/         — one file per module
-  integration/  — spawn the compiled binary; tmp HOME round-trips
-  fixtures/     — JSON inputs/expected outputs
+  integration/  — spawn compiled binary; tmp HOME round-trips
+  fixtures/     — JSON inputs/expected outputs, synthetic graph repo
 ```
 
 Rules are pure functions. Adding a new rule is a single-file drop-in + a test file. No framework to learn.
 
 ### Guiding principles (non-negotiable)
 
-1. **Fail-open always.** A broken hook is worse than no hook. Never exit 2, never throw past the top-level `try`, never leave stdout with garbage that breaks Claude's `JSON.parse`. When in doubt, exit 0 with empty stdout.
+1. **Fail-open always.** A broken hook is worse than no hook. Never exit 2, never throw past the top-level `try`, never leave stdout with garbage that breaks the agent's `JSON.parse`. When in doubt, exit 0 with empty stdout.
 2. **Schema invariants over trust.** Test that rule outputs never fabricate keys, flip types, shrink arrays, or lose `is_error`. Every rule PR must add at least one invariant assertion.
-3. **Path-match over markers.** Uninstall identifies our hook entries by absolute command path under `~/.tokenomy/bin/`, not by injected `_tokenomy: true` keys. Claude Code's settings schema may tighten tomorrow.
-4. **Measure before bragging.** No "X% savings" claims in code or docs until Phase 2 benchmarks them against a real transcript corpus.
+3. **Path-match over markers.** Uninstall identifies our hook entries by absolute command path under `~/.tokenomy/bin/`, not by injected `_tokenomy: true` keys. The upstream settings schema may tighten tomorrow.
+4. **Measure before bragging.** Use `tokenomy analyze` to back up performance claims with real transcript data instead of pulling numbers out of thin air.
 5. **Small and legible.** If a dependency shaves a dozen lines for a 200 KB install cost, say no.
+6. **Agent-agnostic where possible.** Live hooks are Claude-Code-specific today, but graph + analyze must work across agents. Don't bake Claude-Code-only assumptions into the shared modules.
 
 ---
 

@@ -5,6 +5,8 @@ import { runDoctor, runDoctorFix } from "./doctor.js";
 import { configGet, configSet } from "./config-cmd.js";
 import { runGraph } from "./graph.js";
 import { runReport } from "./report.js";
+import { runAnalyze } from "./analyze.js";
+import type { TokenizerChoice } from "../analyze/tokens.js";
 import type { Config } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 
@@ -14,6 +16,8 @@ Usage:
   tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>]
   tokenomy doctor [--fix]
   tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
+  tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
+                   [--top=<N>] [--tokenizer=heuristic|tiktoken|auto] [--json] [--no-color] [--verbose]
   tokenomy graph build [--force] [--path=<dir>]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
@@ -135,6 +139,23 @@ const main = async (): Promise<number> => {
     return printDoctor();
   }
   if (cmd === "graph") return runGraph(process.argv.slice(3));
+
+  if (cmd === "analyze") {
+    const tokFlag = typeof args.flags["tokenizer"] === "string" ? (args.flags["tokenizer"] as string) : "auto";
+    const tok: TokenizerChoice =
+      tokFlag === "heuristic" || tokFlag === "tiktoken" || tokFlag === "auto" ? tokFlag : "auto";
+    return runAnalyze({
+      path: typeof args.flags["path"] === "string" ? args.flags["path"] : undefined,
+      since: typeof args.flags["since"] === "string" ? args.flags["since"] : undefined,
+      projectFilter: typeof args.flags["project"] === "string" ? args.flags["project"] : undefined,
+      sessionFilter: typeof args.flags["session"] === "string" ? args.flags["session"] : undefined,
+      top: typeof args.flags["top"] === "string" ? parseInt(args.flags["top"], 10) : undefined,
+      tokenizer: tok,
+      json: args.flags["json"] === true,
+      color: args.flags["no-color"] !== true,
+      verbose: args.flags["verbose"] === true,
+    });
+  }
 
   if (cmd === "report") {
     const since =
