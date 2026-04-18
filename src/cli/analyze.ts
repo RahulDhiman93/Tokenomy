@@ -1,7 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
 import { loadConfig, DEFAULT_CONFIG } from "../core/config.js";
-import { globalConfigPath } from "../core/paths.js";
-import { safeParse } from "../util/json.js";
 import { Aggregator } from "../analyze/report.js";
 import { render, renderProgress } from "../analyze/render.js";
 import {
@@ -23,6 +20,9 @@ export interface AnalyzeOptions {
   json?: boolean;
   color?: boolean;
   verbose?: boolean;
+  // Per-million token price in USD for the $ estimate; falls back to
+  // cfg.report.price_per_million or $3 default.
+  pricePerMillion?: number;
 }
 
 const parseSince = (input: string | undefined): Date | undefined => {
@@ -48,12 +48,11 @@ const parseSince = (input: string | undefined): Date | undefined => {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 };
 
-const readPricePerMillion = (): number => {
-  if (!existsSync(globalConfigPath())) return 3.0;
-  const cfg = safeParse<Partial<Config> & { report?: { price_per_million?: number } }>(
-    readFileSync(globalConfigPath(), "utf8"),
-  );
-  const v = cfg?.report?.price_per_million;
+// Pricing is sourced from the already-merged Config (global + per-project
+// .tokenomy.json overrides applied). Reading from the global file alone
+// would silently drop repo-level overrides of report.price_per_million.
+const priceFromConfig = (cfg: Config & { report?: { price_per_million?: number } }): number => {
+  const v = cfg.report?.price_per_million;
   return typeof v === "number" && v > 0 ? v : 3.0;
 };
 
@@ -106,7 +105,8 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
   const simulator = new Simulator({ cfg, tokenizer });
   const agg = new Aggregator({
     top_n: opts.top ?? 10,
-    price_per_million: readPricePerMillion(),
+    price_per_million:
+      opts.pricePerMillion ?? priceFromConfig(cfg as Config & { report?: { price_per_million?: number } }),
     tokenizer_name: tokenizer.name,
     tokenizer_approximate: tokenizer.approximate,
   });

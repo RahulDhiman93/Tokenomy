@@ -71,6 +71,18 @@ test("simulator: different sessions do not cross-contaminate dedup", () => {
   assert.equal(r.duplicate_of_index, undefined);
 });
 
+test("simulator: observed_tokens_override wins over tokenizer heuristic", () => {
+  const sim = makeSim();
+  const call = mkCall({
+    tool_name: "exec_command",
+    tool_response: "hello world", // heuristic would return ~2 tokens
+    response_bytes: 11,
+    observed_tokens_override: 423,
+  });
+  const r = sim.feed(call);
+  assert.equal(r.observed_tokens, 423);
+});
+
 test("simulator: non-MCP stacktrace is NOT counted (matches real dispatch)", () => {
   const sim = makeSim();
   const trace =

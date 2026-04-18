@@ -222,6 +222,21 @@ test("parse: Codex MCP output wrapped into {content:[text]} shape when bare JSON
   assert.ok(Array.isArray(resp.content));
 });
 
+test("parse: Codex wrapper's 'Original token count: N' is captured as override", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call", name: "exec_command", arguments: "{}", call_id: "call_tok" },
+  });
+  const wrapped = `Chunk ID: abc\nWall time: 0.1\nProcess exited with code 0\nOriginal token count: 423\nOutput:\nhello world`;
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_tok", output: wrapped },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.observed_tokens_override, 423);
+});
+
 test("parse: non-MCP Codex tool with JSON-looking output stays a string", () => {
   const call = JSON.stringify({
     type: "response_item",

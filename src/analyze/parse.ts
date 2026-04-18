@@ -37,6 +37,11 @@ export interface ToolCall {
   tool_response: unknown; // same shape as HookInput.tool_response
   is_error: boolean;
   response_bytes: number;
+  // Codex's function_call_output wrapper advertises an exact token count
+  // for the inner payload (e.g. `Original token count: 423`). When present,
+  // the simulator uses it directly instead of re-tokenizing — crucial for
+  // correct observed-token / USD numbers on exec-heavy sessions.
+  observed_tokens_override?: number;
 }
 
 const asObject = (v: unknown): Record<string, unknown> =>
@@ -53,6 +58,19 @@ const utf8Bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 // (e.g. `cat package.json`) — that'd mask the text as a structured object
 // and downstream tooling would miscount / mis-trim it.
 const CODEX_OUTPUT_PREFIX = /^(?:Chunk ID:.*\n)?(?:Wall time:.*\n)?(?:Process exited with code.*\n)?(?:Original token count:.*\n)?Output:\n/;
+
+// Extract Codex's own "Original token count: N" from the wrapper header
+// when present. Used as an authoritative override on observed_tokens so
+// our heuristic (or cl100k) approximation doesn't skew the headline
+// numbers on exec-heavy Codex sessions where the real count is known.
+const CODEX_TOKEN_COUNT_RE = /^(?:.*\n)*?Original token count:\s*(\d+)\s*\n/;
+export const extractCodexTokenCount = (raw: unknown): number | undefined => {
+  if (typeof raw !== "string") return undefined;
+  const m = raw.match(CODEX_TOKEN_COUNT_RE);
+  if (!m) return undefined;
+  const n = parseInt(m[1]!, 10);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+};
 export const unwrapCodexOutput = (raw: unknown, toolName: string): unknown => {
   if (typeof raw !== "string") return raw;
   const match = raw.match(CODEX_OUTPUT_PREFIX);
@@ -273,6 +291,7 @@ const extractCodex = (
       typeof output === "string"
         ? utf8Bytes(output)
         : utf8Bytes(JSON.stringify(output ?? null));
+    const observed_tokens_override = extractCodexTokenCount(rawOutput);
     emit({
       agent: "codex",
       session_id: state.session_id,
@@ -283,6 +302,7 @@ const extractCodex = (
       tool_response: output,
       is_error: false,
       response_bytes: bytes,
+      ...(observed_tokens_override !== undefined ? { observed_tokens_override } : {}),
     });
     return true;
   }

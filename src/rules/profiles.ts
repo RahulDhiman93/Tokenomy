@@ -155,6 +155,33 @@ export const BUILTIN_PROFILES: TrimProfile[] = [
     max_string_bytes: 1_500,
     max_array_items: 20,
   },
+  {
+    // Codex-style GitHub connector method names: fetch_pr, get_pr_info,
+    // search_prs, review_pr, etc. Same keep-set as the pull_request-style
+    // Claude Code names above.
+    name: "github-pr-codex",
+    match: "mcp__*github*__*_pr*",
+    keep: [
+      "number",
+      "title",
+      "state",
+      "user.login",
+      "head.ref",
+      "base.ref",
+      "mergeable",
+      "draft",
+      "body",
+      "html_url",
+      "labels.*.name",
+      "prs.*.number",
+      "prs.*.title",
+      "prs.*.state",
+      "prs.*.user.login",
+      "prs.*.html_url",
+    ],
+    max_string_bytes: 1_500,
+    max_array_items: 20,
+  },
 ];
 
 // Glob compile: case-insensitive so profile patterns written in

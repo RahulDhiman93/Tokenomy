@@ -196,7 +196,11 @@ export class Simulator {
     const counter = this.nextCounter(call.session_id);
 
     const text = asText(call.tool_response);
-    const observed_tokens = this.tokenizer.count(text || JSON.stringify(call.tool_response ?? ""));
+    // Prefer an authoritative count from the transcript wrapper (Codex)
+    // over our tokenizer approximation when one is available.
+    const observed_tokens =
+      call.observed_tokens_override ??
+      this.tokenizer.count(text || JSON.stringify(call.tool_response ?? ""));
     const observed_bytes = call.response_bytes;
 
     const perRule: SimEvent["per_rule"] = {
