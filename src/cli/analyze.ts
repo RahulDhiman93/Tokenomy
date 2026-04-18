@@ -65,11 +65,22 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
   const cfg = loadConfig(process.cwd());
   // Honor an explicit `--since 0d` / `--since all` as "no window".
   const explicitAll = opts.since === "0d" || opts.since === "0" || opts.since === "all";
-  const since = explicitAll
-    ? undefined
-    : opts.since
-    ? parseSince(opts.since)
-    : new Date(Date.now() - DEFAULT_SINCE_DAYS * 86_400_000);
+  let since: Date | undefined;
+  if (explicitAll) {
+    since = undefined;
+  } else if (opts.since) {
+    since = parseSince(opts.since);
+    if (!since) {
+      process.stderr.write(
+        `tokenomy analyze: invalid --since value "${opts.since}". ` +
+          `Use ISO (e.g. 2026-04-01), a relative span (1h / 7d / 2w / 3mo), ` +
+          `or "all" / "0d" for the full history.\n`,
+      );
+      return 1;
+    }
+  } else {
+    since = new Date(Date.now() - DEFAULT_SINCE_DAYS * 86_400_000);
+  }
   const tokenizerChoice = opts.tokenizer ?? "auto";
   const colorEnabled = opts.color !== false && process.stdout.isTTY === true;
   const width = typeof process.stdout.columns === "number" ? process.stdout.columns : 100;

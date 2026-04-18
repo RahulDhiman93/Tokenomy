@@ -157,9 +157,14 @@ export const BUILTIN_PROFILES: TrimProfile[] = [
   },
 ];
 
+// Glob compile: case-insensitive so profile patterns written in
+// CamelCase (e.g. `mcp__*Atlassian*__getJiraIssue`, the Claude Code style)
+// also match lowercase-normalized Codex tool names like
+// `mcp__codex_apps__atlassian_rovo__getjiraissue`. This keeps a single set
+// of built-in profiles useful across both agents.
 const globToRegex = (glob: string): RegExp => {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`);
+  return new RegExp(`^${escaped}$`, "i");
 };
 
 export const selectProfile = (

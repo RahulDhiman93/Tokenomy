@@ -144,12 +144,26 @@ const main = async (): Promise<number> => {
     const tokFlag = typeof args.flags["tokenizer"] === "string" ? (args.flags["tokenizer"] as string) : "auto";
     const tok: TokenizerChoice =
       tokFlag === "heuristic" || tokFlag === "tiktoken" || tokFlag === "auto" ? tokFlag : "auto";
+    // Clamp --top to a sane positive integer: zero, negative, or non-numeric
+    // input falls back to the default 10. This prevents the aggregator from
+    // ever maintaining a zero-size outlier heap (which would blow up on
+    // first access) and makes the behaviour predictable for typos.
+    let topOpt: number | undefined;
+    if (typeof args.flags["top"] === "string") {
+      const parsed = parseInt(args.flags["top"], 10);
+      if (Number.isFinite(parsed) && parsed > 0) topOpt = parsed;
+      else {
+        process.stderr.write(
+          `tokenomy analyze: --top must be a positive integer (got ${JSON.stringify(args.flags["top"])}); using default 10.\n`,
+        );
+      }
+    }
     return runAnalyze({
       path: typeof args.flags["path"] === "string" ? args.flags["path"] : undefined,
       since: typeof args.flags["since"] === "string" ? args.flags["since"] : undefined,
       projectFilter: typeof args.flags["project"] === "string" ? args.flags["project"] : undefined,
       sessionFilter: typeof args.flags["session"] === "string" ? args.flags["session"] : undefined,
-      top: typeof args.flags["top"] === "string" ? parseInt(args.flags["top"], 10) : undefined,
+      top: topOpt,
       tokenizer: tok,
       json: args.flags["json"] === true,
       color: args.flags["no-color"] !== true,

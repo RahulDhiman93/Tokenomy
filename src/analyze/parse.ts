@@ -48,16 +48,18 @@ const utf8Bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 //   "Chunk ID: abc\nWall time: 0.4s\nProcess exited with code 0\n" +
 //   "Original token count: 123\nOutput:\n<actual payload>"
 // For MCP connector calls, <actual payload> is structured JSON (same shape
-// mcpContentRule expects). For exec_command / write_stdin it's plain text.
-// We strip the header so downstream rules can see the true payload and,
-// when the payload is structured JSON, parse it back into an object.
+// mcpContentRule expects). For exec_command / write_stdin it's plain text
+// and must NOT be JSON-parsed, even if the output happens to be valid JSON
+// (e.g. `cat package.json`) — that'd mask the text as a structured object
+// and downstream tooling would miscount / mis-trim it.
 const CODEX_OUTPUT_PREFIX = /^(?:Chunk ID:.*\n)?(?:Wall time:.*\n)?(?:Process exited with code.*\n)?(?:Original token count:.*\n)?Output:\n/;
-export const unwrapCodexOutput = (raw: unknown): unknown => {
+export const unwrapCodexOutput = (raw: unknown, toolName: string): unknown => {
   if (typeof raw !== "string") return raw;
   const match = raw.match(CODEX_OUTPUT_PREFIX);
   const stripped = match ? raw.slice(match[0].length) : raw;
-  // Opportunistic JSON parse: if the payload looks like a JSON object or
-  // array, decode it so mcp-content-rule can traverse the structure.
+  // Only MCP connector outputs get JSON-decoded. exec_command and similar
+  // shell tools stay as strings so the simulator/rules see the real text.
+  if (!toolName.startsWith("mcp__")) return stripped;
   const trimmed = stripped.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
@@ -234,8 +236,15 @@ const extractCodex = (
     if (!use) return true; // orphan output — drop
     state.pending.delete(id);
     const rawOutput = payload["output"];
-    const output = unwrapCodexOutput(rawOutput);
-    const bytes = utf8Bytes(JSON.stringify(output ?? null));
+    const output = unwrapCodexOutput(rawOutput, use.tool_name);
+    // Count observed bytes from the un-decorated raw string when the tool
+    // output is plain text (shell), so we don't inflate the size by
+    // re-escaping. For JSON-parsed connector outputs, stringify to get a
+    // stable structured-size measurement.
+    const bytes =
+      typeof output === "string"
+        ? utf8Bytes(output)
+        : utf8Bytes(JSON.stringify(output ?? null));
     emit({
       agent: "codex",
       session_id: state.session_id,

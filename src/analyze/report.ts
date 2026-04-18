@@ -162,7 +162,10 @@ export class Aggregator {
   }
 
   private maybeRecordOutlier(e: SimEvent): void {
+    // Treat non-positive top_n as "disable outlier tracking" rather than
+    // letting a zero-size heap underflow on access.
     const n = this.opts.top_n;
+    if (!Number.isFinite(n) || n <= 0) return;
     if (this.outliers.length < n) {
       this.outliers.push({
         tool: e.tool_name,

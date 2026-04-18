@@ -182,7 +182,7 @@ test("parse: Codex CLI wrapper is stripped from function_call_output", () => {
   assert.equal(calls[0]!.tool_response, "Hello world");
 });
 
-test("parse: Codex wrapped JSON payload is parsed back into an object", () => {
+test("parse: Codex wrapped JSON payload is parsed back into an object (MCP tool)", () => {
   const call = JSON.stringify({
     type: "response_item",
     payload: { type: "function_call", namespace: "mcp__x__y", name: "z", arguments: "{}", call_id: "call_js" },
@@ -196,6 +196,26 @@ test("parse: Codex wrapped JSON payload is parsed back into an object", () => {
   const calls = collect([call, output]);
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0]!.tool_response, payload);
+});
+
+test("parse: non-MCP Codex tool with JSON-looking output stays a string", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call", name: "exec_command", arguments: "{}", call_id: "call_cat" },
+  });
+  const prettyJson = '{\n  "name": "foo",\n  "version": "1.0.0"\n}';
+  const wrapped = `Wall time: 0.1s\nOutput:\n${prettyJson}`;
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_cat", output: wrapped },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  // Shell outputs stay as strings even when they happen to be JSON —
+  // otherwise `cat package.json` gets mis-parsed into an object and
+  // downstream tooling miscounts it.
+  assert.equal(typeof calls[0]!.tool_response, "string");
+  assert.equal(calls[0]!.tool_response, prettyJson);
 });
 
 test("parse: upgrades identity from Claude Code sessionId + cwd fields", () => {

@@ -22,6 +22,14 @@ test("selectProfile: no match returns null", () => {
   assert.equal(p, null);
 });
 
+test("selectProfile: case-insensitive matching (Codex lowercase names)", () => {
+  const p = selectProfile(
+    "mcp__codex_apps__atlassian_rovo__getjiraissue",
+    BUILTIN_PROFILES,
+  );
+  assert.equal(p?.name, "atlassian-jira-issue");
+});
+
 test("applyProfile: keeps top-level dotted keys, drops others", () => {
   const profile: TrimProfile = {
     name: "t",
