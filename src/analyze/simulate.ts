@@ -116,6 +116,11 @@ interface DedupEntry {
   bytes: number;
 }
 
+// Max prior entries retained per (session, call_key). Bounds memory even if a
+// session replays the same tool hundreds of times. Eight is large enough to
+// survive normal sidechain interleaving.
+const MAX_LEDGER_ENTRIES_PER_KEY = 8;
+
 const withinWindow = (priorTs: string, currentTs: string, windowSeconds: number): boolean => {
   const p = Date.parse(priorTs);
   const c = Date.parse(currentTs);
@@ -137,9 +142,11 @@ export class Simulator {
   private readonly scoped: boolean;
   // Nested per-session dedup ledgers so events can stream in any order
   // (including sidechain files that revisit a parent session) without
-  // resetting state. Memory is bounded by unique (session, call_key)
-  // pairs — not raw response bodies — so this scales to large corpora.
-  private readonly ledgers = new Map<string, Map<string, DedupEntry>>();
+  // resetting state. Each key stores a bounded list of prior entries
+  // rather than a single one — so when the scanner encounters events
+  // out of chronological order, intermediate duplicates are still
+  // catchable against whichever prior entry falls inside the window.
+  private readonly ledgers = new Map<string, Map<string, DedupEntry[]>>();
   private readonly sessionCounters = new Map<string, number>();
   // Per-project config cache: avoid re-loading + re-scaling on every event.
   // Key is the absolute project path (ToolCall.project_hint) when it
@@ -152,20 +159,12 @@ export class Simulator {
     this.scoped = opts.session_scoped_dedup !== false;
   }
 
-  private ledgerFor(sessionId: string): Map<string, DedupEntry> {
-    if (!this.scoped) {
-      // All events share one ledger.
-      let ledger = this.ledgers.get("_global");
-      if (!ledger) {
-        ledger = new Map();
-        this.ledgers.set("_global", ledger);
-      }
-      return ledger;
-    }
-    let ledger = this.ledgers.get(sessionId);
+  private ledgerFor(sessionId: string): Map<string, DedupEntry[]> {
+    const key = this.scoped ? sessionId : "_global";
+    let ledger = this.ledgers.get(key);
     if (!ledger) {
       ledger = new Map();
-      this.ledgers.set(sessionId, ledger);
+      this.ledgers.set(key, ledger);
     }
     return ledger;
   }
@@ -252,33 +251,45 @@ export class Simulator {
       if (dedupEnabled) {
         const minBytes = toolCfg.dedup?.min_bytes ?? 2_000;
         const windowSeconds = toolCfg.dedup?.window_seconds ?? 1_800;
-        const prev = ledger.get(key);
-        if (
-          prev &&
-          observed_bytes >= minBytes &&
-          withinWindow(prev.ts, call.ts, windowSeconds)
-        ) {
+        // Of all stored prior entries, pick the most-recent one that still
+        // falls inside the directional window relative to the current call.
+        // Because files may be scanned out of chronological order, we can't
+        // just look at the "last inserted" entry — we have to search.
+        const priors = ledger.get(key) ?? [];
+        let bestPrior: DedupEntry | null = null;
+        for (const p of priors) {
+          if (!withinWindow(p.ts, call.ts, windowSeconds)) continue;
+          if (!bestPrior || Date.parse(p.ts) > Date.parse(bestPrior.ts)) bestPrior = p;
+        }
+        if (bestPrior && observed_bytes >= minBytes) {
           const stubTokens = this.tokenizer.count(
-            `[tokenomy: duplicate of call #${prev.index} at ${call.ts} — body elided, no refetch required.]`,
+            `[tokenomy: duplicate of call #${bestPrior.index} at ${call.ts} — body elided, no refetch required.]`,
           );
           const saved = Math.max(0, observed_tokens - stubTokens);
           perRule.dedup = saved;
           savings_tokens += saved;
           savings_bytes += Math.max(0, observed_bytes - 200);
-          duplicate_of_index = prev.index;
+          duplicate_of_index = bestPrior.index;
         }
-        // Always record every call in the ledger (mirrors the live
-        // checkAndRecordDuplicate which appends unconditionally); `min_bytes`
+        // Always append to the bounded per-key list. Mirrors the live
+        // checkAndRecordDuplicate which appends unconditionally; `min_bytes`
         // gates only whether the *current* call qualifies for the stub
-        // replacement. This ensures a small first call followed by a large
-        // same-args call still counts as a duplicate the live hook would
-        // catch.
-        ledger.set(key, {
+        // replacement. The bound keeps memory flat on hot call keys.
+        const entry: DedupEntry = {
           index: counter,
           ts: call.ts,
           tokens: observed_tokens,
           bytes: observed_bytes,
-        });
+        };
+        const updated = [...priors, entry];
+        if (updated.length > MAX_LEDGER_ENTRIES_PER_KEY) {
+          // Evict the oldest by ts, not by insertion order, so we don't
+          // drop an earlier-timestamped entry that future out-of-order
+          // scans might still match against within the window.
+          updated.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+          updated.shift();
+        }
+        ledger.set(key, updated);
       }
 
       // If deduped, the live hook short-circuits — no other rules fire.

@@ -63,7 +63,35 @@ export const unwrapCodexOutput = (raw: unknown, toolName: string): unknown => {
   const trimmed = stripped.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return JSON.parse(trimmed);
+      const parsed = JSON.parse(trimmed);
+      // Normalize to the Claude Code MCP shape (`{content: [...]}`) so
+      // mcpContentRule can traverse the text blocks. Codex connectors
+      // frequently return bare JSON like `{"issues": [...]}`; without the
+      // wrapper the profile/trim pipeline would short-circuit on
+      // passthrough and never count the savings.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        if (Array.isArray(obj["content"])) return parsed;
+        // Wrap bare JSON objects in a single-text-block MCP response.
+        return {
+          content: [{ type: "text", text: JSON.stringify(parsed) }],
+        };
+      }
+      // Arrays of MCP blocks pass through; anything else gets wrapped too.
+      if (Array.isArray(parsed)) {
+        // If the array already looks like MCP content blocks, keep it as-is
+        // so the raw-array shape path in mcp-content-rule stays intact.
+        if (
+          parsed.length > 0 &&
+          parsed.every(
+            (b) => b && typeof b === "object" && typeof (b as { type?: unknown }).type === "string",
+          )
+        ) {
+          return parsed;
+        }
+        return { content: [{ type: "text", text: JSON.stringify(parsed) }] };
+      }
+      return parsed;
     } catch {
       // Fall through to string.
     }

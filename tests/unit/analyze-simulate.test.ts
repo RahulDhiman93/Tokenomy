@@ -146,6 +146,23 @@ test("simulator: non-MCP secret does NOT count redact_matches (matches dispatch)
   assert.equal(r.per_rule.redact_matches, 0);
 });
 
+test("simulator: dedup catches intermediate repeats in out-of-order streams", () => {
+  const sim = makeSim();
+  const body = { content: [{ type: "text", text: "x".repeat(4000) }] };
+  const bytes = Buffer.byteLength(JSON.stringify(body), "utf8");
+  // Stream is scan-order (not time-order): 12:02, then 12:00, then 12:01.
+  // A correct simulator should mark 12:01 as a duplicate of 12:00 (the
+  // earlier in-window prior), even though 12:02 arrived first in scan.
+  sim.feed(mkCall({ ts: "2026-04-18T12:02:00Z", tool_input: { id: 99 }, tool_response: body, response_bytes: bytes }));
+  sim.feed(mkCall({ ts: "2026-04-18T12:00:00Z", tool_input: { id: 99 }, tool_response: body, response_bytes: bytes }));
+  const third = sim.feed(
+    mkCall({ ts: "2026-04-18T12:01:00Z", tool_input: { id: 99 }, tool_response: body, response_bytes: bytes }),
+  );
+  // With the bounded per-key list, the 12:01 call should dedup against
+  // the 12:00 prior (the earliest-in-time entry still within window).
+  assert.ok(third.duplicate_of_index !== undefined, "expected third call to be marked duplicate");
+});
+
 test("simulator: dedup respects window_seconds", () => {
   const sim = new Simulator({
     cfg: {

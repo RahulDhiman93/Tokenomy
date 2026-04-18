@@ -198,6 +198,30 @@ test("parse: Codex wrapped JSON payload is parsed back into an object (MCP tool)
   assert.deepEqual(calls[0]!.tool_response, payload);
 });
 
+test("parse: Codex MCP output wrapped into {content:[text]} shape when bare JSON", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      namespace: "mcp__codex_apps__github",
+      name: "_search_prs",
+      arguments: "{}",
+      call_id: "call_bare",
+    },
+  });
+  const bare = JSON.stringify({ issues: [{ id: 1, title: "x" }] });
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_bare", output: `Output:\n${bare}` },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  const resp = calls[0]!.tool_response as { content?: unknown };
+  assert.ok(resp && typeof resp === "object");
+  // Wrapper inserted so mcpContentRule can traverse text blocks.
+  assert.ok(Array.isArray(resp.content));
+});
+
 test("parse: non-MCP Codex tool with JSON-looking output stays a string", () => {
   const call = JSON.stringify({
     type: "response_item",
