@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { runInit } from "./init.js";
 import { runUninstall } from "./uninstall.js";
-import { runDoctor } from "./doctor.js";
+import { runDoctor, runDoctorFix } from "./doctor.js";
 import { configGet, configSet } from "./config-cmd.js";
 import { runGraph } from "./graph.js";
+import { runReport } from "./report.js";
 import type { Config } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 
@@ -11,12 +12,13 @@ const HELP = `tokenomy — transparent MCP tool-output trimmer for Claude Code
 
 Usage:
   tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>]
-  tokenomy doctor
+  tokenomy doctor [--fix]
+  tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
   tokenomy graph build [--force] [--path=<dir>]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
-  tokenomy graph query <minimal|impact|review> ...
+  tokenomy graph query <minimal|impact|review|usages> ...
   tokenomy uninstall [--purge] [--no-backup]
   tokenomy config get <key>
   tokenomy config set <key> <value>
@@ -124,8 +126,34 @@ const main = async (): Promise<number> => {
     return 0;
   }
 
-  if (cmd === "doctor") return printDoctor();
+  if (cmd === "doctor") {
+    if (args.flags["fix"]) {
+      const applied = await runDoctorFix();
+      for (const a of applied) process.stdout.write(`${a.ok ? "✓" : "✗"} ${a.name} — ${a.detail}\n`);
+      return applied.every((a) => a.ok) ? 0 : 1;
+    }
+    return printDoctor();
+  }
   if (cmd === "graph") return runGraph(process.argv.slice(3));
+
+  if (cmd === "report") {
+    const since =
+      typeof args.flags["since"] === "string" ? new Date(args.flags["since"]) : undefined;
+    const top = typeof args.flags["top"] === "string" ? parseInt(args.flags["top"], 10) : 10;
+    const out = typeof args.flags["out"] === "string" ? args.flags["out"] : undefined;
+    const price =
+      typeof args.flags["price-per-million"] === "string"
+        ? parseFloat(args.flags["price-per-million"])
+        : undefined;
+    const r = runReport({ since, top, out, pricePerMillion: price });
+    if (args.flags["json"]) {
+      process.stdout.write(JSON.stringify(r.summary, null, 2) + "\n");
+    } else {
+      process.stdout.write(r.tui);
+      process.stdout.write(`\n✓ HTML report written to ${r.htmlPath}\n`);
+    }
+    return 0;
+  }
 
   if (cmd === "config") {
     const sub = args._[1];

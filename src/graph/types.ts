@@ -112,8 +112,29 @@ export interface ReviewContextData {
   hotspots: ReviewContextHotspot[];
 }
 
+export interface FindUsagesInput {
+  target: { file: string; symbol?: string };
+}
+
+export interface FindUsagesCallSite {
+  id: string;
+  kind: NodeKind;
+  name: string;
+  file?: string;
+  line?: number;
+  edge_kind: EdgeKind;
+  confidence: Confidence;
+}
+
+export interface FindUsagesData {
+  focal: { id: string; kind: NodeKind; name: string; file?: string; line?: number };
+  call_sites: FindUsagesCallSite[];
+  summary: string;
+}
+
 export type BuildGraphResult = QueryResult<BuildGraphData>;
 export type GraphStatusResult = QueryResult<GraphStatusData>;
 export type MinimalContextResult = QueryResult<MinimalContextData>;
 export type ImpactRadiusResult = QueryResult<ImpactRadiusData>;
 export type ReviewContextResult = QueryResult<ReviewContextData>;
+export type FindUsagesResult = QueryResult<FindUsagesData>;

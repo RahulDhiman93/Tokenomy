@@ -74,6 +74,18 @@ export interface McpRuleConfig {
   max_text_bytes: number;
   per_block_head: number;
   per_block_tail: number;
+  // Optional: additional user trim profiles (merged with BUILTIN_PROFILES).
+  // Empty / undefined → use built-ins only.
+  profiles?: import("../rules/profiles.js").TrimProfile[];
+  // Disable built-in profiles by name if a user wants to override them with
+  // their own version without mutating the array from the CLI.
+  disabled_profiles?: string[];
+}
+
+export interface RedactConfig {
+  enabled: boolean;
+  // Disabled pattern names (e.g. ["jwt"] if users carry many non-secret JWTs).
+  disabled_patterns?: string[];
 }
 
 export interface ReadRuleConfig {
@@ -87,6 +99,7 @@ export interface GraphQueryBudgetConfig {
   get_minimal_context: number;
   get_impact_radius: number;
   get_review_context: number;
+  find_usages: number;
 }
 
 export interface GraphConfig {
@@ -99,14 +112,42 @@ export interface GraphConfig {
   query_budget_bytes: GraphQueryBudgetConfig;
 }
 
+export interface PerToolOverride {
+  aggression?: "conservative" | "balanced" | "aggressive";
+  disable_dedup?: boolean;
+  disable_redact?: boolean;
+  disable_profiles?: boolean;
+  disable_stacktrace?: boolean;
+}
+
 export interface Config {
   aggression: "conservative" | "balanced" | "aggressive";
   gate: GateConfig;
   mcp: McpRuleConfig;
   read: ReadRuleConfig;
   graph: GraphConfig;
+  redact: RedactConfig;
   log_path: string;
   disabled_tools: string[];
+  // Glob-keyed per-tool overrides. E.g.
+  //   "mcp__Atlassian__*": { aggression: "aggressive" }
+  tools?: Record<string, PerToolOverride>;
+  // Duplicate-response deduplication (session-scoped).
+  dedup?: DedupConfig;
+  // Hook perf budget (ms). Values above this get flagged in `doctor`.
+  perf?: PerfConfig;
+}
+
+export interface DedupConfig {
+  enabled: boolean;
+  min_bytes: number;
+  // Window within a session during which a repeat is considered a duplicate.
+  window_seconds: number;
+}
+
+export interface PerfConfig {
+  p95_budget_ms: number;
+  sample_size: number;
 }
 
 export interface SavingsLogEntry {

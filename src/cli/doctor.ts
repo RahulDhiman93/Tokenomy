@@ -1,12 +1,13 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { once } from "node:events";
 import {
   claudeSettingsPath,
   globalConfigPath,
   hookBinaryPath,
   manifestPath,
+  tokenomyDir,
 } from "../core/paths.js";
 import { safeParse } from "../util/json.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { DEFAULT_CONFIG } from "../core/config.js";
+// `join` used in perf-stats path resolution (see readPerfStats).
 import { readManifest } from "../util/manifest.js";
 import type { Config } from "../core/types.js";
 
@@ -231,6 +233,64 @@ const graphRegistrationCheck = (settings: SettingsShape | undefined): CheckResul
   };
 };
 
+export interface PerfStats {
+  samples: number;
+  p50_ms: number;
+  p95_ms: number;
+  max_ms: number;
+}
+
+// Read recent hook runs from ~/.tokenomy/debug.jsonl and compute perf stats.
+// Returns null if the log is missing or has no timed entries.
+export const readPerfStats = (sampleSize: number): PerfStats | null => {
+  const path = join(tokenomyDir(), "debug.jsonl");
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf8");
+  const lines = raw.split("\n").filter(Boolean);
+  const recent = lines.slice(-sampleSize * 2); // allow headroom for untimed lines
+  const samples: number[] = [];
+  for (const line of recent) {
+    const parsed = safeParse<{ elapsed_ms?: unknown }>(line);
+    const ms = parsed?.elapsed_ms;
+    if (typeof ms === "number" && Number.isFinite(ms) && ms >= 0) samples.push(ms);
+  }
+  const cut = samples.slice(-sampleSize);
+  if (cut.length === 0) return null;
+  const sorted = [...cut].sort((a, b) => a - b);
+  const pick = (pct: number): number => {
+    const i = Math.min(sorted.length - 1, Math.max(0, Math.floor(pct * sorted.length)));
+    return sorted[i] ?? 0;
+  };
+  return {
+    samples: sorted.length,
+    p50_ms: pick(0.5),
+    p95_ms: pick(0.95),
+    max_ms: sorted[sorted.length - 1] ?? 0,
+  };
+};
+
+const hookPerfCheck = (cfg: Partial<Config> | undefined): CheckResult => {
+  const budget = cfg?.perf?.p95_budget_ms ?? DEFAULT_CONFIG.perf?.p95_budget_ms ?? 50;
+  const sampleSize = cfg?.perf?.sample_size ?? DEFAULT_CONFIG.perf?.sample_size ?? 100;
+  const stats = readPerfStats(sampleSize);
+  if (!stats) {
+    return {
+      name: "Hook perf budget",
+      ok: true,
+      detail: "no samples yet (run a few Claude Code tool calls first)",
+    };
+  }
+  const ok = stats.p95_ms <= budget;
+  return {
+    name: "Hook perf budget",
+    ok,
+    detail: `p50=${stats.p50_ms}ms p95=${stats.p95_ms}ms max=${stats.max_ms}ms (n=${stats.samples}, budget ${budget}ms)`,
+    remediation: ok
+      ? undefined
+      : "p95 above budget. Consider disabling trim profiles for hot tools or raising cfg.perf.p95_budget_ms.",
+  };
+};
+
 const mcpSdkCheck = async (): Promise<CheckResult> => {
   try {
     await import("@modelcontextprotocol/sdk/server/index.js");
@@ -267,5 +327,81 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   out.push(overlapWarnCheck(s.settings));
   out.push(graphRegistrationCheck(s.settings));
   out.push(await mcpSdkCheck());
+  out.push(hookPerfCheck(cfgRaw));
   return out;
+};
+
+// runDoctorFix applies a safe subset of remediations for failing checks.
+// Intentionally conservative: we only do actions a user could do by hand
+// without surprise.
+export const runDoctorFix = async (): Promise<CheckResult[]> => {
+  const applied: CheckResult[] = [];
+  const checks = await runDoctor();
+
+  for (const c of checks) {
+    if (c.ok) continue;
+
+    // Log directory writable → create it.
+    if (c.name === "Log directory writable") {
+      const cfgRaw = existsSync(globalConfigPath())
+        ? safeParse<Partial<Config>>(readFileSync(globalConfigPath(), "utf8"))
+        : undefined;
+      const p = cfgRaw?.log_path ?? DEFAULT_CONFIG.log_path;
+      try {
+        const { mkdirSync } = await import("node:fs");
+        mkdirSync(dirname(p), { recursive: true });
+        applied.push({ name: c.name, ok: true, detail: `created ${dirname(p)}` });
+      } catch (e) {
+        applied.push({ name: c.name, ok: false, detail: (e as Error).message });
+      }
+      continue;
+    }
+
+    // Hook binary not executable → chmod +x.
+    if (c.name === "Hook binary exists + executable") {
+      const p = hookBinaryPath();
+      if (!existsSync(p)) {
+        applied.push({ name: c.name, ok: false, detail: "binary missing; run tokenomy init" });
+        continue;
+      }
+      try {
+        const { chmodSync } = await import("node:fs");
+        chmodSync(p, 0o755);
+        applied.push({ name: c.name, ok: true, detail: `chmod +x ${p}` });
+      } catch (e) {
+        applied.push({ name: c.name, ok: false, detail: (e as Error).message });
+      }
+      continue;
+    }
+
+    // Hook entries missing / manifest drift → re-run init.
+    if (
+      c.name === "Hook entries present (PostToolUse + PreToolUse)" ||
+      c.name === "Manifest drift"
+    ) {
+      try {
+        const { runInit } = await import("./init.js");
+        const r = runInit({ backup: true });
+        applied.push({ name: c.name, ok: true, detail: `re-patched settings: ${r.settingsPath}` });
+      } catch (e) {
+        applied.push({ name: c.name, ok: false, detail: (e as Error).message });
+      }
+      continue;
+    }
+
+    // Stale graph → trigger rebuild.
+    if (c.name === "Hook perf budget") {
+      applied.push({ name: c.name, ok: true, detail: "informational only; no fix" });
+      continue;
+    }
+
+    // Otherwise: surface the original remediation without auto-applying.
+    applied.push({
+      name: c.name,
+      ok: false,
+      detail: c.remediation ?? "no automatic fix available",
+    });
+  }
+
+  return applied;
 };

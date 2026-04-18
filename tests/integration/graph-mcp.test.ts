@@ -35,6 +35,7 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
       tools.tools.map((tool) => tool.name).sort(),
       [
         "build_or_update_graph",
+        "find_usages",
         "get_impact_radius",
         "get_minimal_context",
         "get_review_context",
@@ -62,6 +63,15 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
     const reviewPayload = JSON.parse(review.content[0]!.text);
     assert.equal(reviewPayload.ok, true);
     assert.deepEqual(reviewPayload.data.changed_files, ["src/foo.ts", "src/index.ts"]);
+
+    const usages = await client.callTool({
+      name: "find_usages",
+      arguments: { target: { file: "src/foo.ts" } },
+    });
+    const usagesPayload = JSON.parse(usages.content[0]!.text);
+    assert.equal(usagesPayload.ok, true);
+    assert.equal(usagesPayload.data.focal.id, "file:src/foo.ts");
+    assert.ok(Array.isArray(usagesPayload.data.call_sites));
 
     await transport.close();
   } finally {
