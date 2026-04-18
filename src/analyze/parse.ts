@@ -44,6 +44,31 @@ const asObject = (v: unknown): Record<string, unknown> =>
 
 const utf8Bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 
+// Codex CLI wraps every function_call_output in a decorated header like:
+//   "Chunk ID: abc\nWall time: 0.4s\nProcess exited with code 0\n" +
+//   "Original token count: 123\nOutput:\n<actual payload>"
+// For MCP connector calls, <actual payload> is structured JSON (same shape
+// mcpContentRule expects). For exec_command / write_stdin it's plain text.
+// We strip the header so downstream rules can see the true payload and,
+// when the payload is structured JSON, parse it back into an object.
+const CODEX_OUTPUT_PREFIX = /^(?:Chunk ID:.*\n)?(?:Wall time:.*\n)?(?:Process exited with code.*\n)?(?:Original token count:.*\n)?Output:\n/;
+export const unwrapCodexOutput = (raw: unknown): unknown => {
+  if (typeof raw !== "string") return raw;
+  const match = raw.match(CODEX_OUTPUT_PREFIX);
+  const stripped = match ? raw.slice(match[0].length) : raw;
+  // Opportunistic JSON parse: if the payload looks like a JSON object or
+  // array, decode it so mcp-content-rule can traverse the structure.
+  const trimmed = stripped.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // Fall through to string.
+    }
+  }
+  return stripped;
+};
+
 // Per-session bookkeeping carried across lines in a single file.
 // Claude Code and Codex both emit call + output as separate lines keyed by
 // a correlation id — we buffer the call until its matching output arrives.
@@ -165,7 +190,13 @@ const extractCodex = (
 
   if (pType === "function_call" || pType === "custom_tool_call") {
     const id = typeof payload["call_id"] === "string" ? (payload["call_id"] as string) : "";
-    const name = typeof payload["name"] === "string" ? (payload["name"] as string) : "";
+    const rawName = typeof payload["name"] === "string" ? (payload["name"] as string) : "";
+    // Codex connector tools split their identity across `namespace` +
+    // `name` (e.g. namespace="mcp__codex_apps__github", name="_search_prs").
+    // Concatenate so the simulator's `startsWith("mcp__")` check and the
+    // per-tool config glob matching see the full qualified identifier.
+    const ns = typeof payload["namespace"] === "string" ? (payload["namespace"] as string) : "";
+    const name = ns ? `${ns}${rawName}` : rawName;
     if (!id || !name) return true; // consumed but unusable
     // Codex serializes arguments as a JSON string; parse it opportunistically.
     let input: Record<string, unknown> = {};
@@ -197,7 +228,8 @@ const extractCodex = (
     const use = state.pending.get(id);
     if (!use) return true; // orphan output — drop
     state.pending.delete(id);
-    const output = payload["output"];
+    const rawOutput = payload["output"];
+    const output = unwrapCodexOutput(rawOutput);
     const bytes = utf8Bytes(JSON.stringify(output ?? null));
     emit({
       agent: "codex",

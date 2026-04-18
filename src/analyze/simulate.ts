@@ -1,9 +1,10 @@
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { Config } from "../core/types.js";
 import { mcpContentRule } from "../rules/mcp-content.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { shouldApply } from "../core/gate.js";
-import { configForTool } from "../core/config.js";
+import { configForTool, loadConfig } from "../core/config.js";
 import type { ToolCall } from "./parse.js";
 import type { Tokenizer } from "./tokens.js";
 
@@ -99,6 +100,8 @@ const parseReason = (reason: string): ReasonFlags => {
 };
 
 export interface SimulatorOptions {
+  // Default (fallback) config, used when a ToolCall has no resolvable
+  // project_hint or the per-project override file doesn't exist.
   cfg: Config;
   tokenizer: Tokenizer;
   // If true, the per-session dedup state is cleared when session_id changes.
@@ -129,11 +132,30 @@ export class Simulator {
   private currentSession: string | null = null;
   private dedupLedger = new Map<string, DedupEntry>();
   private sessionCounter = 0;
+  // Per-project config cache: avoid re-loading + re-scaling on every event.
+  // Key is the absolute project path (ToolCall.project_hint) when it
+  // resolves to an existing directory; otherwise the fallback cfg is used.
+  private readonly projectCfgCache = new Map<string, Config>();
 
   constructor(opts: SimulatorOptions) {
     this.cfg = opts.cfg;
     this.tokenizer = opts.tokenizer;
     this.scoped = opts.session_scoped_dedup !== false;
+  }
+
+  private configForEvent(call: ToolCall): Config {
+    const hint = call.project_hint;
+    if (!hint || !hint.startsWith("/") || !existsSync(hint)) return this.cfg;
+    const cached = this.projectCfgCache.get(hint);
+    if (cached) return cached;
+    try {
+      const loaded = loadConfig(hint);
+      this.projectCfgCache.set(hint, loaded);
+      return loaded;
+    } catch {
+      this.projectCfgCache.set(hint, this.cfg);
+      return this.cfg;
+    }
   }
 
   feed(call: ToolCall): SimEvent {
@@ -165,10 +187,14 @@ export class Simulator {
     const isMcp = call.tool_name.startsWith("mcp__");
     const isRead = call.tool_name === "Read";
 
+    // Use per-project config when the ToolCall carries a resolvable cwd.
+    // This matches how the real hook's `loadConfig(input.cwd)` picks up
+    // `<project>/.tokenomy.json` overrides in addition to the global cfg.
+    const projectCfg = this.configForEvent(call);
     // Honor disabled_tools and per-tool overrides exactly like the real
     // dispatch does. A tool explicitly disabled gets no simulated savings;
     // per-tool aggression overrides flow into the downstream rule configs.
-    if (this.cfg.disabled_tools?.includes(call.tool_name)) {
+    if (projectCfg.disabled_tools?.includes(call.tool_name)) {
       return {
         agent: call.agent,
         session_id: call.session_id,
@@ -183,7 +209,7 @@ export class Simulator {
         call_key: key,
       };
     }
-    const toolCfg = configForTool(this.cfg, call.tool_name);
+    const toolCfg = configForTool(projectCfg, call.tool_name);
 
     // PostToolUse rules only fire for mcp__* tools in the real dispatch.
     // Non-MCP tools get only the Read-clamp path (handled separately below).

@@ -107,6 +107,14 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
   let lastProgressWrite = 0;
 
   try {
+    // Claude sidechains live in separate files under subagents/ but share
+    // the parent session_id. Feeding events to the simulator in file-walk
+    // order causes dedup to see the wrong "first" occurrence. We instead
+    // buffer every ToolCall, group by session_id, sort each group by
+    // timestamp, then replay per session — which mirrors the real agent's
+    // live execution order.
+    const rawCalls: Parameters<typeof simulator.feed>[0][] = [];
+
     const scanStats = await scan(
       {
         roots,
@@ -126,9 +134,26 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
           : undefined,
       },
       (call) => {
-        agg.feed(simulator.feed(call));
+        rawCalls.push(call);
       },
     );
+
+    // Group by session, sort each group by timestamp, then feed in order.
+    const bySession = new Map<string, typeof rawCalls>();
+    for (const c of rawCalls) {
+      const bucket = bySession.get(c.session_id) ?? [];
+      bucket.push(c);
+      bySession.set(c.session_id, bucket);
+    }
+    for (const bucket of bySession.values()) {
+      bucket.sort((a, b) => {
+        const ta = Date.parse(a.ts);
+        const tb = Date.parse(b.ts);
+        if (Number.isFinite(ta) && Number.isFinite(tb)) return ta - tb;
+        return 0;
+      });
+      for (const call of bucket) agg.feed(simulator.feed(call));
+    }
 
     // Note files AFTER scan so we record the true count (including skipped).
     for (let i = 0; i < scanStats.files; i++) agg.noteFile();

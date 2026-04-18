@@ -117,3 +117,81 @@ test("parse: Codex function_call_output without matching call is dropped", () =>
   const calls = collect([output]);
   assert.equal(calls.length, 0);
 });
+
+test("parse: Codex namespace + name produce mcp__* tool names", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    timestamp: "2026-04-18T12:00:00Z",
+    payload: {
+      type: "function_call",
+      namespace: "mcp__codex_apps__github",
+      name: "_search_prs",
+      arguments: JSON.stringify({ repo: "x/y" }),
+      call_id: "call_xy",
+    },
+  });
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_xy", output: "Output:\n[]" },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.tool_name, "mcp__codex_apps__github_search_prs");
+  assert.ok(calls[0]!.tool_name.startsWith("mcp__"));
+});
+
+test("parse: Codex CLI wrapper is stripped from function_call_output", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "exec_command",
+      arguments: "{}",
+      call_id: "call_wrap",
+    },
+  });
+  const wrapped =
+    "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nHello world";
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_wrap", output: wrapped },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.tool_response, "Hello world");
+});
+
+test("parse: Codex wrapped JSON payload is parsed back into an object", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call", namespace: "mcp__x__y", name: "z", arguments: "{}", call_id: "call_js" },
+  });
+  const payload = { content: [{ type: "text", text: "hi" }] };
+  const wrapped = `Wall time: 0.1s\nOutput:\n${JSON.stringify(payload)}`;
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_js", output: wrapped },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.tool_response, payload);
+});
+
+test("parse: upgrades identity from Claude Code sessionId + cwd fields", () => {
+  const use = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-04-18T12:00:00Z",
+    sessionId: "real-session",
+    cwd: "/Users/me/actual-project",
+    message: {
+      content: [{ type: "tool_use", id: "tu", name: "Read", input: { file_path: "/x" } }],
+    },
+  });
+  const result = JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "tu", content: "x" }] },
+  });
+  const calls = collect([use, result], "fallback-session", "fallback-project");
+  assert.equal(calls[0]!.session_id, "real-session");
+  assert.equal(calls[0]!.project_hint, "/Users/me/actual-project");
+});
