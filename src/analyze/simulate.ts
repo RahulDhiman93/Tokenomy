@@ -122,7 +122,13 @@ const withinWindow = (priorTs: string, currentTs: string, windowSeconds: number)
   // If either timestamp is unparseable, assume same window (fail-open —
   // matches the real dedup path which uses Date.now).
   if (!Number.isFinite(p) || !Number.isFinite(c)) return true;
-  return Math.abs(c - p) <= windowSeconds * 1_000;
+  // Directional: only count a current call as a duplicate if it happened
+  // at-or-after the prior one and within the window. This prevents false
+  // hits when the scanner reads Claude sidechain files in pathname order
+  // and visits a later-timestamped main-file event before its earlier
+  // sidechain-file counterpart.
+  const delta = c - p;
+  return delta >= 0 && delta <= windowSeconds * 1_000;
 };
 
 export class Simulator {
@@ -260,15 +266,19 @@ export class Simulator {
           savings_tokens += saved;
           savings_bytes += Math.max(0, observed_bytes - 200);
           duplicate_of_index = prev.index;
-        } else if (observed_bytes >= minBytes) {
-          // Record (or refresh) for future-duplicate detection.
-          ledger.set(key, {
-            index: counter,
-            ts: call.ts,
-            tokens: observed_tokens,
-            bytes: observed_bytes,
-          });
         }
+        // Always record every call in the ledger (mirrors the live
+        // checkAndRecordDuplicate which appends unconditionally); `min_bytes`
+        // gates only whether the *current* call qualifies for the stub
+        // replacement. This ensures a small first call followed by a large
+        // same-args call still counts as a duplicate the live hook would
+        // catch.
+        ledger.set(key, {
+          index: counter,
+          ts: call.ts,
+          tokens: observed_tokens,
+          bytes: observed_bytes,
+        });
       }
 
       // If deduped, the live hook short-circuits — no other rules fire.
@@ -307,10 +317,16 @@ export class Simulator {
       // AND — unlike the earlier naive "injected_limit * 50 B" estimate —
       // uses the actual newline count from the observed transcript text so
       // we don't falsely credit savings on minified or single-line files.
+      //
+      // Compare against the raw text byte count, not observed_bytes (which
+      // is JSON.stringify(response).byteLength and inflates plain-text
+      // results via escaped newlines/quotes). The live readBoundRule uses
+      // `statSync(file_path).size`, which is closest to the raw text.
       const input = call.tool_input;
       const hasExplicit =
         typeof input["limit"] === "number" || typeof input["offset"] === "number";
-      if (!hasExplicit && observed_bytes >= toolCfg.read.clamp_above_bytes) {
+      const rawTextBytes = text ? Buffer.byteLength(text, "utf8") : observed_bytes;
+      if (!hasExplicit && rawTextBytes >= toolCfg.read.clamp_above_bytes) {
         const body = text;
         // Count lines; if there aren't more than injected_limit there's
         // nothing to clamp — a single-line 80KB minified bundle stays
@@ -325,7 +341,7 @@ export class Simulator {
           const saved = Math.max(0, observed_tokens - keptTokens);
           perRule.read_clamp = saved;
           savings_tokens += saved;
-          savings_bytes += Math.max(0, observed_bytes - Math.ceil(observed_bytes * kept_ratio));
+          savings_bytes += Math.max(0, rawTextBytes - Math.ceil(rawTextBytes * kept_ratio));
         }
       }
     }

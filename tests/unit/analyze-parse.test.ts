@@ -136,8 +136,29 @@ test("parse: Codex namespace + name produce mcp__* tool names", () => {
   });
   const calls = collect([call, output]);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.tool_name, "mcp__codex_apps__github_search_prs");
+  // Leading underscore on the method fuses with the namespace's trailing
+  // character to yield a proper `__` separator.
+  assert.equal(calls[0]!.tool_name, "mcp__codex_apps__github__search_prs");
   assert.ok(calls[0]!.tool_name.startsWith("mcp__"));
+});
+
+test("parse: Codex namespace + underscore-less name uses __ separator", () => {
+  const call = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      namespace: "mcp__codex_apps__github",
+      name: "search",
+      arguments: "{}",
+      call_id: "call_no_us",
+    },
+  });
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "call_no_us", output: "Output:\nx" },
+  });
+  const calls = collect([call, output]);
+  assert.equal(calls[0]!.tool_name, "mcp__codex_apps__github__search");
 });
 
 test("parse: Codex CLI wrapper is stripped from function_call_output", () => {

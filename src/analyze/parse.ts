@@ -193,10 +193,15 @@ const extractCodex = (
     const rawName = typeof payload["name"] === "string" ? (payload["name"] as string) : "";
     // Codex connector tools split their identity across `namespace` +
     // `name` (e.g. namespace="mcp__codex_apps__github", name="_search_prs").
-    // Concatenate so the simulator's `startsWith("mcp__")` check and the
-    // per-tool config glob matching see the full qualified identifier.
+    // Normalize to the Claude-style `mcp__<vendor>__<method>` separator so
+    // built-in profile globs (like `mcp__*Atlassian*__getJiraIssue`) match
+    // both agents' tool names without per-agent special-casing.
     const ns = typeof payload["namespace"] === "string" ? (payload["namespace"] as string) : "";
-    const name = ns ? `${ns}${rawName}` : rawName;
+    const name = ns
+      ? rawName.startsWith("_")
+        ? `${ns}_${rawName}` // name already starts with "_" → yields `__`
+        : `${ns}__${rawName}` // otherwise add the full `__` separator
+      : rawName;
     if (!id || !name) return true; // consumed but unusable
     // Codex serializes arguments as a JSON string; parse it opportunistically.
     let input: Record<string, unknown> = {};
