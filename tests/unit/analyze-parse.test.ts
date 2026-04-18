@@ -81,20 +81,39 @@ test("parse: malformed JSON line is skipped", () => {
   assert.equal(calls.length, 0);
 });
 
-test("parse: Codex rollout tool_call is recognized", () => {
-  const line = JSON.stringify({
-    type: "event_msg",
+test("parse: Codex rollout function_call + function_call_output pair", () => {
+  const call = JSON.stringify({
+    type: "response_item",
     timestamp: "2026-04-18T12:00:00Z",
     payload: {
-      tool_call: {
-        name: "apply_patch",
-        arguments: { path: "x.ts" },
-        output: "patched",
-      },
+      type: "function_call",
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "ls", workdir: "/tmp" }),
+      call_id: "call_abc",
     },
   });
-  const calls = collect([line]);
+  const output = JSON.stringify({
+    type: "response_item",
+    timestamp: "2026-04-18T12:00:01Z",
+    payload: {
+      type: "function_call_output",
+      call_id: "call_abc",
+      output: "file1\nfile2\n",
+    },
+  });
+  const calls = collect([call, output]);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.tool_name, "apply_patch");
+  assert.equal(calls[0]!.tool_name, "exec_command");
   assert.equal(calls[0]!.agent, "codex");
+  assert.equal((calls[0]!.tool_input as { cmd?: string }).cmd, "ls");
+  assert.equal(calls[0]!.tool_response, "file1\nfile2\n");
+});
+
+test("parse: Codex function_call_output without matching call is dropped", () => {
+  const output = JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call_output", call_id: "orphan", output: "x" },
+  });
+  const calls = collect([output]);
+  assert.equal(calls.length, 0);
 });

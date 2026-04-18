@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../core/types.js";
 import { mcpContentRule } from "../rules/mcp-content.js";
-import { BUILTIN_PATTERNS, redactSecrets } from "../rules/redact.js";
-import { collapseStacktrace } from "../rules/stacktrace.js";
 import { readBoundRule } from "../rules/read-bound.js";
+import { shouldApply } from "../core/gate.js";
 import type { ToolCall } from "./parse.js";
 import type { Tokenizer } from "./tokens.js";
 
 // Per-event sim result: what would Tokenomy have saved if it had been active?
 // `observed_tokens` is the actual token cost of this tool response.
 // `savings_tokens` is the hypothetical save after running the full pipeline.
+//
+// Fidelity invariant: the simulator mirrors the real `dispatch()` /
+// `preDispatch()` logic exactly — a rule is only credited if the live hook
+// would have fired it. In particular: PostToolUse rules (dedup, redact,
+// stacktrace, profile, mcp-trim) only run for `mcp__*` tools; `Read`
+// clamp is the only thing that fires for non-MCP calls.
 export interface SimEvent {
   agent: ToolCall["agent"];
   session_id: string;
@@ -74,12 +79,22 @@ const asText = (response: unknown): string => {
   return "";
 };
 
-const responseBytesFromTokens = (resp: unknown): number => {
-  try {
-    return Buffer.byteLength(JSON.stringify(resp ?? null), "utf8");
-  } catch {
-    return 0;
-  }
+// Parse the "redact:N+profile:foo+stacktrace+mcp-content-trim" reason string
+// that mcp-content-rule emits. Returns which stages fired.
+interface ReasonFlags {
+  redact_count: number;
+  stacktrace: boolean;
+  profile: boolean;
+  mcp_trim: boolean;
+}
+const parseReason = (reason: string): ReasonFlags => {
+  const redactMatch = /redact:(\d+)/.exec(reason);
+  return {
+    redact_count: redactMatch ? parseInt(redactMatch[1]!, 10) : 0,
+    stacktrace: /stacktrace/.test(reason),
+    profile: /profile:/.test(reason),
+    mcp_trim: /mcp-content-trim/.test(reason),
+  };
 };
 
 export interface SimulatorOptions {
@@ -90,13 +105,21 @@ export interface SimulatorOptions {
   session_scoped_dedup?: boolean;
 }
 
-// Session-scoped dedup ledger used during simulation. Entries are the
-// observed tokens of the *first* call with that key in the current session.
 interface DedupEntry {
   index: number;
+  ts: string; // ISO timestamp of the first occurrence, for window_seconds check.
   tokens: number;
   bytes: number;
 }
+
+const withinWindow = (priorTs: string, currentTs: string, windowSeconds: number): boolean => {
+  const p = Date.parse(priorTs);
+  const c = Date.parse(currentTs);
+  // If either timestamp is unparseable, assume same window (fail-open —
+  // matches the real dedup path which uses Date.now).
+  if (!Number.isFinite(p) || !Number.isFinite(c)) return true;
+  return Math.abs(c - p) <= windowSeconds * 1_000;
+};
 
 export class Simulator {
   private readonly cfg: Config;
@@ -138,83 +161,86 @@ export class Simulator {
     let duplicate_of_index: number | undefined;
 
     const key = callKey(call.tool_name, call.tool_input);
+    const isMcp = call.tool_name.startsWith("mcp__");
+    const isRead = call.tool_name === "Read";
 
-    // Rule 1: dedup. If the same call appeared earlier in this session, a
-    // stub body would replace the full response — savings = observed tokens
-    // minus a short pointer.
-    if (this.cfg.dedup?.enabled !== false) {
-      const prev = this.dedupLedger.get(key);
-      const minBytes = this.cfg.dedup?.min_bytes ?? 2_000;
-      if (prev && observed_bytes >= minBytes) {
-        // Stub roughly: 1 text block with a 120-byte pointer line.
-        const stubTokens = this.tokenizer.count(
-          `[tokenomy: duplicate of call #${prev.index} at ${call.ts} — body elided, no refetch required.]`,
+    // PostToolUse rules only fire for mcp__* tools in the real dispatch.
+    // Non-MCP tools get only the Read-clamp path (handled separately below).
+    if (isMcp) {
+      // Rule 1: dedup with session scope + window_seconds gate.
+      if (this.cfg.dedup?.enabled !== false) {
+        const minBytes = this.cfg.dedup?.min_bytes ?? 2_000;
+        const windowSeconds = this.cfg.dedup?.window_seconds ?? 1_800;
+        const prev = this.dedupLedger.get(key);
+        if (
+          prev &&
+          observed_bytes >= minBytes &&
+          withinWindow(prev.ts, call.ts, windowSeconds)
+        ) {
+          const stubTokens = this.tokenizer.count(
+            `[tokenomy: duplicate of call #${prev.index} at ${call.ts} — body elided, no refetch required.]`,
+          );
+          const saved = Math.max(0, observed_tokens - stubTokens);
+          perRule.dedup = saved;
+          savings_tokens += saved;
+          savings_bytes += Math.max(0, observed_bytes - 200);
+          duplicate_of_index = prev.index;
+        } else if (observed_bytes >= minBytes) {
+          // Record (or refresh) for future-duplicate detection.
+          this.dedupLedger.set(key, {
+            index: this.sessionCounter,
+            ts: call.ts,
+            tokens: observed_tokens,
+            bytes: observed_bytes,
+          });
+        }
+      }
+
+      // If deduped, the live hook short-circuits — no other rules fire.
+      if (duplicate_of_index === undefined && call.tool_response) {
+        // Single-shot pipeline: mcp-content-rule internally runs
+        // redact → stacktrace → profile → mcp-trim. Parsing the returned
+        // `reason` lets us split the credit across those stages without
+        // running them separately (which was double-counting).
+        const r = mcpContentRule(
+          call.tool_name,
+          call.tool_input,
+          call.tool_response,
+          this.cfg,
         );
-        const saved = Math.max(0, observed_tokens - stubTokens);
-        perRule.dedup = saved;
-        savings_tokens += saved;
-        savings_bytes += Math.max(0, observed_bytes - 200);
-        duplicate_of_index = prev.index;
-      } else if (observed_bytes >= minBytes) {
-        this.dedupLedger.set(key, {
-          index: this.sessionCounter,
-          tokens: observed_tokens,
-          bytes: observed_bytes,
-        });
-      }
-    }
-
-    // If deduped, short-circuit other rules (stub would replace the body).
-    if (duplicate_of_index === undefined) {
-      // Rule 2: redaction match count (informational).
-      if (text && this.cfg.redact?.enabled !== false) {
-        const r = redactSecrets(text, BUILTIN_PATTERNS);
-        perRule.redact_matches = r.total;
-      }
-
-      // Rule 3: stacktrace collapse.
-      if (text) {
-        const s = collapseStacktrace(text);
-        if (s.ok && s.trimmed) {
-          const newTokens = this.tokenizer.count(s.trimmed);
-          const saved = Math.max(0, observed_tokens - newTokens);
-          perRule.stacktrace = saved;
-          savings_tokens += saved;
-          savings_bytes += Math.max(0, s.bytesIn - s.bytesOut);
-        }
-      }
-
-      // Rule 4 + 5: full MCP pipeline (profile trim + byte trim).
-      if (call.tool_name.startsWith("mcp__") && call.tool_response) {
-        const r = mcpContentRule(call.tool_name, call.tool_input, call.tool_response, this.cfg);
         if (r.kind === "trim") {
-          const newText = asText(r.output);
-          const newTokens = this.tokenizer.count(newText);
-          const saved = Math.max(0, observed_tokens - newTokens);
-          // Split between profile vs trim reason, best-effort.
-          if (r.reason.includes("profile")) perRule.profile = saved;
-          else perRule.mcp_trim = saved;
-          savings_tokens += saved;
-          savings_bytes += Math.max(0, r.bytesIn - r.bytesOut);
+          const flags = parseReason(r.reason);
+          // Match dispatch: redaction force-applies regardless of gate.
+          const redactionForced = flags.redact_count > 0;
+          if (redactionForced || shouldApply(r.bytesIn, r.bytesOut, this.cfg)) {
+            const newText = asText(r.output);
+            const newTokens = this.tokenizer.count(newText);
+            const saved = Math.max(0, observed_tokens - newTokens);
+            // Split savings attribution by which stage fired.
+            if (flags.profile) perRule.profile = saved;
+            else if (flags.mcp_trim) perRule.mcp_trim = saved;
+            else if (flags.stacktrace) perRule.stacktrace = saved;
+            savings_tokens += saved;
+            savings_bytes += Math.max(0, r.bytesIn - r.bytesOut);
+            perRule.redact_matches = flags.redact_count;
+          }
         }
       }
-
-      // Rule 6: Read clamp. Applies when tool is Read, response is big, and
-      // there was no explicit limit/offset in the input.
-      if (call.tool_name === "Read" && this.cfg.read.enabled) {
-        const fileBytes = observed_bytes;
-        const input = call.tool_input;
-        const hasExplicit =
-          typeof input["limit"] === "number" || typeof input["offset"] === "number";
-        if (!hasExplicit && fileBytes >= this.cfg.read.clamp_above_bytes) {
-          // Estimated savings: keeps injected_limit lines at ~50 B/line.
-          const keptBytes = this.cfg.read.injected_limit * 50;
-          const keptTokens = this.tokenizer.count("x".repeat(keptBytes)); // rough
-          const saved = Math.max(0, observed_tokens - keptTokens);
-          perRule.read_clamp = saved;
-          savings_tokens += saved;
-          savings_bytes += Math.max(0, fileBytes - keptBytes);
-        }
+    } else if (isRead && this.cfg.read.enabled) {
+      // Rule 6: Read clamp. Mirrors preDispatch logic: no clamp if the user
+      // passed explicit limit/offset, and only fires above clamp_above_bytes.
+      const input = call.tool_input;
+      const hasExplicit =
+        typeof input["limit"] === "number" || typeof input["offset"] === "number";
+      if (!hasExplicit && observed_bytes >= this.cfg.read.clamp_above_bytes) {
+        // Estimated post-clamp size: injected_limit lines at ~50 B/line.
+        const keptBytes = this.cfg.read.injected_limit * 50;
+        const keptText = "x".repeat(keptBytes);
+        const keptTokens = this.tokenizer.count(keptText);
+        const saved = Math.max(0, observed_tokens - keptTokens);
+        perRule.read_clamp = saved;
+        savings_tokens += saved;
+        savings_bytes += Math.max(0, observed_bytes - keptBytes);
       }
     }
 
@@ -235,7 +261,6 @@ export class Simulator {
   }
 }
 
-// Unused import suppressor: keeps readBoundRule callable via re-export to
-// preserve the symmetry with the real hook pipeline. Downstream consumers
-// can use this to simulate PreToolUse behaviour for ad-hoc fixtures.
+// Re-exported for symmetry with the real hook pipeline; downstream consumers
+// can simulate PreToolUse behaviour directly against ad-hoc fixtures.
 export const simulateReadClamp = readBoundRule;

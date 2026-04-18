@@ -45,10 +45,13 @@ const asObject = (v: unknown): Record<string, unknown> =>
 const utf8Bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 
 // Per-session bookkeeping carried across lines in a single file.
+// Claude Code and Codex both emit call + output as separate lines keyed by
+// a correlation id — we buffer the call until its matching output arrives.
 export interface ParserState {
   session_id: string;
   project_hint: string;
-  pending: Map<string, RawToolUse>; // tool_use_id → tool use
+  // Claude Code: tool_use_id → use; Codex: call_id → use.
+  pending: Map<string, RawToolUse>;
 }
 
 export const makeState = (session_id: string, project_hint: string): ParserState => ({
@@ -117,38 +120,74 @@ const extractClaudeToolResults = (
   }
 };
 
-// Codex rollout shape: events look like
-//   { "type":"event_msg", "payload": { "type":"tool_call", "tool":{...}, "result":{...} } }
-// or separate function_call / function_call_output items. We accept any shape
-// that exposes {tool_name, tool_input, tool_output} at a top-level key.
+// Codex rollout shape (as of codex-cli 0.12x):
+//   { "type":"response_item", "timestamp":"...", "payload":{
+//       "type":"function_call", "name":"...", "arguments":"<json-string>",
+//       "call_id":"call_..." } }
+//   { "type":"response_item", "timestamp":"...", "payload":{
+//       "type":"function_call_output", "call_id":"call_...", "output":"..." } }
+// The call and output arrive on separate lines, keyed by call_id.
 const extractCodex = (
   line: Record<string, unknown>,
   state: ParserState,
   emit: (call: ToolCall) => void,
 ): boolean => {
-  // Heuristic: Codex rollout lines often carry "payload" or "item_type".
+  if (line["type"] !== "response_item") return false;
   const payload = asObject(line["payload"]);
-  const item = asObject(line["item"]);
-  const tc = asObject(payload["tool_call"] ?? item["tool_call"]);
-  if (!tc || Object.keys(tc).length === 0) return false;
-  const name = typeof tc["name"] === "string" ? (tc["name"] as string) : "";
-  const input = asObject(tc["arguments"] ?? tc["input"]);
-  const output = tc["output"] ?? tc["result"];
-  if (!name) return false;
+  const pType = payload["type"];
   const ts = typeof line["timestamp"] === "string" ? (line["timestamp"] as string) : "";
-  const bytes = utf8Bytes(JSON.stringify(output ?? null));
-  emit({
-    agent: "codex",
-    session_id: state.session_id,
-    project_hint: state.project_hint,
-    ts,
-    tool_name: name,
-    tool_input: input,
-    tool_response: output,
-    is_error: tc["is_error"] === true,
-    response_bytes: bytes,
-  });
-  return true;
+
+  if (pType === "function_call" || pType === "custom_tool_call") {
+    const id = typeof payload["call_id"] === "string" ? (payload["call_id"] as string) : "";
+    const name = typeof payload["name"] === "string" ? (payload["name"] as string) : "";
+    if (!id || !name) return true; // consumed but unusable
+    // Codex serializes arguments as a JSON string; parse it opportunistically.
+    let input: Record<string, unknown> = {};
+    const rawArgs = payload["arguments"];
+    if (typeof rawArgs === "string") {
+      try {
+        const parsed = JSON.parse(rawArgs);
+        input = asObject(parsed);
+      } catch {
+        input = { _raw: rawArgs };
+      }
+    } else {
+      input = asObject(rawArgs);
+    }
+    state.pending.set(id, {
+      session_id: state.session_id,
+      project_hint: state.project_hint,
+      ts,
+      tool_use_id: id,
+      tool_name: name,
+      tool_input: input,
+    });
+    return true;
+  }
+
+  if (pType === "function_call_output" || pType === "custom_tool_call_output") {
+    const id = typeof payload["call_id"] === "string" ? (payload["call_id"] as string) : "";
+    if (!id) return true;
+    const use = state.pending.get(id);
+    if (!use) return true; // orphan output — drop
+    state.pending.delete(id);
+    const output = payload["output"];
+    const bytes = utf8Bytes(JSON.stringify(output ?? null));
+    emit({
+      agent: "codex",
+      session_id: state.session_id,
+      project_hint: state.project_hint,
+      ts: ts || use.ts,
+      tool_name: use.tool_name,
+      tool_input: use.tool_input,
+      tool_response: output,
+      is_error: false,
+      response_bytes: bytes,
+    });
+    return true;
+  }
+
+  return false;
 };
 
 // Fold a single JSONL line into the parser state, emitting zero or more
