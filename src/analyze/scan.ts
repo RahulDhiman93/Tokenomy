@@ -55,9 +55,13 @@ export interface ScanOptions {
   progressEveryFiles?: number;
 }
 
-const sessionFromPath = (filePath: string): { session: string; project: string } => {
-  // ~/.claude/projects/<projectDir>/<sessionId>.jsonl
-  // ~/.codex/sessions/<...>/rollout-*.jsonl
+// Path-derived fallback identity. The parser upgrades these as soon as it
+// reads a `sessionId`/`cwd` field (Claude Code) or `session_meta` event
+// (Codex), but the fallback still helps when a transcript is too short to
+// carry metadata. Claude Code layout: `~/.claude/projects/<project>/<session>.jsonl`.
+// Codex layout: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — here both
+// `project` and `session` are just placeholders until metadata upgrades them.
+const fallbackIdentity = (filePath: string): { session: string; project: string } => {
   const sep = filePath.lastIndexOf("/");
   const basename = sep >= 0 ? filePath.slice(sep + 1) : filePath;
   const sessionId = basename.replace(/\.jsonl$/, "");
@@ -67,24 +71,16 @@ const sessionFromPath = (filePath: string): { session: string; project: string }
   return { session: sessionId, project };
 };
 
-const matchesFilters = (
-  filePath: string,
-  session: string,
-  project: string,
-  opts: ScanOptions,
-): boolean => {
-  if (opts.sessionFilter && !session.includes(opts.sessionFilter)) return false;
-  if (opts.projectFilter && !project.includes(opts.projectFilter)) return false;
-  // mtime-based since filter: skip files that haven't been touched.
-  if (opts.since) {
-    try {
-      const mtime = statSync(filePath).mtime;
-      if (mtime < opts.since) return false;
-    } catch {
-      return false;
-    }
+// File-level prefilter: only `--since` uses mtime since the other filters
+// depend on metadata inside the file. Session/project filters are applied
+// at emit-time on the ToolCall's authoritative identifiers.
+const passesMtimeFilter = (filePath: string, since: Date | undefined): boolean => {
+  if (!since) return true;
+  try {
+    return statSync(filePath).mtime >= since;
+  } catch {
+    return false;
   }
-  return true;
 };
 
 // Stream every matched transcript, feeding lines to the parser and forwarding
@@ -102,18 +98,22 @@ export const scan = async (
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i]!;
-    const { session, project } = sessionFromPath(file);
-    if (!matchesFilters(file, session, project, opts)) continue;
+    if (!passesMtimeFilter(file, opts.since)) continue;
 
+    const { session, project } = fallbackIdentity(file);
     const state: ParserState = makeState(session, project);
     await readFileLines(file, (line, bytes) => {
       lineCount++;
       byteCount += bytes;
       feedLine(line, state, (call) => {
+        // Post-emit filtering uses the authoritative identity carried on
+        // the ToolCall (set by upgradeIdentity inside the parser).
         if (opts.since && call.ts) {
           const t = Date.parse(call.ts);
           if (Number.isFinite(t) && t < opts.since.getTime()) return;
         }
+        if (opts.sessionFilter && !call.session_id.includes(opts.sessionFilter)) return;
+        if (opts.projectFilter && !call.project_hint.includes(opts.projectFilter)) return;
         emit(call);
       });
     });

@@ -3,6 +3,7 @@ import type { Config } from "../core/types.js";
 import { mcpContentRule } from "../rules/mcp-content.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { shouldApply } from "../core/gate.js";
+import { configForTool } from "../core/config.js";
 import type { ToolCall } from "./parse.js";
 import type { Tokenizer } from "./tokens.js";
 
@@ -164,13 +165,33 @@ export class Simulator {
     const isMcp = call.tool_name.startsWith("mcp__");
     const isRead = call.tool_name === "Read";
 
+    // Honor disabled_tools and per-tool overrides exactly like the real
+    // dispatch does. A tool explicitly disabled gets no simulated savings;
+    // per-tool aggression overrides flow into the downstream rule configs.
+    if (this.cfg.disabled_tools?.includes(call.tool_name)) {
+      return {
+        agent: call.agent,
+        session_id: call.session_id,
+        project_hint: call.project_hint,
+        ts: call.ts,
+        tool_name: call.tool_name,
+        observed_bytes,
+        observed_tokens,
+        savings_bytes: 0,
+        savings_tokens: 0,
+        per_rule: perRule,
+        call_key: key,
+      };
+    }
+    const toolCfg = configForTool(this.cfg, call.tool_name);
+
     // PostToolUse rules only fire for mcp__* tools in the real dispatch.
     // Non-MCP tools get only the Read-clamp path (handled separately below).
     if (isMcp) {
       // Rule 1: dedup with session scope + window_seconds gate.
-      if (this.cfg.dedup?.enabled !== false) {
-        const minBytes = this.cfg.dedup?.min_bytes ?? 2_000;
-        const windowSeconds = this.cfg.dedup?.window_seconds ?? 1_800;
+      if (toolCfg.dedup?.enabled !== false) {
+        const minBytes = toolCfg.dedup?.min_bytes ?? 2_000;
+        const windowSeconds = toolCfg.dedup?.window_seconds ?? 1_800;
         const prev = this.dedupLedger.get(key);
         if (
           prev &&
@@ -206,13 +227,13 @@ export class Simulator {
           call.tool_name,
           call.tool_input,
           call.tool_response,
-          this.cfg,
+          toolCfg,
         );
         if (r.kind === "trim") {
           const flags = parseReason(r.reason);
           // Match dispatch: redaction force-applies regardless of gate.
           const redactionForced = flags.redact_count > 0;
-          if (redactionForced || shouldApply(r.bytesIn, r.bytesOut, this.cfg)) {
+          if (redactionForced || shouldApply(r.bytesIn, r.bytesOut, toolCfg)) {
             const newText = asText(r.output);
             const newTokens = this.tokenizer.count(newText);
             const saved = Math.max(0, observed_tokens - newTokens);
@@ -226,15 +247,15 @@ export class Simulator {
           }
         }
       }
-    } else if (isRead && this.cfg.read.enabled) {
+    } else if (isRead && toolCfg.read.enabled) {
       // Rule 6: Read clamp. Mirrors preDispatch logic: no clamp if the user
       // passed explicit limit/offset, and only fires above clamp_above_bytes.
       const input = call.tool_input;
       const hasExplicit =
         typeof input["limit"] === "number" || typeof input["offset"] === "number";
-      if (!hasExplicit && observed_bytes >= this.cfg.read.clamp_above_bytes) {
+      if (!hasExplicit && observed_bytes >= toolCfg.read.clamp_above_bytes) {
         // Estimated post-clamp size: injected_limit lines at ~50 B/line.
-        const keptBytes = this.cfg.read.injected_limit * 50;
+        const keptBytes = toolCfg.read.injected_limit * 50;
         const keptText = "x".repeat(keptBytes);
         const keptTokens = this.tokenizer.count(keptText);
         const saved = Math.max(0, observed_tokens - keptTokens);

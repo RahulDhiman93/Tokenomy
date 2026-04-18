@@ -57,9 +57,19 @@ const readPricePerMillion = (): number => {
   return typeof v === "number" && v > 0 ? v : 3.0;
 };
 
+// Default lookback window. Documented in README as "scans the last 30 days
+// unless --since is passed". Users who want the full history pass --since=0d.
+const DEFAULT_SINCE_DAYS = 30;
+
 export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
   const cfg = loadConfig(process.cwd());
-  const since = parseSince(opts.since);
+  // Honor an explicit `--since 0d` / `--since all` as "no window".
+  const explicitAll = opts.since === "0d" || opts.since === "0" || opts.since === "all";
+  const since = explicitAll
+    ? undefined
+    : opts.since
+    ? parseSince(opts.since)
+    : new Date(Date.now() - DEFAULT_SINCE_DAYS * 86_400_000);
   const tokenizerChoice = opts.tokenizer ?? "auto";
   const colorEnabled = opts.color !== false && process.stdout.isTTY === true;
   const width = typeof process.stdout.columns === "number" ? process.stdout.columns : 100;

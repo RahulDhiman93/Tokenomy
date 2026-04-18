@@ -47,6 +47,13 @@ const utf8Bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 // Per-session bookkeeping carried across lines in a single file.
 // Claude Code and Codex both emit call + output as separate lines keyed by
 // a correlation id — we buffer the call until its matching output arrives.
+//
+// session_id and project_hint start as path-derived fallbacks but get
+// replaced by values read from event metadata (Claude Code: `.sessionId` +
+// `.cwd`; Codex: `session_meta.payload.{id,cwd}`). This ensures sidechain
+// transcripts and flat Codex rollouts still aggregate under the correct
+// logical session/project rather than under a path-derived surrogate like
+// the day number in `~/.codex/sessions/YYYY/MM/DD/`.
 export interface ParserState {
   session_id: string;
   project_hint: string;
@@ -59,6 +66,25 @@ export const makeState = (session_id: string, project_hint: string): ParserState
   project_hint,
   pending: new Map(),
 });
+
+// Update session/project identity from in-event metadata. Called on every
+// line before extraction; once we've seen a trustworthy value we keep it.
+const upgradeIdentity = (line: Record<string, unknown>, state: ParserState): void => {
+  // Claude Code: assistant/user/attachment events carry `.sessionId` + `.cwd`.
+  const claudeSession = typeof line["sessionId"] === "string" ? (line["sessionId"] as string) : "";
+  const claudeCwd = typeof line["cwd"] === "string" ? (line["cwd"] as string) : "";
+  if (claudeSession) state.session_id = claudeSession;
+  if (claudeCwd) state.project_hint = claudeCwd;
+
+  // Codex: first line is `session_meta` with `payload.{id,cwd}`.
+  if (line["type"] === "session_meta") {
+    const payload = asObject(line["payload"]);
+    const codexId = typeof payload["id"] === "string" ? (payload["id"] as string) : "";
+    const codexCwd = typeof payload["cwd"] === "string" ? (payload["cwd"] as string) : "";
+    if (codexId) state.session_id = codexId;
+    if (codexCwd) state.project_hint = codexCwd;
+  }
+};
 
 const extractClaudeToolUses = (line: Record<string, unknown>, state: ParserState): void => {
   if (line["type"] !== "assistant") return;
@@ -206,6 +232,7 @@ export const feedLine = (
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
   const obj = parsed as Record<string, unknown>;
+  upgradeIdentity(obj, state);
   if (extractCodex(obj, state, emit)) return;
   extractClaudeToolUses(obj, state);
   extractClaudeToolResults(obj, state, emit);

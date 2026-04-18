@@ -45,6 +45,15 @@ test("aggregator: by_tool sorted by savings tokens desc", () => {
   assert.equal(r.by_tool[1]!.tool, "a");
 });
 
+test("aggregator: hotspots are session-scoped (same key in two sessions isn't a hotspot)", () => {
+  const a = agg();
+  a.feed(mk({ session_id: "s1", call_key: "k1", tool_name: "t1", observed_tokens: 100 }));
+  a.feed(mk({ session_id: "s2", call_key: "k1", tool_name: "t1", observed_tokens: 100 }));
+  const r = a.build();
+  // Same call_key across sessions ≠ hotspot; real dedup is session-scoped.
+  assert.equal(r.hotspots.length, 0);
+});
+
 test("aggregator: hotspots only list keys with >1 call, sum wasted tokens", () => {
   const a = agg();
   a.feed(mk({ call_key: "k1", tool_name: "t1", observed_tokens: 100 }));

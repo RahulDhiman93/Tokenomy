@@ -138,8 +138,11 @@ export class Aggregator {
       this.byDay.set(day, d);
     }
 
-    // Hotspots by canonical (tool, args) key.
-    const kb = this.byKey.get(e.call_key) ?? {
+    // Hotspots are session-scoped because real dedup is session-scoped.
+    // Two separate sessions each calling the same tool once isn't a hotspot
+    // dedup can fix, so we must not count them together.
+    const hotspotKey = `${e.session_id}\u0000${e.call_key}`;
+    const kb = this.byKey.get(hotspotKey) ?? {
       tool: e.tool_name,
       calls: 0,
       first_observed_tokens: e.observed_tokens,
@@ -150,7 +153,7 @@ export class Aggregator {
       // Every repeat is waste — the first call is a necessary lookup.
       kb.wasted_tokens += e.observed_tokens;
     }
-    this.byKey.set(e.call_key, kb);
+    this.byKey.set(hotspotKey, kb);
 
     // Maintain a top-N outliers list (by observed tokens).
     this.maybeRecordOutlier(e);
