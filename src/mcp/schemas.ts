@@ -92,4 +92,25 @@ export const TOOL_DEFS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "find_usages",
+    description:
+      "Return direct usage sites (callers, references, importers) of a file or symbol. Complements get_impact_radius (which walks reverse deps transitively).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "object",
+          properties: {
+            file: { type: "string" },
+            symbol: { type: "string" },
+          },
+          required: ["file"],
+          additionalProperties: false,
+        },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+  },
 ];

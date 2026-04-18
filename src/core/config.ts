@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import type { Config } from "./types.js";
+import type { Config, PerToolOverride } from "./types.js";
 import { globalConfigPath, projectConfigPath, defaultLogPath, expandHome } from "./paths.js";
 
 export const DEFAULT_CONFIG: Config = {
@@ -31,10 +31,24 @@ export const DEFAULT_CONFIG: Config = {
       get_minimal_context: 4_000,
       get_impact_radius: 6_000,
       get_review_context: 1_000,
+      find_usages: 4_000,
     },
+  },
+  redact: {
+    enabled: true,
   },
   log_path: defaultLogPath(),
   disabled_tools: [],
+  tools: {},
+  dedup: {
+    enabled: true,
+    min_bytes: 2_000,
+    window_seconds: 1_800,
+  },
+  perf: {
+    p95_budget_ms: 50,
+    sample_size: 100,
+  },
 };
 
 const AGGRESSION_MULT: Record<Config["aggression"], number> = {
@@ -121,9 +135,61 @@ const applyAggression = (cfg: Config): Config => {
           512,
           Math.round(cfg.graph.query_budget_bytes.get_review_context * m),
         ),
+        find_usages: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.find_usages * m),
+        ),
       },
     },
   };
+};
+
+const globToRegex = (glob: string): RegExp => {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+};
+
+// Find the most specific tool override (longest non-wildcard pattern wins).
+export const resolveToolOverride = (
+  cfg: Config,
+  toolName: string,
+): PerToolOverride | undefined => {
+  if (!cfg.tools) return undefined;
+  const matches: { pattern: string; override: PerToolOverride; score: number }[] = [];
+  for (const [pattern, override] of Object.entries(cfg.tools)) {
+    if (globToRegex(pattern).test(toolName)) {
+      matches.push({
+        pattern,
+        override,
+        score: pattern.replace(/\*/g, "").length,
+      });
+    }
+  }
+  if (matches.length === 0) return undefined;
+  matches.sort((a, b) => b.score - a.score);
+  return matches[0]!.override;
+};
+
+// Derive an effective Config for a specific tool by merging per-tool overrides
+// into the base. Currently only `aggression` cascades through applyAggression;
+// booleans like disable_dedup are read directly from the override.
+export const configForTool = (cfg: Config, toolName: string): Config => {
+  const ov = resolveToolOverride(cfg, toolName);
+  if (!ov || !ov.aggression || ov.aggression === cfg.aggression) return cfg;
+  // Re-apply aggression scaling with the overridden level.
+  // We undo current scaling by loading DEFAULT_CONFIG numbers, merging user
+  // overrides, and re-applying. Simpler: just rebuild from the default schema
+  // with the new aggression.
+  const base: Config = { ...cfg, aggression: ov.aggression };
+  // Reset gate/mcp/read to DEFAULT_CONFIG (aggression scaling is always applied
+  // on top of DEFAULT_CONFIG values to avoid compounding).
+  const undone: Config = {
+    ...base,
+    gate: { ...DEFAULT_CONFIG.gate },
+    mcp: { ...DEFAULT_CONFIG.mcp, profiles: cfg.mcp.profiles, disabled_profiles: cfg.mcp.disabled_profiles },
+    read: { ...DEFAULT_CONFIG.read },
+  };
+  return applyAggression(undone);
 };
 
 export const loadConfig = (cwd: string): Config => {

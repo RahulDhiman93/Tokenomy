@@ -5,14 +5,31 @@ import { loadGraphContext } from "../graph/query/common.js";
 import { impactRadius } from "../graph/query/impact.js";
 import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
+import { findUsages } from "../graph/query/usages.js";
 import type {
   BuildGraphResult,
+  FindUsagesInput,
   ImpactRadiusInput,
   MinimalContextInput,
   QueryResult,
   ReviewContextInput,
 } from "../graph/types.js";
 import { clipToolResultToBudget } from "./budget-clip.js";
+import { QueryCache } from "./query-cache.js";
+
+// Process-scoped cache. Shared across all tool dispatches within one MCP
+// server lifetime. Invalidates whenever the underlying graph is rebuilt
+// (meta.built_at forms part of the cache key).
+const queryCache = new QueryCache();
+
+// Read-only tools we cache. `build_or_update_graph` is a write and must
+// invalidate the cache rather than read from it.
+const CACHEABLE_TOOLS = new Set([
+  "get_minimal_context",
+  "get_impact_radius",
+  "get_review_context",
+  "find_usages",
+]);
 
 const asObject = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -57,6 +74,17 @@ const parseImpactRadiusInput = (args: Record<string, unknown>): ImpactRadiusInpu
   };
 };
 
+const parseFindUsagesInput = (args: Record<string, unknown>): FindUsagesInput | null => {
+  const target = asObject(args["target"]);
+  if (typeof target["file"] !== "string" || target["file"].length === 0) return null;
+  return {
+    target: {
+      file: target["file"],
+      ...(typeof target["symbol"] === "string" ? { symbol: target["symbol"] } : {}),
+    },
+  };
+};
+
 const parseReviewContextInput = (args: Record<string, unknown>): ReviewContextInput | null => {
   const files = Array.isArray(args["files"])
     ? args["files"].filter((file): file is string => typeof file === "string" && file.length > 0)
@@ -73,6 +101,9 @@ const withGraphContext = <T>(
   if (!graphContext.ok) return graphContext;
   return run(config, graphContext.data);
 };
+
+export const _resetQueryCacheForTests = (): void => queryCache.invalidate();
+export const _queryCacheSize = (): number => queryCache.size;
 
 const withBudget = <T>(
   result: QueryResult<T>,
@@ -95,8 +126,37 @@ export const dispatchGraphTool = async (
       force: args["force"] === true,
       config,
     });
+    // A successful rebuild invalidates all cached queries.
+    if (result.ok && result.data.built) queryCache.invalidate();
     return withBudget(result, config.graph.query_budget_bytes.build_or_update_graph);
   }
+
+  // Read-path cache lookup: key on graph version (meta.built_at) so a rebuild
+  // transparently invalidates entries even across handler calls that skip the
+  // build_or_update_graph path.
+  const cacheable = CACHEABLE_TOOLS.has(name);
+  let cacheKey: string | null = null;
+  if (cacheable) {
+    const config = loadConfig(cwd);
+    const graphContext = loadGraphContext(cwd, config);
+    if (graphContext.ok) {
+      const version = graphContext.data.meta.built_at;
+      cacheKey = queryCache.key(name, args, version);
+      const cached = queryCache.get(cacheKey);
+      if (cached !== undefined) return cached as QueryResult<unknown>;
+    }
+  }
+
+  const result = await dispatchGraphToolUncached(name, args, cwd);
+  if (cacheKey && result.ok) queryCache.set(cacheKey, result);
+  return result;
+};
+
+const dispatchGraphToolUncached = async (
+  name: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<QueryResult<unknown>> => {
 
   if (name === "get_minimal_context") {
     const input = parseMinimalContextInput(args);
@@ -128,6 +188,23 @@ export const dispatchGraphTool = async (
           graphContext.stale_files,
         ),
         config.graph.query_budget_bytes.get_impact_radius,
+      ),
+    );
+  }
+
+  if (name === "find_usages") {
+    const input = parseFindUsagesInput(args);
+    if (!input) return fail("invalid-input", "Expected { target: { file, symbol? } }.");
+    return withGraphContext(cwd, (config, graphContext) =>
+      withBudget(
+        findUsages(
+          graphContext.graph,
+          input,
+          config,
+          graphContext.stale,
+          graphContext.stale_files,
+        ),
+        config.graph.query_budget_bytes.find_usages,
       ),
     );
   }

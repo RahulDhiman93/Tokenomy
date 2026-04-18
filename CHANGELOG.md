@@ -6,7 +6,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [0.1.0-alpha.5] — 2026-04-17
+## [0.1.0-alpha.6] — 2026-04-18
+
+Extends the PostToolUse pipeline, graph MCP server, and CLI with 10 new features. Test suite grows from 67 → 128 passing. No new runtime dependencies.
+
+### Added
+
+- **Schema-aware MCP trim profiles** (`src/rules/profiles.ts`) — parses JSON tool responses and preserves essential keys instead of byte-based head+tail truncation that mangles structure. Ships with 7 built-ins: Atlassian Jira issue/search/Confluence page, Linear, Slack history, Gmail thread, GitHub PR. Users can add custom profiles via `cfg.mcp.profiles` and disable built-ins via `cfg.mcp.disabled_profiles`.
+- **Stack-trace collapser** (`src/rules/stacktrace.ts`) — detects and compresses error responses in Node, Python, Java, and Ruby formats. Keeps error header + first frame + last 3 frames; elides the middle.
+- **Secret redactor** (`src/rules/redact.ts`) — regex sweep for AWS access keys, GitHub PATs, OpenAI/Anthropic API keys, Slack tokens, Stripe keys, Google API keys, JWTs, Bearer tokens, and PEM private key blocks. Force-applies regardless of trim gate (security > tokens). Configurable via `cfg.redact.disabled_patterns`.
+- **Duplicate-response deduplication** (`src/core/dedup.ts`) — session-scoped ledger at `~/.tokenomy/dedup/<session>.jsonl`. Repeat calls with identical `(tool, canonicalized-args)` within `cfg.dedup.window_seconds` return a pointer stub instead of re-forwarding the full response.
+- **Per-tool config overrides** — `cfg.tools["mcp__Atlassian__*"] = { aggression, disable_dedup, disable_redact, disable_profiles, disable_stacktrace }`. Glob-matched, most-specific wins.
+- **`find_usages` MCP graph tool** (`src/graph/query/usages.ts`) — forward lookup of direct usage sites (callers, references, importers) for a file or symbol. Complements the existing reverse `get_impact_radius`.
+- **MCP query LRU cache** (`src/mcp/query-cache.ts`) — 32-entry in-memory cache keyed on `(tool, canonicalized-args, meta.built_at)`. Auto-invalidates when `build_or_update_graph` reports a fresh build.
+- **`tokenomy report` CLI** (`src/cli/report.ts`) — TUI + HTML summary of `savings.jsonl`: top tools by tokens saved, by-day trend with bar chart, ~USD saved. Pricing configurable via `cfg.report.price_per_million` (default $3/M). Flags: `--since`, `--top`, `--out`, `--json`.
+- **Hook perf telemetry + doctor check** — hook now records `elapsed_ms` per invocation in `~/.tokenomy/debug.jsonl`. New doctor check computes p50/p95/max over the last `cfg.perf.sample_size` runs (default 100) and flags when p95 exceeds `cfg.perf.p95_budget_ms` (default 50 ms).
+- **`tokenomy doctor --fix`** — safe auto-remediation: creates missing log directory, chmods the hook binary executable, re-patches `~/.claude/settings.json` on manifest drift or missing hook entries.
+
+### Changed
+
+- **`mcp-content` rule** now runs a four-stage pipeline: redact → stacktrace collapse → schema-aware profile → byte-based head/tail trim (fallback). Reason strings report which stages fired (e.g. `redact:3+profile:atlassian-jira-issue+mcp-content-trim`).
+- **`dispatch.ts`** force-applies trim whenever secret redaction matched, even if byte savings are below the gate threshold.
+- **`GraphQueryBudgetConfig`** gains a `find_usages` byte budget (default 4 000).
+- **`tokenomy graph query`** help text now lists `usages` alongside `minimal|impact|review`.
+
+### Fixed
+
+- OpenAI key regex now excludes the `sk-ant-` prefix so Anthropic keys are redacted with their correct pattern name.
 
 Major release: **local code-graph MCP server** (Phase 3 of the roadmap) lands end-to-end. Tokenomy grows from a pair of transparent hooks into an opt-in context-retrieval toolkit: the agent queries a pre-built graph of your TS/JS codebase and gets focused snippets instead of brute-forcing `Read` calls.
 

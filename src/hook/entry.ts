@@ -62,6 +62,7 @@ const readStdin = (): Promise<Buffer | null> =>
   });
 
 const main = async (): Promise<void> => {
+  const hookStart = Date.now();
   try {
     const buf = await readStdin();
     if (!buf) {
@@ -89,6 +90,7 @@ const main = async (): Promise<void> => {
         session_id: preInput.session_id,
         tool: preInput.tool_name,
         event: "PreToolUse",
+        elapsed_ms: Date.now() - hookStart,
       });
       if (preOut) process.stdout.write(JSON.stringify(preOut));
       process.exit(0);
@@ -131,6 +133,7 @@ const main = async (): Promise<void> => {
       response_bytes: respBytes,
       top_keys: topKeys,
       content_shape: contentShape,
+      elapsed_ms: Date.now() - hookStart,
     });
     if (output) process.stdout.write(JSON.stringify(output));
     process.exit(0);
