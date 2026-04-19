@@ -144,9 +144,12 @@ const applyAggression = (cfg: Config): Config => {
   };
 };
 
+// Case-insensitive to match the profile glob behaviour — keeps per-tool
+// overrides portable between Claude Code's CamelCase names and Codex's
+// lowercase snake_case variants of the same MCP tool.
 const globToRegex = (glob: string): RegExp => {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`);
+  return new RegExp(`^${escaped}$`, "i");
 };
 
 // Find the most specific tool override (longest non-wildcard pattern wins).

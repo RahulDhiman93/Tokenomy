@@ -6,6 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] — 2026-04-18
+
+Phase 2 lands: `tokenomy analyze` — walks Claude Code and Codex CLI transcripts, replays the full Tokenomy rule pipeline with a real tokenizer, and surfaces waste patterns in a fancy CLI dashboard. Also repositions the project as a toolkit for both Claude Code and Codex CLI rather than Claude-Code-only.
+
+### Added
+
+- **`tokenomy analyze` CLI** (`src/cli/analyze.ts` + `src/analyze/*`) — recursive JSONL scanner over `~/.claude/projects/**` and `~/.codex/sessions/**`, with filters for `--since`, `--project`, `--session`, plus `--top`, `--tokenizer`, `--json`, `--no-color`, `--verbose`.
+- **Streaming scanner** (`src/analyze/scan.ts`) — `readline`-based line-by-line ingest so gigabyte transcript dirs don't OOM. Emits per-file progress to stderr so stdout stays clean for `--json` piping.
+- **Transcript parser** (`src/analyze/parse.ts`) — normalizes Claude Code's `assistant → tool_use` / `user → tool_result` pairing AND Codex CLI's `payload.tool_call` rollout shape into a single `ToolCall` record. Handles both array-shape and string-shape `content` payloads.
+- **Tokenizer abstraction** (`src/analyze/tokens.ts`) — default heuristic tokenizer (zero-dep, word/punct/digit-segmentation tuned for code+JSON, ~±10% of cl100k on typical tool output). Optional `--tokenizer=tiktoken` dynamically imports `js-tiktoken` for real `cl100k_base` counts (added as `peerDependenciesMeta.optional`).
+- **Rule simulator** (`src/analyze/simulate.ts`) — replays dedup, redact, stacktrace-collapse, profile trim, MCP byte trim, and Read clamp over historical calls; emits per-event hypothetical savings and a canonicalized `call_key` for hotspot aggregation.
+- **Aggregator** (`src/analyze/report.ts`) — folds per-event sim results into totals, by-tool top-N, by-rule breakdown, by-day series, duplicate hotspots, and outliers. USD estimate using `cfg.report.price_per_million`.
+- **Fancy CLI renderer** (`src/analyze/render.ts`) — rounded-box header, progress line, per-rule bar charts, top-N waste leaderboard with inline bars, duplicate hotspots, outliers list, by-day sparkline. Pure stdlib ANSI; auto-disables color when stdout is not a TTY or `--no-color` is passed.
+
+### Changed
+
+- **Positioning**: Tokenomy is now framed as a toolkit for **both Claude Code and Codex CLI**. Live hooks remain Claude-Code-only for now (Codex CLI has no hook contract yet); the graph MCP server and `tokenomy analyze` work with either agent.
+- **README** restructured with an agent-support matrix, separate quickstart paths for Claude Code and Codex CLI, and a new `tokenomy analyze` section documenting the fancy CLI output and tokenizer choices.
+- **CONTRIBUTING** updated to reflect the new module layout (`src/analyze/`) and the agent-agnostic principle for new work.
+
+### Added (deps)
+
+- `js-tiktoken` declared as an **optional peer dependency**. Users who want accurate `cl100k_base` token counts in `tokenomy analyze` install it separately (`npm i -g js-tiktoken`); the core install stays lean. All other analyze features work with the built-in heuristic tokenizer.
+
 ## [0.1.0-alpha.6] — 2026-04-18
 
 Extends the PostToolUse pipeline, graph MCP server, and CLI with 10 new features. Test suite grows from 67 → 128 passing. No new runtime dependencies.

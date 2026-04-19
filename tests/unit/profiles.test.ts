@@ -22,6 +22,25 @@ test("selectProfile: no match returns null", () => {
   assert.equal(p, null);
 });
 
+test("selectProfile: case-insensitive matching (Codex lowercase names)", () => {
+  const p = selectProfile(
+    "mcp__codex_apps__atlassian_rovo__getjiraissue",
+    BUILTIN_PROFILES,
+  );
+  assert.equal(p?.name, "atlassian-jira-issue");
+});
+
+test("selectProfile: Codex GitHub fetch_pr / search_prs hit github-pr-codex", () => {
+  for (const name of [
+    "mcp__codex_apps__github__fetch_pr",
+    "mcp__codex_apps__github__get_pr_info",
+    "mcp__codex_apps__github__search_prs",
+  ]) {
+    const p = selectProfile(name, BUILTIN_PROFILES);
+    assert.equal(p?.name, "github-pr-codex", `expected match for ${name}`);
+  }
+});
+
 test("applyProfile: keeps top-level dotted keys, drops others", () => {
   const profile: TrimProfile = {
     name: "t",
