@@ -115,6 +115,23 @@ test("init --aggression updates existing config", () => {
   }
 });
 
+test("init: stages package.json {type:module} alongside the hook", () => {
+  const h = setupHome();
+  try {
+    mkdirSync(join(h.home, ".claude"), { recursive: true });
+    runInit({});
+    const pkgPath = join(h.home, ".tokenomy", "bin", "package.json");
+    assert.ok(existsSync(pkgPath), `expected staged package.json at ${pkgPath}`);
+    const parsed = JSON.parse(readFileSync(pkgPath, "utf8"));
+    // Without {"type":"module"} here Node parses the ESM-built dist/ as
+    // CommonJS and the first `import` throws → hook exits 1 under the
+    // doctor's smoke test.
+    assert.equal(parsed.type, "module");
+  } finally {
+    h.restore();
+  }
+});
+
 test("uninstall --purge removes ~/.tokenomy/", () => {
   const h = setupHome();
   try {
