@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-dark.png">
-  <img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-light.png" width="720">
-</picture>
+<img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-512-2x.png" width="200">
 
 ### Stop burning tokens on tool chatter.
 
@@ -506,10 +503,7 @@ MIT — see [LICENSE](./LICENSE).
 
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-A-bracket-t-reversed.png">
-  <img alt="Tokenomy mark" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-64.png" width="48" height="48">
-</picture>
+<img alt="Tokenomy mark" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-512-2x.png" width="56">
 
 *Save tokens. Save money. Save the rainforest — or at least your API bill.*
 
