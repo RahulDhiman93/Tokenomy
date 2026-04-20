@@ -55,7 +55,7 @@ Each live trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-
 ```bash
 npm install -g tokenomy
 tokenomy init          # patches ~/.claude/settings.json (backed up first)
-tokenomy doctor        # 12/12 ✓
+tokenomy doctor        # 13/13 ✓
 # restart Claude Code
 ```
 
@@ -63,16 +63,23 @@ That's it. Use Claude Code normally. Tokenomy does the rest.
 
 ### Codex CLI (graph MCP server + transcript analysis)
 
-Codex doesn't expose PostToolUse/PreToolUse hooks yet, so the live trim features are Claude-Code-only. But the two **agent-agnostic** features work great with Codex:
+Codex doesn't expose PostToolUse/PreToolUse hooks yet, so the live trim features are Claude-Code-only. But the two **agent-agnostic** features work great with Codex, and `tokenomy init --graph-path` auto-registers the graph MCP server with **both** Claude Code and Codex when each CLI is on your PATH:
 
 ```bash
 npm install -g tokenomy
-codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
+tokenomy init --graph-path "$PWD"    # registers tokenomy-graph in both agents
 tokenomy graph build --path "$PWD"
-# Codex can now call build_or_update_graph / get_minimal_context / get_impact_radius
-# / get_review_context / find_usages, exactly as Claude Code does.
+# Both Claude Code and Codex can now call build_or_update_graph /
+# get_minimal_context / get_impact_radius / get_review_context /
+# find_usages over stdio.
 
-tokenomy analyze       # benchmarks both ~/.claude and ~/.codex transcripts
+tokenomy analyze                     # benchmarks ~/.claude and ~/.codex transcripts
+```
+
+If you only have Codex (no Claude Code) or prefer to register manually:
+
+```bash
+codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
 ```
 
 > **Still pre-`1.0`.** Every release carries an `-alpha.N` suffix and breaking changes may land on minor bumps — the [CHANGELOG](./CHANGELOG.md) calls them out. Users who want stability should pin a specific version: `npm install -g tokenomy@0.1.0-alpha.8`.
@@ -229,17 +236,18 @@ Config changes take effect **immediately** — no Claude Code restart needed. On
 ✓ Node >= 20
 ✓ ~/.claude/settings.json parses
 ✓ Hook entries present (PostToolUse + PreToolUse)
+✓ PreToolUse matcher covers Read + Bash — Read|Bash
 ✓ Hook binary exists + executable
-✓ Smoke spawn hook (empty mcp call) — exit=0 elapsed=111ms
+✓ Smoke spawn hook (empty mcp call) — exit=0 elapsed=74ms
 ✓ ~/.tokenomy/config.json parses
 ✓ Log directory writable
 ✓ Manifest drift — clean
 ✓ No overlapping mcp__ hook
-✓ Graph MCP registration — not configured
+✓ Graph MCP registration — tokenomy-graph configured in ~/.claude.json
 ✓ Graph MCP SDK available
-✓ Hook perf budget — p50=4ms p95=11ms max=38ms (n=100, budget 50ms)
+✓ Hook perf budget — p50=5ms p95=12ms max=14ms (n=30, budget 50ms)
 
-12/12 checks passed
+13/13 checks passed
 ```
 
 Every check has an actionable remediation hint on failure. For routine repair, run `tokenomy doctor --fix` — it creates the log directory, `chmod +x`'s the hook binary, and re-patches `~/.claude/settings.json` on manifest drift.
@@ -340,23 +348,29 @@ Duplicate hotspots  (same args, repeated within a session)
 
 Once the live hooks stop bleeding tokens on tool chatter, the next waste is the agent reading half a codebase to find one function. The optional **`tokenomy-graph` MCP server** gives the agent five surgical tools over stdio — the graph is built once, queries return focused neighborhoods, budgets are hard-capped. Works with both Claude Code and Codex CLI.
 
-### Install + register (Claude Code)
+### Install + register (both agents in one command)
 
 ```bash
 npm install -g typescript              # peer-optional; required for the graph
-tokenomy init --graph-path "$PWD"      # adds tokenomy-graph to ~/.claude/settings.json
+tokenomy init --graph-path "$PWD"      # registers with Claude Code AND Codex
+                                       #   • writes ~/.claude.json mcpServers entry
+                                       #   • shells out to `codex mcp add` if Codex is on PATH
 tokenomy graph build --path "$PWD"     # parses TS/JS into ~/.tokenomy/graphs/<id>/
-tokenomy doctor                        # 12/12 ✓
-# restart Claude Code
+tokenomy doctor                        # 13/13 ✓
+# fully quit + relaunch Claude Code (Cmd+Q) so it reloads MCP servers
 ```
 
-### Install + register (Codex CLI)
+Verify:
 
 ```bash
-npm install -g typescript
+claude mcp list | grep tokenomy        # ✓ Connected
+codex mcp list | grep tokenomy         # tokenomy-graph ...   (if you use Codex)
+```
+
+### Manual registration (if you only run Codex)
+
+```bash
 codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
-tokenomy graph build --path "$PWD"
-codex mcp list                         # verify tokenomy-graph is registered
 ```
 
 ### The five tools
@@ -470,7 +484,7 @@ npm test             # node:test runner, 213 tests, ~2 s
 npm run coverage     # c8 → coverage/lcov.info + HTML report
 npm run typecheck    # tsc --noEmit
 npm link             # overrides any installed `tokenomy` with your local build
-tokenomy doctor      # 12/12 ✓
+tokenomy doctor      # 13/13 ✓
 tokenomy analyze     # benchmarks your real transcripts
 ```
 

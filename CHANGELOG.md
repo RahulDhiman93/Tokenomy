@@ -12,6 +12,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP registration lands in the right file for Claude Code 2.1+.** Previously `tokenomy init --graph-path` wrote the `tokenomy-graph` entry into `~/.claude/settings.json.mcpServers`, but Claude Code 2.1+ reads MCP registrations from `~/.claude.json` instead. Real installs showed `✓ Graph MCP registration — tokenomy-graph configured` in `doctor` yet `claude mcp list` never saw the server. New `src/util/claude-user-config.ts` does surgical upsert/remove on `~/.claude.json` without touching Claude Code's other internal keys (onboarding state, OAuth tokens, cache timestamps, etc.). Uninstall scrubs both the new and legacy locations for backward compat.
+- **Staged hook now loads as ESM.** Previously `stageHookBinary()` copied `dist/` under `~/.tokenomy/bin/` but didn't write a `package.json`. Node walked up from the staged `.js` files, found no `type:"module"` marker, fell back to CommonJS, and threw `Cannot use import statement outside a module` on the first hook invocation — so every live trim/clamp was silently failing in real installs (all unit tests pass via tsx, which doesn't hit this path). Init now drops a minimal `{"type":"module","private":true}` package.json alongside the staged dist. Doctor smoke check now exits 0.
+- **`doctor` counts bumped to 13/13**: added *"PreToolUse matcher covers Read + Bash"* check so Phase 4's Bash matcher can't silently regress.
+
+### Added
+
+- **Codex auto-registration.** `tokenomy init --graph-path` now also runs `codex mcp add tokenomy-graph -- tokenomy graph serve --path <repo>` when the Codex CLI is on PATH. Non-fatal — Claude-only installs still succeed when Codex isn't installed. `tokenomy uninstall` mirrors with `codex mcp remove`.
+
 ## [0.1.0-alpha.8] — 2026-04-19
 
 Phase 4 lands: **`bash-bound`** — a PreToolUse rule that detects known output-focused shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) that the user hasn't already bounded, and rewrites the `tool_input.command` string to cap its output via `set -o pipefail; <cmd> | awk 'NR<=N'`. Awk (rather than `head`) is used to consume the producer's full output without SIGPIPE, so successful commands keep exiting 0 and failed ones propagate their real exit code through `pipefail`.
