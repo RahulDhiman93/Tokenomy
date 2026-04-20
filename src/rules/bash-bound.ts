@@ -66,13 +66,49 @@ const hasAlreadyBoundFlag = (cmd: string): boolean =>
 // outside quotes only approximately — any uncertainty yields passthrough,
 // which is the safe direction.
 //
-// Also catches shell comments (`#` at word-start). Without this, a command
-// like `git log # note` would be rewritten to
-// `set -o pipefail; git log # note | awk 'NR<=N'` — the comment swallows
-// the awk pipe and the clamp never fires (while analyze still credits
-// savings). Passthrough any command with an embedded comment.
+// Note: shell comments (`#`) used to live here too for safety; they are
+// now handled by stripTrailingComment() which quote-aware-strips them
+// before the rest of the pipeline runs, so `git log # note` becomes
+// bindable as `git log` with the comment discarded.
 const UNSAFE_CONSTRUCTS_RE =
-  /(?:^|\s)(?:&&|\|\||;|&\s*$|#)|\$\(|`|<<|{\s|\(\s|>|>>|&>|>\||>&/;
+  /(?:^|\s)(?:&&|\|\||;|&\s*$)|\$\(|`|<<|{\s|\(\s|>|>>|&>|>\||>&/;
+
+// Walk the command left-to-right tracking quote state, and truncate at the
+// first unquoted `#` that starts a word (or that starts the whole command).
+// Handles `echo "foo # bar"` (unchanged — # is inside quotes) and escaped
+// quotes (`\'` / `\"`). Backslash-escaped `\#` also preserved. Returns the
+// pair so the caller can decide whether a comment was actually stripped.
+export const stripTrailingComment = (
+  cmd: string,
+): { command: string; strippedComment: boolean } => {
+  let inSingle = false;
+  let inDouble = false;
+  let prevWasWhitespace = true; // start-of-string counts as a word boundary
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (ch === "\\" && i + 1 < cmd.length) {
+      // escape: skip the next char, treat as non-whitespace
+      i++;
+      prevWasWhitespace = false;
+      continue;
+    }
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle;
+      prevWasWhitespace = false;
+      continue;
+    }
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble;
+      prevWasWhitespace = false;
+      continue;
+    }
+    if (!inSingle && !inDouble && ch === "#" && prevWasWhitespace) {
+      return { command: cmd.slice(0, i).replace(/\s+$/, ""), strippedComment: true };
+    }
+    prevWasWhitespace = /\s/.test(ch);
+  }
+  return { command: cmd, strippedComment: false };
+};
 
 const hasNewline = (cmd: string): boolean => cmd.includes("\n") || cmd.includes("\r");
 
@@ -208,12 +244,20 @@ export const bashBoundRule = (
       return P("run-in-background");
     }
 
-    const command = toolInput["command"];
-    if (typeof command !== "string") return P("no-command");
-    if (command.length < cfg.bash.min_command_length) return P("too-short");
+    const rawCommand = toolInput["command"];
+    if (typeof rawCommand !== "string") return P("no-command");
+    if (rawCommand.length < cfg.bash.min_command_length) return P("too-short");
 
     const head_limit = validateHeadLimit(cfg.bash.head_limit);
     if (head_limit === null) return P("invalid-head-limit");
+
+    // Strip a trailing unquoted shell comment (quote-aware) BEFORE the rest
+    // of the pipeline runs. `git log # note` becomes `git log` here so we
+    // can actually bind it; `echo "foo # bar"` stays intact. The stripped
+    // form is what we rewrite + hand back to Claude Code.
+    const { command: stripped } = stripTrailingComment(rawCommand);
+    const command = stripped.length >= cfg.bash.min_command_length ? stripped : rawCommand;
+    if (command.length < cfg.bash.min_command_length) return P("too-short-after-strip");
 
     if (hasNewline(command)) return P("multiline");
     if (hasAlreadyBoundFlag(command)) return P("explicit-bound");
@@ -263,7 +307,7 @@ export const bashBoundRule = (
       additionalContext:
         `[tokenomy: bounded ${matched} output to ${head_limit} lines. ` +
         `Re-run with ${hint} if you need more.]`,
-      originalCommand: command,
+      originalCommand: rawCommand,
       boundedCommand: bounded,
       patternName: matched,
       reason: `bash-bound:${matched}`,

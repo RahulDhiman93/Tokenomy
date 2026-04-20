@@ -83,7 +83,7 @@ test("bash-bound: already-bounded -n N / --max-count / -n<digits>", () => {
   }
 });
 
-test("bash-bound: passthrough on redirect / compound / subshell / heredoc / comment", () => {
+test("bash-bound: passthrough on redirect / compound / subshell / heredoc", () => {
   for (const c of [
     "git log > /tmp/out",
     "git log >> /tmp/out",
@@ -95,14 +95,46 @@ test("bash-bound: passthrough on redirect / compound / subshell / heredoc / comm
     "git log &",
     "git log 2>&1 >/tmp/out",
     "cat <<EOF\nhi\nEOF",
-    // Shell comments swallow our appended pipe → we MUST passthrough.
-    "git log # note",
-    "# sanity check",
-    "find /tmp # scanning",
   ]) {
     const r = run(c);
     assert.equal(r.kind, "passthrough", `expected passthrough for: ${c}`);
   }
+});
+
+test("bash-bound: trailing shell comment stripped + command bound", () => {
+  for (const [input, expectPattern] of [
+    ["git log # debug note", "git-log"],
+    ["find /tmp # scanning", "find"],
+    ["ps aux  #   process dump", "ps"],
+  ] as const) {
+    const r = run(input);
+    assert.equal(r.kind, "bound", `expected bound for: ${input} (got reason=${r.reason})`);
+    if (r.kind !== "bound") continue;
+    assert.equal(r.patternName, expectPattern);
+    // Rewritten command must NOT contain the comment `#` at all.
+    assert.ok(!r.boundedCommand?.includes("#"), `unexpected # in: ${r.boundedCommand}`);
+    // And must still be the clean pipefail/awk form.
+    assert.ok(r.boundedCommand?.startsWith("set -o pipefail; "));
+    assert.ok(r.boundedCommand?.endsWith(" | awk 'NR<=100'"));
+  }
+});
+
+test("bash-bound: # inside quotes is preserved (not treated as comment)", () => {
+  // If the user quoted a # it's a literal — we must not strip.
+  // `echo "foo # bar"` isn't verbose so stays passthrough, but we prove
+  // stripTrailingComment doesn't mangle it via the quoted-# inside a
+  // verbose-pattern command.
+  const r = run(`git log --format='%H # %s'`);
+  // Already-bounded check may or may not catch `--format`; core invariant
+  // is: no mis-strip of the internal `#`.
+  if (r.kind === "bound") {
+    assert.ok(r.boundedCommand?.includes("'%H # %s'"));
+  }
+});
+
+test("bash-bound: command that becomes empty after comment strip stays passthrough", () => {
+  const r = run("# just a comment");
+  assert.equal(r.kind, "passthrough");
 });
 
 test("bash-bound: passthrough on tool-specific native bound flags", () => {
