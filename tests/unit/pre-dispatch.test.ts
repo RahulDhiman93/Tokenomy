@@ -56,6 +56,47 @@ test("preDispatch: appends graph-aware hint when a local graph snapshot exists",
   }
 });
 
+test("preDispatch: Read with relative file_path resolves against input.cwd", () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-rel-"));
+  const repo = mkdtempSync(join(tmpdir(), "tokenomy-pre-rel-repo-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    // 60KB file in the "project" dir — above the conservative 80KB default.
+    writeFileSync(join(repo, "big.json"), "x".repeat(90_000));
+
+    const output = preDispatch(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: repo, // Claude Code's CWD, NOT the hook subprocess's.
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        // Relative path — the regression we're protecting against. Before
+        // the fix, statSync() ran against process.cwd() of the hook
+        // subprocess, which had no 'big.json', so the rule returned
+        // "stat-failed" → passthrough → no clamp.
+        tool_input: { file_path: "big.json" },
+      },
+      {
+        ...DEFAULT_CONFIG,
+        log_path: join(home, ".tokenomy", "savings.jsonl"),
+      },
+    );
+    assert.ok(output, "expected a clamp output, got null (passthrough regression)");
+    const updated = output!.hookSpecificOutput.updatedInput as Record<string, unknown>;
+    assert.equal(typeof updated["limit"], "number");
+    // Resolved to absolute so Claude Code reads the right file.
+    assert.ok((updated["file_path"] as string).startsWith("/"));
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("preDispatch: Bash verbose command → bounded updatedInput", () => {
   const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-bash-"));
   const prev = process.env["HOME"];

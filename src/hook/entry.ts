@@ -7,6 +7,23 @@ import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
 import type { HookInput, PreHookInput } from "../core/types.js";
 
+// Returns a shallow, size-capped snapshot of the tool_input for diagnostics.
+// Strings longer than 200 chars are truncated; unknown types are stringified.
+const previewToolInput = (input: Record<string, unknown> | undefined): Record<string, unknown> => {
+  if (!input || typeof input !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === "string") {
+      out[k] = v.length > 200 ? v.slice(0, 200) + "…" : v;
+    } else if (typeof v === "number" || typeof v === "boolean" || v === null) {
+      out[k] = v;
+    } else {
+      out[k] = `<${typeof v}>`;
+    }
+  }
+  return out;
+};
+
 const debugLog = (entry: Record<string, unknown>): void => {
   try {
     const path = `${tokenomyDir()}/debug.jsonl`;
@@ -91,6 +108,10 @@ const main = async (): Promise<void> => {
         tool: preInput.tool_name,
         event: "PreToolUse",
         elapsed_ms: Date.now() - hookStart,
+        // Diagnostics for Phase-1 passthrough investigations: capture the
+        // first-order tool_input fields so we can see whether e.g. Claude
+        // Code sent a relative path or an explicit limit.
+        tool_input_preview: previewToolInput(preInput.tool_input),
       });
       if (preOut) process.stdout.write(JSON.stringify(preOut));
       process.exit(0);

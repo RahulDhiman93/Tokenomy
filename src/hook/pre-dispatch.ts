@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { Config, PreHookInput, PreHookOutput, SavingsLogEntry } from "../core/types.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { bashBoundRule } from "../rules/bash-bound.js";
@@ -6,6 +7,21 @@ import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+
+// Resolve tool_input.file_path against the HookInput.cwd before the rule
+// calls statSync(). Claude Code may send a path relative to the user's
+// prompt directory (e.g. "package-lock.json"); the spawned hook process
+// doesn't inherit that cwd, so a raw statSync() on the relative string
+// fails and the rule passes through, defeating the clamp. Absolute paths
+// pass through unchanged.
+const resolveReadPath = (input: PreHookInput): Record<string, unknown> => {
+  const ti = { ...(input.tool_input ?? {}) };
+  const raw = ti["file_path"];
+  if (typeof raw === "string" && raw.length > 0 && !isAbsolute(raw) && input.cwd) {
+    ti["file_path"] = resolve(input.cwd, raw);
+  }
+  return ti;
+};
 
 const graphHint = (cwd: string, cfg: Config): string | null => {
   if (!cfg.graph.enabled) return null;
@@ -26,7 +42,8 @@ const graphHint = (cwd: string, cfg: Config): string | null => {
 };
 
 const preDispatchRead = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
-  const r = readBoundRule(input.tool_input ?? {}, cfg);
+  const resolved = resolveReadPath(input);
+  const r = readBoundRule(resolved, cfg);
   if (r.kind !== "clamp" || !r.updatedInput) return null;
 
   // Heuristic savings: we reduce the Read from its default (≈2000 lines) to
