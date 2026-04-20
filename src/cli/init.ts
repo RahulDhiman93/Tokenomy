@@ -25,8 +25,8 @@ import { safeParse, stableStringify } from "../util/json.js";
 import {
   addHook,
   removeHookByCommandPath,
-  upsertMcpServer,
 } from "../util/settings-patch.js";
+import { upsertClaudeMcpServer } from "../util/claude-user-config.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { readManifest, upsertEntry, writeManifest } from "../util/manifest.js";
 
@@ -35,6 +35,31 @@ export interface InitOptions {
   backup?: boolean;
   graphPath?: string;
 }
+
+import { spawnSync } from "node:child_process";
+
+// Shell out to `codex mcp add` when Codex CLI is present. Idempotent:
+// re-registers with the same name if one already exists. Best-effort —
+// swallows all errors so Claude-Code-only installs never break.
+const tryRegisterCodex = (graphServerPath: string): boolean => {
+  const which = spawnSync("which", ["codex"], { encoding: "utf8" });
+  if (which.status !== 0) return false;
+  // Remove first (idempotent), then add. Both may fail silently.
+  spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+  const add = spawnSync(
+    "codex",
+    ["mcp", "add", "tokenomy-graph", "--", "tokenomy", "graph", "serve", "--path", graphServerPath],
+    { stdio: "ignore" },
+  );
+  return add.status === 0;
+};
+
+const tryRemoveCodex = (): boolean => {
+  const which = spawnSync("which", ["codex"], { encoding: "utf8" });
+  if (which.status !== 0) return false;
+  const rm = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+  return rm.status === 0;
+};
 
 const POST_MATCHER = "mcp__.*";
 // PreToolUse fires for both Read (file clamp) and Bash (input bounder).
@@ -127,14 +152,23 @@ export const runInit = (opts: InitOptions = {}): {
   settings = addHook(settings, "PostToolUse", hookPath, POST_MATCHER, TIMEOUT_SECONDS);
   settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
   const graphServerPath = opts.graphPath ? resolve(opts.graphPath) : null;
+
+  atomicWrite(settingsPath, stableStringify(settings) + "\n");
+
+  // Claude Code 2.1+ reads MCP registrations from ~/.claude.json (not
+  // ~/.claude/settings.json). Writing to the settings file we just patched
+  // wouldn't take effect. Route the MCP upsert through the separate
+  // ~/.claude.json surgical patcher.
   if (graphServerPath) {
-    settings = upsertMcpServer(settings, GRAPH_SERVER_NAME, {
+    upsertClaudeMcpServer(GRAPH_SERVER_NAME, {
       command: "tokenomy",
       args: ["graph", "serve", "--path", graphServerPath],
     });
+    // Best-effort Codex registration: Codex CLI writes to its own
+    // ~/.codex/config.toml. Shell out to `codex mcp add` if the binary is
+    // on PATH. Non-fatal: init succeeds for Claude-Code-only installs.
+    tryRegisterCodex(graphServerPath);
   }
-
-  atomicWrite(settingsPath, stableStringify(settings) + "\n");
 
   let manifest = readManifest();
   manifest = upsertEntry(manifest, {
