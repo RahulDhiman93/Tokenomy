@@ -60,6 +60,18 @@ const stageHookBinary = (): string => {
   cpSync(distSrc, stagedDist, { recursive: true });
   chmodSync(join(stagedDist, "hook", "entry.js"), 0o755);
 
+  // Tokenomy is authored as ESM ("type":"module" in package.json) but the
+  // staged `dist/` lives under `~/.tokenomy/bin/` where Node's module
+  // resolution has no package.json to inherit from. Without a marker file
+  // here, Node parses the .js files as CommonJS and the first `import`
+  // statement throws "Cannot use import statement outside a module".
+  // Dropping a minimal `{"type":"module"}` next to the staged dist fixes
+  // this regardless of where the user invokes the hook from.
+  writeFileSync(
+    join(tokenomyBinDir(), "package.json"),
+    JSON.stringify({ type: "module", private: true }, null, 2) + "\n",
+  );
+
   const wrapper = `#!/bin/sh
 exec /usr/bin/env node "$(dirname "$0")/dist/hook/entry.js" "$@"
 `;
