@@ -1,6 +1,6 @@
 <div align="center">
 
-<img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-512-2x.png" width="160">
+<img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/logo.jpg" width="160">
 
 </div>
 

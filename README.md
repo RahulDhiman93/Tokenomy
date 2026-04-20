@@ -1,6 +1,6 @@
 <div align="center">
 
-<img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-512-2x.png" width="200">
+<img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/logo.jpg" width="200">
 
 ### Stop burning tokens on tool chatter.
 
@@ -503,7 +503,7 @@ MIT — see [LICENSE](./LICENSE).
 
 <div align="center">
 
-<img alt="Tokenomy mark" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/mark-primary-512-2x.png" width="56">
+<img alt="Tokenomy mark" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/logo.jpg" width="56">
 
 *Save tokens. Save money. Save the rainforest — or at least your API bill.*
 
