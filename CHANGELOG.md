@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.10] — 2026-04-20
+
+Re-publish of `0.1.0-alpha.9` under a fresh version tag — no code changes. The alpha.9 publish never landed on npm (previous release workflow never completed successfully for that tag); this bump lets the workflow ship the same commit without the duplicate-version guard tripping.
+
 ## [0.1.0-alpha.9] — 2026-04-20
 
 Dogfood-driven hardening release. Three real install-path bugs surfaced the moment we ran Tokenomy against its own repo; fixed alongside a Bash bounder UX improvement, cross-agent auto-registration, the first measured real-savings data, and a refreshed architecture diagram.

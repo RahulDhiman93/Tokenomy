@@ -108,7 +108,7 @@ If you only have Codex (no Claude Code) or prefer to register manually:
 codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
 ```
 
-> **Still pre-`1.0`.** Every release carries an `-alpha.N` suffix and breaking changes may land on minor bumps — the [CHANGELOG](./CHANGELOG.md) calls them out. Users who want stability should pin a specific version: `npm install -g tokenomy@0.1.0-alpha.9`.
+> **Still pre-`1.0`.** Every release carries an `-alpha.N` suffix and breaking changes may land on minor bumps — the [CHANGELOG](./CHANGELOG.md) calls them out. Users who want stability should pin a specific version: `npm install -g tokenomy@0.1.0-alpha.10`.
 
 > **Upgrading?** `npm install -g tokenomy` again — the install runs idempotently; existing config + logs are preserved.
 
