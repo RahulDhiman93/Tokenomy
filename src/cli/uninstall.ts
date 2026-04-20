@@ -1,10 +1,12 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { claudeSettingsPath, hookBinaryPath, tokenomyDir } from "../core/paths.js";
 import { atomicWrite } from "../util/atomic.js";
 import { backupFile } from "../util/backup.js";
 import { safeParse, stableStringify } from "../util/json.js";
 import { removeHookByCommandPath, removeMcpServerByName } from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
+import { removeClaudeMcpServer } from "../util/claude-user-config.js";
 import { deleteManifestFile, readManifest, writeManifest, removeEntryByCommand } from "../util/manifest.js";
 
 export interface UninstallOptions {
@@ -32,11 +34,30 @@ export const runUninstall = (opts: UninstallOptions = {}): {
       );
     }
     let cleaned = removeHookByCommandPath(parsed, hookPath);
+    // Older installs may have written mcpServers into settings.json too
+    // (pre-2.1 Claude Code layout). Keep removing it for backward-compat.
     cleaned = removeMcpServerByName(cleaned, "tokenomy-graph");
     if (JSON.stringify(cleaned) !== JSON.stringify(parsed)) {
       atomicWrite(settingsPath, stableStringify(cleaned) + "\n");
       hooksRemoved = true;
     }
+  }
+
+  // New-layout MCP registration lives in ~/.claude.json; scrub that too.
+  try {
+    removeClaudeMcpServer("tokenomy-graph");
+  } catch {
+    // best-effort: never break uninstall on a failed MCP scrub
+  }
+
+  // Codex CLI registration (if present): remove via its own tool.
+  try {
+    const which = spawnSync("which", ["codex"], { encoding: "utf8" });
+    if (which.status === 0) {
+      spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+    }
+  } catch {
+    // best-effort
   }
 
   let manifest = readManifest();

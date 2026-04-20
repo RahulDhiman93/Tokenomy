@@ -16,6 +16,7 @@ import {
   hasOverlappingMcpHook,
   matchersForPath,
 } from "../util/settings-patch.js";
+import { getClaudeMcpServer } from "../util/claude-user-config.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { DEFAULT_CONFIG } from "../core/config.js";
 // `join` used in perf-stats path resolution (see readPerfStats).
@@ -240,8 +241,15 @@ const overlapWarnCheck = (settings: SettingsShape | undefined): CheckResult => {
 };
 
 const graphRegistrationCheck = (settings: SettingsShape | undefined): CheckResult => {
-  if (!settings) return { name: "Graph MCP registration", ok: true, detail: "no settings" };
-  const entry = getMcpServer(settings, "tokenomy-graph");
+  // Claude Code 2.1+ reads MCP servers from ~/.claude.json. Older installs
+  // may still carry an entry in ~/.claude/settings.json.mcpServers — check
+  // the new location first, fall back to the legacy spot.
+  const fromClaudeJson = getClaudeMcpServer("tokenomy-graph") as
+    | { command?: unknown; args?: unknown; type?: unknown }
+    | undefined;
+  const legacy = settings ? getMcpServer(settings, "tokenomy-graph") : undefined;
+  const entry = fromClaudeJson ?? legacy;
+
   if (!entry) {
     return {
       name: "Graph MCP registration",
@@ -249,12 +257,13 @@ const graphRegistrationCheck = (settings: SettingsShape | undefined): CheckResul
       detail: "not configured",
     };
   }
-  const args = Array.isArray(entry.args) ? entry.args : [];
+  const args = Array.isArray(entry.args) ? (entry.args as string[]) : [];
   const ok = entry.command === "tokenomy" && args[0] === "graph" && args[1] === "serve";
+  const location = fromClaudeJson ? "~/.claude.json" : "~/.claude/settings.json (legacy)";
   return {
     name: "Graph MCP registration",
     ok,
-    detail: ok ? "tokenomy-graph configured" : "tokenomy-graph entry is malformed",
+    detail: ok ? `tokenomy-graph configured in ${location}` : "tokenomy-graph entry is malformed",
     remediation: ok ? undefined : "Re-run `tokenomy init --graph-path=<repo>` to repair it.",
   };
 };

@@ -144,7 +144,7 @@ test("uninstall --purge removes ~/.tokenomy/", () => {
   }
 });
 
-test("init --graph-path registers tokenomy-graph and uninstall removes it", () => {
+test("init --graph-path registers tokenomy-graph in ~/.claude.json and uninstall removes it", () => {
   const h = setupHome();
   try {
     mkdirSync(join(h.home, ".claude"), { recursive: true });
@@ -152,15 +152,27 @@ test("init --graph-path registers tokenomy-graph and uninstall removes it", () =
     mkdirSync(repo, { recursive: true });
 
     runInit({ graphPath: repo });
-    const settings = JSON.parse(readFileSync(claudeSettingsPath(), "utf8"));
-    assert.deepEqual(settings.mcpServers["tokenomy-graph"], {
+    // Claude Code 2.1+ reads mcpServers from ~/.claude.json, not
+    // ~/.claude/settings.json. The hooks still go to settings.json.
+    const claudeJsonPath = join(h.home, ".claude.json");
+    assert.ok(existsSync(claudeJsonPath), "expected ~/.claude.json to exist");
+    const claudeJson = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
+    assert.deepEqual(claudeJson.mcpServers["tokenomy-graph"], {
+      type: "stdio",
       command: "tokenomy",
       args: ["graph", "serve", "--path", resolve(repo)],
+      env: {},
     });
+    // Hooks should still be in settings.json.
+    const settings = JSON.parse(readFileSync(claudeSettingsPath(), "utf8"));
+    assert.ok(settings.hooks?.PreToolUse);
+    // And settings.json should NOT have an mcpServers entry under our name
+    // (we stopped writing there in the Phase 5 fix).
+    assert.equal(settings.mcpServers?.["tokenomy-graph"], undefined);
 
     runUninstall({ backup: false });
-    const after = JSON.parse(readFileSync(claudeSettingsPath(), "utf8"));
-    assert.equal(after.mcpServers, undefined);
+    const afterClaudeJson = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
+    assert.equal(afterClaudeJson.mcpServers, undefined);
   } finally {
     h.restore();
   }
