@@ -32,6 +32,16 @@ const stub: AggregateReport = {
     { day: "2026-04-18", observed_tokens: 15_000, savings_tokens: 9_000 },
   ],
   hotspots: [{ tool: "mcp__Atlassian__getJiraIssue", calls: 3, wasted_tokens: 6_000 }],
+  wasted_probes: [
+    {
+      tool: "mcp__claude_ai_Atlassian__getTransitionsForJiraIssue",
+      session_id: "abcdef12",
+      first_ts: "2026-04-20T10:00:00Z",
+      last_ts: "2026-04-20T10:00:45Z",
+      call_count: 4,
+      observed_tokens: 2_400,
+    },
+  ],
   outliers: [
     { tool: "mcp__Atlassian__getJiraIssue", tokens: 4_000, bytes: 16_000, ts: "2026-04-17T11:00:00Z", session_id: "abcdef12" },
   ],
@@ -70,6 +80,14 @@ test("render: renderProgress produces carriage-returned status", () => {
   assert.ok(s.includes("5/10"));
 });
 
+test("render: wasted-probe section appears when incidents present", () => {
+  const out = render(stub, { color: false, width: 120, verbose: false });
+  assert.ok(out.includes("Wasted-probe incidents"));
+  assert.ok(out.includes("getTransitionsForJiraIssue"));
+  assert.ok(out.includes("4×"));
+  assert.ok(out.includes("10:00:00→10:00:45"));
+});
+
 test("render: empty report doesn't throw", () => {
   const empty: AggregateReport = {
     window: { first_ts: null, last_ts: null },
@@ -90,6 +108,7 @@ test("render: empty report doesn't throw", () => {
     by_rule: [],
     by_day: [],
     hotspots: [],
+    wasted_probes: [],
     outliers: [],
     tokenizer: { name: "heuristic", approximate: true },
   };

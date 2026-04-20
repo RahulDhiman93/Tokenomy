@@ -39,6 +39,17 @@ export const readBoundRule = (
     return { kind: "passthrough", reason: "stat-failed" };
   }
 
+  // Self-contained docs (READMEs, changelogs, plain text) read poorly when
+  // clamped. If the extension matches the doc list and the file fits the doc
+  // cap, let it through whole — skip the regular threshold.
+  const dot = filePath.lastIndexOf(".");
+  const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : "";
+  const docExts = cfg.read.doc_passthrough_extensions ?? [];
+  const docCap = cfg.read.doc_passthrough_max_bytes ?? 0;
+  if (ext && docExts.includes(ext) && fileBytes <= docCap) {
+    return { kind: "passthrough", reason: "doc-passthrough", fileBytes };
+  }
+
   if (fileBytes < cfg.read.clamp_above_bytes) {
     return { kind: "passthrough", reason: "below-threshold", fileBytes };
   }

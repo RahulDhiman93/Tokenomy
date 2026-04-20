@@ -12,7 +12,7 @@ A surgical hook + analysis toolkit for **Claude Code and Codex CLI** that transp
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#quickstart)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 [![Phase](https://img.shields.io/badge/phase%204-alpha-blue)](#roadmap)
-[![Tests](https://img.shields.io/badge/tests-213%20passing-brightgreen)](#contribute)
+[![Tests](https://img.shields.io/badge/tests-249%20passing-brightgreen)](#contribute)
 
 </div>
 
@@ -50,10 +50,10 @@ Each live trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-
 
 ## 💸 Real savings from one dogfood session
 
-Tokenomy was run on its own repo in a fresh Claude Code session exercising the standard test matrix (Bash verbose commands, Read on a large file, five graph MCP queries). `tokenomy report` output, verbatim:
+Tokenomy run on its own repo in a fresh Claude Code session (Bash verbose commands, Read on a large file, five graph MCP queries). `tokenomy report`, verbatim:
 
 ```
-Window:             2026-04-20T01:32:56Z  →  2026-04-20T01:55:10Z   (~22 minutes)
+Window:             2026-04-20T01:32:56Z → 2026-04-20T01:55:10Z   (~22 minutes)
 Total events:       14
 Bytes trimmed:      1,374,113 → 260,000   (−1,114,113)
 Tokens saved (est): 285,000
@@ -62,159 +62,95 @@ Tokens saved (est): 285,000
 Top tools by tokens saved
   Bash    11 calls   247,500 tok      (bash-bound:git-log / :find / :ls-recursive / :ps)
   Read     3 calls    37,500 tok      (read-clamp on 89 KB package-lock.json + 2 others)
-
-By reason
-  bash-bound   11 calls   247,500 tok
-  read-clamp    3 calls    37,500 tok
 ```
 
-**Per event: ~20,000 tokens saved on average.** `bash-bound` alone — a single feature — prevented ~250 K tokens from being sent back to the LLM in this 22-minute session. Extrapolated, a dev spending 4 agent-hours a day on a coding project hits ~$10/week of waste that Tokenomy reclaims, without changing their workflow.
-
-Numbers come from `~/.tokenomy/savings.jsonl` (one row per live trim, measured bytes-in / bytes-out) via `tokenomy report`. Reproduce with the dogfood playbook in `CONTRIBUTING.md`.
+~20 K tokens saved per event. A dev spending 4 agent-hours a day reclaims ~$10/week. Numbers come from `~/.tokenomy/savings.jsonl` — reproduce via `CONTRIBUTING.md`'s dogfood playbook.
 
 ---
 
 ## ⚡ Quickstart
 
-### Claude Code (full integration: live hooks + graph + analyze)
+**Claude Code** (full integration — live hooks + graph + analyze):
 
 ```bash
 npm install -g tokenomy
 tokenomy init          # patches ~/.claude/settings.json (backed up first)
 tokenomy doctor        # 13/13 ✓
-# restart Claude Code
+# restart Claude Code — then use it normally
 ```
 
-That's it. Use Claude Code normally. Tokenomy does the rest.
-
-### Codex CLI (graph MCP server + transcript analysis)
-
-Codex doesn't expose PostToolUse/PreToolUse hooks yet, so the live trim features are Claude-Code-only. But the two **agent-agnostic** features work great with Codex, and `tokenomy init --graph-path` auto-registers the graph MCP server with **both** Claude Code and Codex when each CLI is on your PATH:
+**Codex CLI** (graph MCP + transcript analysis; no live hooks yet — Codex doesn't expose the PreToolUse/PostToolUse contract). `tokenomy init --graph-path` auto-registers the graph MCP server with **both** agents when each CLI is on your PATH:
 
 ```bash
 npm install -g tokenomy
 tokenomy init --graph-path "$PWD"    # registers tokenomy-graph in both agents
 tokenomy graph build --path "$PWD"
-# Both Claude Code and Codex can now call build_or_update_graph /
-# get_minimal_context / get_impact_radius / get_review_context /
-# find_usages over stdio.
-
-tokenomy analyze                     # benchmarks ~/.claude and ~/.codex transcripts
+tokenomy analyze                     # benchmarks ~/.claude + ~/.codex transcripts
 ```
 
-If you only have Codex (no Claude Code) or prefer to register manually:
+Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-```bash
-codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
-```
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.10`. Upgrade: re-run the install — idempotent; config + logs preserved. Bleeding edge: see [Development](#development).
 
-> **Still pre-`1.0`.** Every release carries an `-alpha.N` suffix and breaking changes may land on minor bumps — the [CHANGELOG](./CHANGELOG.md) calls them out. Users who want stability should pin a specific version: `npm install -g tokenomy@0.1.0-alpha.10`.
-
-> **Upgrading?** `npm install -g tokenomy` again — the install runs idempotently; existing config + logs are preserved.
-
-> **Want the bleeding edge?** Scroll to [Development](#development) for the clone-build-link flow.
-
-To watch the magic live:
-
-```bash
-tail -f ~/.tokenomy/savings.jsonl
-```
-
-Each row is one transparent trim. Sample from a real session:
+Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
 ```jsonl
 {"ts":"...","tool":"mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql","bytes_in":28520,"bytes_out":2800,"tokens_saved_est":6430,"reason":"mcp-content-trim"}
 {"ts":"...","tool":"Read","bytes_in":48920,"bytes_out":15000,"tokens_saved_est":8480,"reason":"read-clamp"}
 ```
 
-One-liner to tally:
-
-```bash
-grep -oE '"tokens_saved_est":[0-9]+' ~/.tokenomy/savings.jsonl \
-  | awk -F: '{s+=$2; n++} END{printf "trims: %d   tokens saved: %d\n", n, s}'
-```
+Tally one-liner: `grep -oE '"tokens_saved_est":[0-9]+' ~/.tokenomy/savings.jsonl | awk -F: '{s+=$2;n++}END{printf "trims:%d tokens:%d\n",n,s}'`.
 
 ---
 
 ## 🧠 How it actually works
 
 ```
-   ┌─────────────────────── Claude Code (live hooks) ─────────────────────────┐
-   │                                                                          │
-   │   user prompt → LLM → tool call                                          │
-   │                          │                                               │
-   │   ┌──────────────────────┼───────────────────────────────────────────┐  │
-   │   │                      ▼                                           │  │
-   │   │   PreToolUse (Read)   ──► tokenomy-hook ──► resolve cwd +       │  │
-   │   │                            │                  inject  limit: N  │  │
-   │   │                            │                                     │  │
-   │   │   PreToolUse (Bash)   ──► tokenomy-hook ──► rewrite command to  │  │
-   │   │                            │   `set -o pipefail; CMD            │  │
-   │   │                            │    | awk 'NR<=N'`                   │  │
-   │   │                      ▼     ▼                                     │  │
-   │   │                   tool runs (narrower)                           │  │
-   │   │                      │                                           │  │
-   │   │   PostToolUse (mcp__.*) ──► tokenomy-hook runs stages:          │  │
-   │   │                            dedup → redact → stacktrace →        │  │
-   │   │                            profile → byte-trim                   │  │
-   │   │                      ▼     ▼                                     │  │
-   │   │                   LLM sees the trimmed response                  │  │
-   │   └──────────────────────────────────────────────────────────────────┘  │
-   │                          │                                               │
-   │              savings.jsonl  ◄──  best-effort append                      │
-   │                          │                                               │
-   │              tokenomy report ─► TUI + HTML digest                        │
-   └──────────────────────────────────────────────────────────────────────────┘
+  Claude Code live hooks
+    PreToolUse (Read)  ─► clamp huge files (doc-passthrough for .md/.mdx/.rst/.txt/.adoc)
+    PreToolUse (Bash)  ─► rewrite `CMD` → `set -o pipefail; CMD | awk 'NR<=N'`
+    PostToolUse (mcp__.*) ─► dedup → redact → stacktrace → profile → shape-trim → byte-trim
+                             └─ `{_tokenomy:"full"}` in args = passthrough (caller opt-out)
+    every trim → ~/.tokenomy/savings.jsonl → `tokenomy report` (TUI + HTML)
 
-   ┌──────────────── Claude Code · Codex CLI (shared, stdio) ─────────────────┐
-   │                                                                          │
-   │   tokenomy-graph MCP   ──► 5 tools over stdio                            │
-   │                            • build_or_update_graph                       │
-   │                            • get_minimal_context                         │
-   │                            • get_impact_radius                           │
-   │                            • get_review_context                          │
-   │                            • find_usages                                 │
-   │                            (LRU-cached on meta.built_at)                 │
-   │                                                                          │
-   │   tokenomy analyze     ──► walks ~/.claude/projects + ~/.codex/sessions  │
-   │                            replays the full rule pipeline with a real   │
-   │                            tokenizer → fancy CLI dashboard               │
-   └──────────────────────────────────────────────────────────────────────────┘
+  Shared (Claude Code + Codex CLI, stdio)
+    tokenomy-graph MCP  ─► 5 tools: build_or_update_graph, get_minimal_context,
+                           get_impact_radius, get_review_context, find_usages
+                           (LRU-cached on meta.built_at)
+    tokenomy analyze    ─► walks ~/.claude/projects + ~/.codex/sessions,
+                           replays the full pipeline with a real tokenizer,
+                           surfaces Wasted-probe incidents (over-trim failure mode)
 ```
 
 ### Under the hood
 
-**Multi-stage MCP pipeline (`PostToolUse`).** For every `mcp__.*` response, Tokenomy runs four stages in order:
+**Multi-stage MCP pipeline (`PostToolUse`)**, stage order:
 
-1. **Duplicate dedup** — if this exact `(tool, canonicalized-args)` was seen earlier in the same session and is still within `cfg.dedup.window_seconds`, the body is replaced with a short pointer stub (`[tokenomy: duplicate of call #N at <time> — no refetch required.]`). Session-scoped ledger lives under `~/.tokenomy/dedup/<session>.jsonl`.
-2. **Secret redactor** — regex sweep catches AWS access keys, GitHub PATs, OpenAI/Anthropic API keys, Slack tokens, Stripe keys, Google API keys, JWTs, Bearer tokens, and PEM private key blocks. Replaced with `[tokenomy: redacted <kind>]`. Force-applies even when byte savings are below the gate threshold (security > tokens).
-3. **Stacktrace collapser** — detects Node, Python, Java, Ruby error shapes and keeps error header + first frame + last 3 frames, eliding the middle.
-4. **Schema-aware trim profiles** — parses JSON responses and keeps a curated set of keys (title/status/assignee/body/etc.), truncating long strings and overflowing arrays with explicit markers. Ships with built-ins for Atlassian Jira/Confluence, Linear, Slack, Gmail, and GitHub; users can register custom profiles in config.
-5. **Byte-trim fallback** — if stages 1–4 together still exceed `cfg.mcp.max_text_bytes`, the remaining text block is head+tail trimmed with an explicit `[tokenomy: elided N bytes]` marker. A footer block tells Claude how to re-invoke for full detail.
+1. **Caller opt-out.** If `tool_input._tokenomy === "full"`, skip every stage and return passthrough. Note: some strict MCP servers may reject the extra key — fallback is a per-tool `tools: {"<glob>": {disable_profiles: true}}` config override.
+2. **Duplicate dedup.** Same `(tool, canonicalized-args)` seen earlier in-session within `cfg.dedup.window_seconds` → body replaced by a pointer stub. Session-scoped ledger at `~/.tokenomy/dedup/<session>.jsonl`.
+3. **Secret redactor.** Regex sweep for AWS/GitHub/OpenAI/Anthropic/Slack/Stripe/Google keys, JWTs, Bearer tokens, PEM blocks → `[tokenomy: redacted <kind>]`. Force-applies regardless of gate (security > tokens).
+4. **Stacktrace collapser.** Node/Python/Java/Ruby — keeps header + first + last 3 frames.
+5. **Schema-aware profiles.** Keep a curated key-set (title/status/assignee/body/…), trim long strings, mark overflowing arrays. Built-ins for Atlassian Jira (issue, search, transitions, issue-types, projects) + Confluence (page, spaces) + Linear + Slack + Gmail + GitHub; users can register custom profiles. Optional `skip_when?(input)` predicate lets a profile opt out based on caller intent.
+6. **Shape-aware trim (fallback).** If no profile matched and the payload is still over budget, detect homogeneous row arrays (top-level or wrapped in `{transitions|issues|values|results|data|entries|records: [...]}`) and compact per-row instead of blind head+tail. Protects enumeration endpoints from losing rows.
+7. **Byte-trim fallback.** If the total still exceeds `cfg.mcp.max_text_bytes`, head+tail the remaining text with `[tokenomy: elided N bytes]` + a footer hinting Claude how to refetch full detail.
 
-`content.length` never shrinks, `is_error` flows through, non-text blocks (images, resources) pass through untouched, and unknown top-level keys are preserved. Each trim's `reason` reports which stages fired (e.g. `redact:3+profile:atlassian-jira-issue`).
+Invariants: `content.length` never shrinks, `is_error` flows through, non-text blocks (images, resources) pass untouched, unknown top-level keys preserved. `reason` reports which stages fired (e.g. `redact:3+profile:atlassian-jira-issue`, `shape-trim+mcp-content-trim`).
 
-**Read clamp (`PreToolUse`).** If the agent's `Read` call has an explicit `limit` or `offset`, passthrough — respect user intent. Otherwise, stat the file. Under threshold → passthrough. Over threshold → inject `limit: N` plus an `additionalContext` note so the agent knows it can offset-Read more regions.
+**Read clamp (`PreToolUse`).** Explicit `limit`/`offset` → passthrough. Self-contained docs (`.md/.mdx/.rst/.txt/.adoc` under `doc_passthrough_max_bytes`) → passthrough unclamped. Otherwise stat; under threshold → passthrough; over → inject `limit: N` + an `additionalContext` note so the agent knows it can offset-Read more regions.
 
-**Bash input-bounder (`PreToolUse`).** Detects output-focused shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) that aren't already bounded and rewrites the command to cap its output:
+**Bash input-bounder (`PreToolUse`).** Detects unbounded verbose shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) and rewrites to `set -o pipefail; <cmd> | awk 'NR<=200'`. Awk consumes producer output (no SIGPIPE); `pipefail` preserves exit codes. Excludes exit-status-sensitive commands (`git diff --exit-code`, `npm ls`, `git status --porcelain`), streaming forms (`-f`/`--follow`/`watch`/`top`), and destructive `find` actions (`-exec`, `-delete`). User pipelines, redirections, compound commands (`;`/`&&`/`||`), subshells, heredocs all passthrough. `head_limit` validated as integer in `[20, 10_000]` before interpolation (no command injection).
 
-```
-set -o pipefail; <your command> | awk 'NR<=200'
-```
-
-Awk consumes the producer's full output (no SIGPIPE) and prints the first N lines; `set -o pipefail` preserves the producer's real exit code so `git log` failing still returns non-zero. Defaults explicitly exclude exit-status-sensitive commands (`git diff --exit-code`, `npm ls`, `git status --porcelain`), streaming forms (`-f` / `--follow` / `watch` / `top`), and destructive `find` actions (`-exec`, `-delete`). User-owned pipelines (`find . | xargs rm`), redirections (`> file`), compound commands (`;`, `&&`, `||`), subshells, and heredocs all passthrough. `head_limit` is validated as an integer in `[20, 10_000]` before shell interpolation to rule out config-driven command injection.
-
-**Fail-open is a non-negotiable.** Malformed stdin, parse errors, unknown shapes → exit 0 with empty stdout (true passthrough). 10 MB stdin cap. 2.5 s internal timeout. Exit code 2 (blocking) is never used. Breaking the agent is worse than wasting tokens.
+**Fail-open is non-negotiable.** Malformed stdin / parse errors / unknown shapes → exit 0 with empty stdout. 10 MB stdin cap. 2.5 s internal timeout. Exit code 2 (blocking) never used. Breaking the agent is worse than wasting tokens.
 
 ---
 
 ## 🎛️ Configure
 
-`~/.tokenomy/config.json` (per-repo override: `./.tokenomy.json`).
+`~/.tokenomy/config.json` (per-repo override: `./.tokenomy.json`). Config changes take effect **immediately** — only the initial `init` requires a Claude Code restart.
 
 ```jsonc
 {
-  "aggression": "conservative",        // × 2 thresholds. balanced=× 1, aggressive=× 0.5
+  "aggression": "conservative",        // ×2 thresholds. balanced=×1, aggressive=×0.5
   "gate": {
     "always_trim_above_bytes": 40000,  // huge responses: always trim
     "min_saved_bytes":          4000,  // tiny savings: not worth the context-switch
@@ -225,12 +161,19 @@ Awk consumes the producer's full output (no SIGPIPE) and prints the first N line
     "per_block_head":      4000,
     "per_block_tail":      2000,
     "profiles":              [],       // user-defined schema-aware trim profiles
-    "disabled_profiles":     []        // names of built-in profiles to skip
+    "disabled_profiles":     [],       // names of built-in profiles to skip
+    "shape_trim": {                    // row-preserving fallback for unprofiled inventory responses
+      "enabled":          true,
+      "max_items":          50,
+      "max_string_bytes":  200
+    }
   },
   "read": {
-    "enabled":            true,
-    "clamp_above_bytes": 40000,
-    "injected_limit":      500
+    "enabled":                     true,
+    "clamp_above_bytes":          40000,
+    "injected_limit":               500,
+    "doc_passthrough_extensions": [".md", ".mdx", ".rst", ".txt", ".adoc"],
+    "doc_passthrough_max_bytes":  64000 // docs below this cap skip clamping
   },
   "redact": {
     "enabled":            true,
@@ -245,30 +188,25 @@ Awk consumes the producer's full output (no SIGPIPE) and prints the first N line
     "mcp__Atlassian__*": { "aggression": "aggressive" },
     "mcp__Linear__*":    { "disable_profiles": true }
   },
-  "perf": {
-    "p95_budget_ms":       50,         // doctor flags when hook p95 exceeds this
-    "sample_size":        100
-  },
-  "report": {
-    "price_per_million":    3.0        // USD/M tokens — used for ~$ saved estimate
-  },
+  "perf":   { "p95_budget_ms": 50, "sample_size": 100 },
+  "report": { "price_per_million": 3.0 },
   "log_path":       "~/.tokenomy/savings.jsonl",
   "disabled_tools": []
 }
 ```
 
-Common tweaks:
+Common tweaks — `tokenomy config set <key> <value>`:
 
 ```bash
-tokenomy config set aggression aggressive             # trim harder, save more
-tokenomy config set read.enabled false                # just do MCP, leave Read alone
+tokenomy config set aggression aggressive             # trim harder
+tokenomy config set read.enabled false                # leave Read alone
 tokenomy config set read.clamp_above_bytes 20000      # clamp 20 KB+ files
 tokenomy config set mcp.max_text_bytes 8000           # tighter MCP budget
-tokenomy config set dedup.window_seconds 600          # only dedup repeats within 10 min
-tokenomy config set redact.enabled false              # opt out of secret redaction
+tokenomy config set dedup.window_seconds 600          # 10-min dedup window
+tokenomy config set redact.enabled false              # opt out of redaction
 ```
 
-Config changes take effect **immediately** — no Claude Code restart needed. Only the initial `init` requires a restart.
+**Caller opt-out.** An agent that knows it needs the full response can pass `{"_tokenomy": "full", ...real_args}` in the MCP tool input — the pipeline skips every stage. Safer fallback: set `tools: {"<glob>": {"disable_profiles": true}}` for the specific tool (works even with strict MCP servers that reject unknown keys).
 
 ---
 
@@ -298,160 +236,114 @@ Every check has an actionable remediation hint on failure. For routine repair, r
 
 ## 📊 `tokenomy report`
 
-Once the hooks have been running for a while, `savings.jsonl` is hard to eyeball. `tokenomy report` turns it into a digest:
+Digest of `~/.tokenomy/savings.jsonl`:
 
 ```bash
-tokenomy report                          # TUI summary + writes ~/.tokenomy/report.html
-tokenomy report --since 2026-04-01       # filter by date
+tokenomy report                          # TUI + writes ~/.tokenomy/report.html
+tokenomy report --since 2026-04-01       # date filter
 tokenomy report --top 20                 # more tools in the ranking
-tokenomy report --json                   # machine-readable output
+tokenomy report --json                   # machine-readable
 tokenomy report --out /tmp/report.html   # custom HTML path
 ```
 
-Sample output:
-
 ```
-tokenomy report
-===============
-
-Window:            2026-04-16T10:00:00Z  →  2026-04-17T12:30:00Z
-Total events:      4
-Bytes trimmed:     185,000 → 32,000  (−153,000)
-Tokens saved (est): 38,250
-~USD saved:        $0.1147
+Window:             2026-04-16T10:00:00Z → 2026-04-17T12:30:00Z
+Total events:       4   Bytes trimmed: 185,000 → 32,000   Tokens saved: 38,250   ~USD: $0.1147
 
 Top tools by tokens saved
-  mcp__Atlassian__getJiraIssue                  2 calls        16,750 tok
-  Read                                          1 calls        15,000 tok
-  mcp__Slack__slack_read_channel                1 calls         6,500 tok
+  mcp__Atlassian__getJiraIssue     2×   16,750 tok
+  Read                             1×   15,000 tok
+  mcp__Slack__slack_read_channel   1×    6,500 tok
 
 By reason
-  profile                   3 calls        23,250 tok
-  read-clamp                1 calls        15,000 tok
+  profile       3×   23,250 tok
+  read-clamp    1×   15,000 tok
 ```
 
-The HTML variant renders a daily bar chart you can screenshot for PR descriptions. Pricing is configurable — set `tokenomy config set report.price_per_million 15` for Opus-input rates.
+HTML variant adds a daily bar chart. Pricing: `tokenomy config set report.price_per_million 15` (Opus-input rate).
 
 ---
 
 ## 🔬 `tokenomy analyze`
 
-`report` shows what the live hooks already saved. `analyze` goes further: it walks the **raw session transcripts** of Claude Code (`~/.claude/projects/**/*.jsonl`) *and* Codex CLI (`~/.codex/sessions/**/*.jsonl`), replays the full Tokenomy rule pipeline over every historical tool call with a real tokenizer, and tells you exactly how much you *would have* saved if Tokenomy had been installed from day one — plus where the waste actually concentrates today.
+Where `report` shows live-hook savings, `analyze` walks the raw session transcripts — Claude Code (`~/.claude/projects/**/*.jsonl`) + Codex (`~/.codex/sessions/**/*.jsonl`) — replays the full pipeline over every historical tool call with a real tokenizer, and reports what Tokenomy *would have* saved.
 
 ```bash
-tokenomy analyze                              # default: scan last 30 days, top 10 tools
-tokenomy analyze --since 7d                   # last week
-tokenomy analyze --since 2026-04-01           # from a specific date
-tokenomy analyze --project Tokenomy           # filter by project dir substring
-tokenomy analyze --session 6689da94           # one session
-tokenomy analyze --tokenizer tiktoken         # accurate cl100k counts (see below)
-tokenomy analyze --json                       # machine-readable
-tokenomy analyze --verbose                    # include per-day breakdown
+tokenomy analyze                          # last 30d, top 10 tools
+tokenomy analyze --since 7d               # last week
+tokenomy analyze --project Tokenomy       # project-dir substring filter
+tokenomy analyze --session 6689da94       # one session
+tokenomy analyze --tokenizer tiktoken     # accurate cl100k counts (see below)
+tokenomy analyze --json                   # machine-readable
+tokenomy analyze --verbose                # per-day breakdown
 ```
 
-The default output is a fancy CLI dashboard: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, largest individual tool results, and an inline sparkline by day. Pipe to a file or use `--no-color` to disable ANSI.
+Output: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, **⚠ Wasted-probe incidents** (same tool, ≥3 distinct-arg calls within 60s — surfaces over-trim failure mode), largest individual results, by-day sparkline. `--no-color` to disable ANSI.
 
-### Tokenizer choice
-
-- **`heuristic`** (default) — zero-dep word/punctuation splitter calibrated for code + JSON. Accurate to ~±10% on typical tool responses.
-- **`tiktoken`** — real `cl100k_base` counts via `js-tiktoken`. A solid Claude-token approximation (Anthropic doesn't publish Claude 4's BPE). Install with `npm i -g js-tiktoken` and pass `--tokenizer=tiktoken`.
-- **`auto`** — use tiktoken if present, else heuristic.
-
-### Sample output
+**Tokenizers.** `heuristic` (default, zero-dep, ~±10% on code/JSON); `tiktoken` (real `cl100k_base` via `js-tiktoken` — `npm i -g js-tiktoken` then `--tokenizer=tiktoken`); `auto` picks tiktoken if present.
 
 ```
-╭────────────────────────── tokenomy analyze ──────────────────────────╮
-│ Window: 2026-04-17T10:00:00Z  →  2026-04-18T19:59:18Z                │
-│ Tokenizer: heuristic (approximate)                                   │
-╰──────────────────────────────────────────────────────────────────────╯
+╭──────────── tokenomy analyze ────────────╮
+│ Window: 2026-04-17 → 2026-04-18          │
+│ Tokenizer: heuristic (approximate)       │
+╰──────────────────────────────────────────╯
 
 Summary
-  Files scanned              4     Sessions       2
-  Tool calls parsed        299     Duplicate calls 1
-  Tokens observed       89,562     ~USD observed  $0.2687
-  Tokens Tokenomy would save  1,926  (2.2% of observed)
-  ~USD Tokenomy would save   $0.0058
+  Files 4   Sessions 2   Tool calls 299   Duplicates 1
+  Observed 89,562 tok ($0.2687)   Tokenomy would save 1,926 (2.2%)
 
 Savings by rule
-  Duplicate-response dedup       ████████████████████████   1,926 tok
-  Read clamp                     ████░░░░░░░░░░░░░░░░░░░░     324 tok
+  Duplicate-response dedup   ████████████████████████   1,926 tok
+  Read clamp                 ████░░░░░░░░░░░░░░░░░░░░     324 tok
 
-Duplicate hotspots  (same args, repeated within a session)
-  Read                     2×      2,263 tok wasted
-  Read                     2×      1,965 tok wasted
-  ...
+Duplicate hotspots (same args)
+  Read   2×   2,263 tok wasted
+
+⚠ Wasted-probe incidents (≥3 distinct-arg calls / 60s)
+  mcp__Atlassian__getTransitionsForJiraIssue   4×   10:00:00→10:00:45   2,400 tok observed
 ```
 
-`analyze` never modifies anything; it just reads. The transcript parser handles both Claude Code's `assistant.message.content[].tool_use` → `user.message.content[].tool_result` pairing and Codex CLI's `payload.tool_call` rollout shape.
+`analyze` is read-only. The parser handles Claude Code's `assistant.content[].tool_use` → `user.content[].tool_result` pairing and Codex's `payload.tool_call` rollout shape.
 
 ---
 
 ## 🕸️ Code-graph MCP server (agent-agnostic, Phase 3)
 
-Once the live hooks stop bleeding tokens on tool chatter, the next waste is the agent reading half a codebase to find one function. The optional **`tokenomy-graph` MCP server** gives the agent five surgical tools over stdio — the graph is built once, queries return focused neighborhoods, budgets are hard-capped. Works with both Claude Code and Codex CLI.
-
-### Install + register (both agents in one command)
+Once live hooks stop bleeding tokens on tool chatter, the next waste is the agent reading half a codebase to find one function. **`tokenomy-graph`** gives the agent five surgical tools over stdio — graph built once, queries return focused neighborhoods, budgets hard-capped. Works with Claude Code + Codex.
 
 ```bash
 npm install -g typescript              # peer-optional; required for the graph
 tokenomy init --graph-path "$PWD"      # registers with Claude Code AND Codex
-                                       #   • writes ~/.claude.json mcpServers entry
-                                       #   • shells out to `codex mcp add` if Codex is on PATH
-tokenomy graph build --path "$PWD"     # parses TS/JS into ~/.tokenomy/graphs/<id>/
+                                       #   (writes ~/.claude.json, shells `codex mcp add` if on PATH)
+tokenomy graph build --path "$PWD"     # parses TS/JS → ~/.tokenomy/graphs/<id>/
 tokenomy doctor                        # 13/13 ✓
 # fully quit + relaunch Claude Code (Cmd+Q) so it reloads MCP servers
-```
 
-Verify:
+# verify
+claude mcp list | grep tokenomy
+codex mcp list | grep tokenomy        # (Codex path, if used)
 
-```bash
-claude mcp list | grep tokenomy        # ✓ Connected
-codex mcp list | grep tokenomy         # tokenomy-graph ...   (if you use Codex)
-```
-
-### Manual registration (if you only run Codex)
-
-```bash
+# manual registration (Codex-only)
 codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"
 ```
 
-### The five tools
+**The five tools:**
 
 | Tool | Input | Output | Budget |
 |---|---|---|---|
 | `build_or_update_graph` | `{force?, path?}` | build stats | 4 KB |
-| `get_minimal_context` | `{target: {file, symbol?}, depth?}` | focal + ranked neighbors (imports/exports/contains) | 4 KB |
-| `get_impact_radius` | `{changed: [{file, symbols?}], max_depth?}` | reverse deps + suggested tests | 6 KB |
-| `get_review_context` | `{files: [...]}` | fanout + hotspots across changed files | 1 KB |
-| `find_usages` | `{target: {file, symbol?}}` | direct callers, references, importers (forward lookup) | 4 KB |
+| `get_minimal_context` | `{target:{file,symbol?}, depth?}` | focal + ranked neighbors | 4 KB |
+| `get_impact_radius` | `{changed:[{file,symbols?}], max_depth?}` | reverse deps + suggested tests | 6 KB |
+| `get_review_context` | `{files:[...]}` | fanout + hotspots across changed files | 1 KB |
+| `find_usages` | `{target:{file,symbol?}}` | direct callers, references, importers | 4 KB |
 
-Stale detection is always-on: queries return `{stale, stale_files}` so the agent knows whether to trust the result. `tokenomy graph build --force` regenerates. An in-memory LRU cache keyed on `(tool, args, meta.built_at)` keeps repeated queries fast and auto-invalidates when the graph is rebuilt.
+Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy graph build --force` regenerates. In-memory LRU cache keyed on `(tool, args, meta.built_at)` auto-invalidates on rebuild.
 
-### Good prompt to test it
+**Good prompt to test it:** *"Call `build_or_update_graph` if needed, then `get_minimal_context` for `{\"target\":{\"file\":\"src/index.ts\"},\"depth\":1}`, then `get_review_context` for `{\"files\":[\"src/index.ts\",\"src/foo.ts\"]}`. Only use Read if the graph result is insufficient."*
 
-> First call `build_or_update_graph` if needed.
-> Then call `get_minimal_context` for `{"target":{"file":"src/index.ts"},"depth":1}`.
-> Then call `get_review_context` for `{"files":["src/index.ts","src/foo.ts"]}`.
-> Only use `Read` if the graph result is insufficient.
+**Dev CLI (no MCP needed):** `tokenomy graph status | query minimal|impact|review|usages | purge [--all]`.
 
-### Dev CLI (no MCP needed)
-
-```bash
-tokenomy graph status --path "$PWD"
-tokenomy graph query minimal --path "$PWD" --file src/index.ts
-tokenomy graph query impact  --path "$PWD" --file src/index.ts
-tokenomy graph query review  --path "$PWD" --files src/index.ts,src/foo.ts
-tokenomy graph query usages  --path "$PWD" --file src/foo.ts
-tokenomy graph purge [--all]
-```
-
-### Scope + limits (v1)
-
-- **TypeScript + JavaScript only** (`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`, with `.mts`/`.cts` probed). Python / 23-lang support explicitly out of scope.
-- **Soft cap 2 000 files, hard cap 5 000** — larger repos abort cleanly with `repo-too-large`.
-- **AST-only** via the TypeScript compiler API (no type checker); type-only imports and JSX element references skipped in v1.
-- **No `tsconfig.paths`, no `node_modules` resolution** — bare specifiers become `external-module` nodes. Will revisit in v2.
-- **Fail-open always:** every tool and CLI subcommand returns `{ok: false, reason}` rather than throwing; graph features never break the core hook path.
+**Scope + limits (v1).** TypeScript + JavaScript only (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, `.mts/.cts` probed). Soft cap 2 000 files, hard cap 5 000 (abort with `repo-too-large`). AST-only via TypeScript compiler API (no type checker); type-only imports + JSX element references skipped. No `tsconfig.paths`, no `node_modules` resolution — bare specifiers become `external-module` nodes. Fail-open: every tool returns `{ok: false, reason}` rather than throwing.
 
 ---
 
@@ -478,78 +370,57 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 
 ## 🤝 Contribute
 
-Contributions are very welcome. The repo is still small, dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server only; `js-tiktoken` is an optional peer dep for accurate `analyze` token counts), and test-first (213/213 currently green).
+Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (249/249 currently green, 96% stmt / 85% branch / 100% func coverage).
 
-### Good first issues
+**Good first issues:**
 
-| Difficulty | What | Where |
+| Level | What | Where |
 |---|---|---|
-| 🟢 easy | Add a synthetic fixture for a real-world MCP tool you use (Asana, HubSpot, etc.) and a rule-level test | `tests/fixtures/` + `tests/unit/mcp-content.test.ts` |
-| 🟢 easy | Add more `analyze` transcript parser support (other Codex rollout shapes, OpenCode, Aider) | `src/analyze/parse.ts` |
-| 🟡 medium | Add a built-in trim profile for another MCP server you use | `src/rules/profiles.ts` |
-| 🟡 medium | Statusline script (`bin/tokenomy-statusline`) that consumes Claude Code's statusline stdin and renders live savings | new `src/statusline/` |
-| 🔴 hard | Phase 4 Bash input-bounder — shell-aware parsing to detect commands lacking any existing bound | new `src/rules/bash-bound.ts` |
-| 🔴 hard | Python parser plugin for the graph MCP server — spawn `python -c "import ast"` and extract imports/defs | new `src/parsers/py/` |
+| 🟢 | Fixture + rule-level test for an MCP tool you use (Asana, HubSpot, …) | `tests/fixtures/` + `tests/unit/mcp-content.test.ts` |
+| 🟢 | More `analyze` parser support (other Codex shapes, OpenCode, Aider) | `src/analyze/parse.ts` |
+| 🟡 | Built-in trim profile for another MCP server | `src/rules/profiles.ts` |
+| 🟡 | Statusline script rendering live savings from Claude Code stdin | new `src/statusline/` |
+| 🔴 | Python parser plugin for the graph MCP server | new `src/parsers/py/` |
 
-### Architecture tour
+**Architecture tour:**
 
 ```
 src/
   core/     — types, config (+ per-tool overrides), paths, gate, log, dedup, recovery hint
-  rules/    — pure transforms: mcp-content, read-bound, bash-bound, text-trim, profiles, stacktrace, redact
-  hook/     — entry.ts + dispatch.ts + pre-dispatch.ts (stdin → rule → stdout)
-  analyze/  — transcript scanner (Claude Code + Codex), parse, tokens, simulate, report, render
-  graph/    — schema, build, stale detection, repo-id, query/{minimal,impact,review,usages,budget,common}
-  mcp/      — stdio server, tool handlers, schema definitions, query-cache (LRU), budget-clip
+  rules/    — pure transforms: mcp-content, read-bound, bash-bound, text-trim, profiles,
+              shape-trim, stacktrace, redact
+  hook/     — entry + dispatch + pre-dispatch (stdin → rule → stdout)
+  analyze/  — scanner (Claude Code + Codex), parse, tokens, simulate, report, render
+  graph/    — schema, build, stale detection, repo-id, query/{minimal,impact,review,usages,…}
+  mcp/      — stdio server, tool handlers, query-cache (LRU), budget-clip
   parsers/  — TS/JS AST extraction
   cli/      — init, doctor (+ --fix), uninstall, config-cmd, report, analyze, graph, entry
   util/     — settings-patch, manifest, atomic-write, backup, json helpers
 
 tests/
   unit/         — one file per module, ≥1 trim + ≥1 passthrough per rule
-  integration/  — spawn compiled dist/hook/entry.js or dist/cli/entry.js as subprocess
+  integration/  — spawn compiled dist/hook/entry.js or dist/cli/entry.js
   fixtures/     — synthetic graph repos + synthesized transcripts for analyze
 ```
 
-Rules are pure functions: `(toolName, toolInput, toolResponse, config) → { kind: "passthrough" | "trim", ... }`. Adding a new rule is a one-file drop-in.
+Rules are pure: `(toolName, toolInput, toolResponse, config) → { kind: "passthrough" | "trim", ... }`. New rule = one-file drop-in.
 
-### Development
-
-Clone, build, and `npm link` so the `tokenomy` command points at your local checkout:
+**Development:**
 
 ```bash
-git clone https://github.com/RahulDhiman93/Tokenomy.git
-cd Tokenomy
-npm install
-npm run build        # tsc + chmod +x
-npm test             # node:test runner, 213 tests, ~2 s
-npm run coverage     # c8 → coverage/lcov.info + HTML report
+git clone https://github.com/RahulDhiman93/Tokenomy && cd Tokenomy
+npm install && npm run build
+npm test             # 249 tests, ~2s
+npm run coverage     # c8 → coverage/lcov.info + HTML
 npm run typecheck    # tsc --noEmit
-npm link             # overrides any installed `tokenomy` with your local build
+npm link             # point `tokenomy` at your local build
 tokenomy doctor      # 13/13 ✓
-tokenomy analyze     # benchmarks your real transcripts
+# revert: npm unlink -g tokenomy && npm install -g tokenomy
 ```
 
-Revert to the published version later with `npm unlink -g tokenomy && npm install -g tokenomy`.
+**Guiding principles.** (1) Fail-open always — broken hook worse than no hook; never exit 2. (2) Schema invariants over trust — outputs never fabricate keys, flip types, shrink arrays. (3) Path-match over markers — uninstall identifies entries by absolute command path. (4) Measure before bragging — no "X % savings" claims without Phase 2 benchmark data. (5) Small + legible — a dozen lines aren't worth a 200 KB install.
 
-Current coverage: **96 % statements · 85 % branches · 100 % functions.**
-
-### Guiding principles
-
-1. **Fail-open always.** A broken hook is worse than no hook. Never exit 2, never break Claude's workflow.
-2. **Schema invariants over trust.** Test that rule outputs never fabricate keys, flip types, or shrink arrays.
-3. **Path-match over markers.** Uninstall identifies entries by absolute command path, not by injected `_tokenomy: true` keys — Claude Code's schema may tighten tomorrow.
-4. **Measure before bragging.** No "X % savings" claims in code or docs until Phase 2 benchmarks them against a real corpus.
-5. **Small and legible.** If a dependency shaves a dozen lines at the cost of a 200 KB install, it's a no.
-
-### Before opening a PR
-
-- `npm test` green (including any new unit + integration tests for your change)
-- If you touched a rule: add a fixture-pair or inline-assertion test for passthrough *and* trim cases
-- If you touched `init`/`uninstall`: extend the round-trip integration test
-- If you added a config field: document in the README config block
-
-Questions? Open a discussion. This is an alpha — design-level feedback is as welcome as code.
+**Before opening a PR.** `npm test` green (including new unit + integration). Touched a rule → add passthrough *and* trim tests. Touched `init`/`uninstall` → extend the round-trip integration test. Added a config field → document in the Configure block above. Questions? Open a discussion — design feedback is as welcome as code.
 
 ---
 

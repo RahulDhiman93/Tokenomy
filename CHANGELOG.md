@@ -12,6 +12,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+Dogfood-driven pass at the trim pipeline's two worst failure modes: (1) enumeration-shaped MCP responses were being head+tail-trimmed so hard that callers had to probe items one at a time (net-negative savings); (2) clamping self-contained docs like source files. Five targeted fixes — surgical profiles for the specific Jira cases, a shape-heuristic fallback so new tools don't re-hit the same bug, a report-level signal that flags when this goes wrong, a caller opt-out primitive, and a Read-clamp exception for markdown.
+
+### Added
+
+- **Four Jira enumeration profiles** (`src/rules/profiles.ts`): `atlassian-jira-transitions`, `atlassian-jira-issue-types`, `atlassian-jira-projects`, `atlassian-confluence-spaces`. Row-keep style — `max_array_items` generous (50–100), `max_string_bytes` tight (120–200). Fixes the specific case where `getTransitionsForJiraIssue` was being trimmed to ~330 B and the agent had to probe transition IDs one-by-one to rediscover the list.
+- **Shape-heuristic fallback** (`src/rules/shape-trim.ts`, new). Stage 2.5 between profile match and byte-trim. When no profile applies and the response is over budget, detects homogeneous record arrays (top-level or wrapped in `{transitions|issues|values|results|data|entries|records: [...]}`) and compacts per-row (string trim + depth-limited nesting) instead of head+tail-slicing the JSON. Keeps row count intact so enumerations survive. Config: `cfg.mcp.shape_trim` (enabled/max_items/max_string_bytes).
+- **Wasted-probe detector in `tokenomy analyze`** (`src/analyze/report.ts`, `src/analyze/render.ts`). New `AggregateReport.wasted_probes[]` — 60s sliding-window session-scoped detector for ≥3 distinct-arg calls to the same tool. Rendered as a `⚠ Wasted-probe incidents` section. Surfaces the over-trim failure mode that the existing savings-first `by_tool` ranking hides.
+- **Caller-intent plumbing through the MCP pipeline.** `mcpContentRule` now actually uses `tool_input`. Two new primitives: `{_tokenomy: "full", ...args}` in tool input is a first-class opt-out (skip every stage, return passthrough); optional `TrimProfile.skip_when?: (input) => boolean` lets built-in or user profiles gate themselves on caller intent.
+- **Read clamp: markdown/doc passthrough** (`src/rules/read-bound.ts`). New `ReadRuleConfig.doc_passthrough_extensions` (default: `.md/.mdx/.rst/.txt/.adoc`) and `doc_passthrough_max_bytes` (default: 64 KB, aggression-scaled). Files matching both pass through unclamped — self-contained docs read poorly when offset-paged. Regular source files still clamp at the existing threshold.
+
+### Tests
+
+- +23 unit tests: 4 profile + 10 shape-trim (incl. MCP integration) + 6 wasted-probe + 4 Read-clamp doc-passthrough + 2 MCP caller opt-out. Full suite: 249/249 passing.
+
 ## [0.1.0-alpha.10] — 2026-04-20
 
 Re-publish of `0.1.0-alpha.9` under a fresh version tag — no code changes. The alpha.9 publish never landed on npm (previous release workflow never completed successfully for that tag); this bump lets the workflow ship the same commit without the duplicate-version guard tripping.

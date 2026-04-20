@@ -209,6 +209,27 @@ export const render = (report: AggregateReport, opts: RenderOptions): string => 
     out.push("");
   }
 
+  // Wasted-probe incidents. Different from dedup hotspots — these are
+  // runs of DIFFERENT args to the same tool in a tight window, which
+  // usually means an over-aggressive trim destroyed the enumeration and
+  // the agent had to rediscover items one at a time.
+  if (report.wasted_probes.length > 0) {
+    out.push(
+      `${c.yellow}⚠ Wasted-probe incidents${c.reset}  ` +
+        `${c.dim}(≥3 distinct-arg calls to same tool within 60s — likely over-trimmed enumeration)${c.reset}`,
+    );
+    for (const p of report.wasted_probes) {
+      const start = p.first_ts.slice(11, 19);
+      const end = p.last_ts.slice(11, 19);
+      out.push(
+        `  ${pad(p.tool, 40)}  ${pad(n(p.call_count) + "×", 7, "r")}  ` +
+          `${c.dim}${start}→${end}${c.reset}  ` +
+          `${c.red}${pad(n(p.observed_tokens), 12, "r")}${c.reset} tok observed`,
+      );
+    }
+    out.push("");
+  }
+
   // Outliers.
   if (report.outliers.length > 0) {
     out.push(`${c.bold}Largest individual tool results${c.reset}`);

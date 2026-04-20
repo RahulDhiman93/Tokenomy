@@ -29,6 +29,19 @@ export interface AggregateReport {
     calls: number;
     wasted_tokens: number; // observed tokens of repeats beyond the first
   }>;
+  // Probe runs: same tool called ≥ PROBE_MIN_CALLS times within a session
+  // with distinct inputs inside a PROBE_WINDOW_SECONDS sliding window. Signals
+  // that a profile/shape-trim over-compressed an enumeration and the agent
+  // had to re-query to rediscover items. Net-negative savings — surfaces a
+  // failure mode that `by_tool` savings-first ranking hides.
+  wasted_probes: Array<{
+    tool: string;
+    session_id: string;
+    first_ts: string;
+    last_ts: string;
+    call_count: number;
+    observed_tokens: number;
+  }>;
   outliers: Array<{
     tool: string;
     tokens: number;
@@ -64,6 +77,21 @@ interface DayBucket {
   savings_tokens: number;
 }
 
+// Probe-run detection. Tuned conservatively: 3 calls (not 2 — one repeat is
+// often legitimate) to the same tool with DIFFERENT args within 60s marks
+// it as a run that a better trim would have prevented.
+const PROBE_WINDOW_SECONDS = 60;
+const PROBE_MIN_CALLS = 3;
+
+interface OpenProbeRun {
+  tool: string;
+  session_id: string;
+  first_ts: string;
+  last_ts: string;
+  call_keys: Set<string>;
+  observed_tokens: number;
+}
+
 export class Aggregator {
   private readonly opts: AggregatorOptions;
   private files = 0;
@@ -83,6 +111,12 @@ export class Aggregator {
   private byDay = new Map<string, DayBucket>();
   private byKey = new Map<string, KeyBucket>();
   private outliers: AggregateReport["outliers"] = [];
+  // Sliding-window probe detection. Open runs are keyed by session+tool.
+  // When a new call on the same (session, tool) is > PROBE_WINDOW_SECONDS
+  // after the run's last_ts, we close the run and start a fresh one. Only
+  // runs with ≥ PROBE_MIN_CALLS distinct call_keys survive into the report.
+  private probeOpen = new Map<string, OpenProbeRun>();
+  private probeClosed: AggregateReport["wasted_probes"] = [];
 
   constructor(opts: AggregatorOptions) {
     this.opts = opts;
@@ -160,6 +194,61 @@ export class Aggregator {
 
     // Maintain a top-N outliers list (by observed tokens).
     this.maybeRecordOutlier(e);
+
+    // Probe-run tracking: same tool, ≥ PROBE_MIN_CALLS distinct call_keys
+    // within a sliding PROBE_WINDOW_SECONDS window.
+    this.trackProbe(e);
+  }
+
+  private trackProbe(e: SimEvent): void {
+    if (!e.ts) return;
+    const runKey = `${e.session_id}\u0000${e.tool_name}`;
+    const open = this.probeOpen.get(runKey);
+    const curMs = Date.parse(e.ts);
+    if (!open) {
+      this.probeOpen.set(runKey, {
+        tool: e.tool_name,
+        session_id: e.session_id,
+        first_ts: e.ts,
+        last_ts: e.ts,
+        call_keys: new Set([e.call_key]),
+        observed_tokens: e.observed_tokens,
+      });
+      return;
+    }
+    const lastMs = Date.parse(open.last_ts);
+    const gapSeconds = Number.isFinite(curMs) && Number.isFinite(lastMs)
+      ? (curMs - lastMs) / 1000
+      : 0;
+    if (gapSeconds > PROBE_WINDOW_SECONDS) {
+      // Close the current run; start a new one for this event.
+      this.closeProbe(open);
+      this.probeOpen.set(runKey, {
+        tool: e.tool_name,
+        session_id: e.session_id,
+        first_ts: e.ts,
+        last_ts: e.ts,
+        call_keys: new Set([e.call_key]),
+        observed_tokens: e.observed_tokens,
+      });
+      return;
+    }
+    // Extend the run.
+    open.last_ts = e.ts;
+    open.call_keys.add(e.call_key);
+    open.observed_tokens += e.observed_tokens;
+  }
+
+  private closeProbe(run: OpenProbeRun): void {
+    if (run.call_keys.size < PROBE_MIN_CALLS) return;
+    this.probeClosed.push({
+      tool: run.tool,
+      session_id: run.session_id,
+      first_ts: run.first_ts,
+      last_ts: run.last_ts,
+      call_count: run.call_keys.size,
+      observed_tokens: run.observed_tokens,
+    });
   }
 
   private maybeRecordOutlier(e: SimEvent): void {
@@ -227,6 +316,13 @@ export class Aggregator {
 
     const outliers = [...this.outliers].sort((a, b) => b.tokens - a.tokens);
 
+    // Flush still-open probe runs into the closed list — they're complete
+    // from the aggregator's perspective (no more events will arrive).
+    for (const open of this.probeOpen.values()) this.closeProbe(open);
+    const wasted_probes = [...this.probeClosed]
+      .sort((a, b) => b.observed_tokens - a.observed_tokens)
+      .slice(0, top);
+
     const usd_saved = (this.savings_tokens / 1_000_000) * this.opts.price_per_million;
     const usd_observed = (this.observed_tokens / 1_000_000) * this.opts.price_per_million;
 
@@ -249,6 +345,7 @@ export class Aggregator {
       by_rule: byRule,
       by_day: byDay,
       hotspots,
+      wasted_probes,
       outliers,
       tokenizer: {
         name: this.opts.tokenizer_name,
