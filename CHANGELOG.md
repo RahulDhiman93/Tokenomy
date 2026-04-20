@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Bash bounder now strips trailing shell comments** instead of passing the command through. `git log # debug note` used to run unbounded because the `# …` would swallow the appended awk pipe; it now gets rewritten to `set -o pipefail; git log | awk 'NR<=200'` with the comment discarded. Stripping is quote-aware: `echo "foo # bar"` and `git log --format='%H # %s'` keep their `#` intact. New exported helper `stripTrailingComment()` with its own unit coverage.
+- **README "Real savings from one dogfood session"** — first measured real-world result (285 K tokens / ~$0.86 in a 22-minute session), drawn from `tokenomy report` running on Tokenomy's own repo.
+- **Refreshed architecture diagram** covering Phase 4 Bash bounder, the multi-stage PostToolUse pipeline, and the shared `tokenomy-graph` MCP + `tokenomy analyze` surface. Matches current state.
+
 ### Fixed
 
 - **MCP registration lands in the right file for Claude Code 2.1+.** Previously `tokenomy init --graph-path` wrote the `tokenomy-graph` entry into `~/.claude/settings.json.mcpServers`, but Claude Code 2.1+ reads MCP registrations from `~/.claude.json` instead. Real installs showed `✓ Graph MCP registration — tokenomy-graph configured` in `doctor` yet `claude mcp list` never saw the server. New `src/util/claude-user-config.ts` does surgical upsert/remove on `~/.claude.json` without touching Claude Code's other internal keys (onboarding state, OAuth tokens, cache timestamps, etc.). Uninstall scrubs both the new and legacy locations for backward compat.
