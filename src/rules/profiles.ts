@@ -21,6 +21,12 @@ export interface TrimProfile {
   max_string_bytes?: number;
   // Max items to keep in any surviving array. Excess is dropped with a marker.
   max_array_items?: number;
+  // Optional predicate: inspect the caller's tool_input and decide to skip
+  // this profile entirely. Returning true is a passthrough signal — used for
+  // cases like "caller asked for a single item by ID, give them the whole
+  // thing". The pipeline falls back to downstream stages (shape-trim, byte
+  // trim) if this returns true.
+  skip_when?: (input: Record<string, unknown>) => boolean;
 }
 
 export const BUILTIN_PROFILES: TrimProfile[] = [
@@ -181,6 +187,70 @@ export const BUILTIN_PROFILES: TrimProfile[] = [
     ],
     max_string_bytes: 1_500,
     max_array_items: 20,
+  },
+  {
+    // Row-keep profile for Jira transitions. Each row is tiny (id + name +
+    // to.statusCategory) and the value of the response is the *complete*
+    // enumeration — a trimmed set forces the agent to probe IDs one by one.
+    name: "atlassian-jira-transitions",
+    match: "mcp__*Atlassian*__getTransitionsForJiraIssue",
+    keep: [
+      "transitions.*.id",
+      "transitions.*.name",
+      "transitions.*.to.id",
+      "transitions.*.to.name",
+      "transitions.*.to.statusCategory.key",
+      "transitions.*.to.statusCategory.name",
+    ],
+    max_string_bytes: 120,
+    max_array_items: 50,
+  },
+  {
+    // Row-keep profile for Jira issue-type enumerations. Covers both
+    // getJiraIssueTypeMetaWithFields and getJiraProjectIssueTypesMetadata
+    // — different top-level shapes but similar inventory flavor.
+    name: "atlassian-jira-issue-types",
+    match: "mcp__*Atlassian*__*JiraIssueType*",
+    keep: [
+      "issueTypes.*.id",
+      "issueTypes.*.name",
+      "issueTypes.*.description",
+      "issueTypes.*.subtask",
+      "values.*.id",
+      "values.*.name",
+      "values.*.description",
+      "values.*.subtask",
+    ],
+    max_string_bytes: 200,
+    max_array_items: 50,
+  },
+  {
+    // Row-keep profile for visible Jira projects.
+    name: "atlassian-jira-projects",
+    match: "mcp__*Atlassian*__getVisibleJiraProjects",
+    keep: [
+      "values.*.id",
+      "values.*.key",
+      "values.*.name",
+      "values.*.projectTypeKey",
+      "values.*.simplified",
+    ],
+    max_string_bytes: 120,
+    max_array_items: 100,
+  },
+  {
+    // Row-keep profile for Confluence spaces enumeration.
+    name: "atlassian-confluence-spaces",
+    match: "mcp__*Atlassian*__getConfluenceSpaces",
+    keep: [
+      "results.*.id",
+      "results.*.key",
+      "results.*.name",
+      "results.*.type",
+      "results.*.status",
+    ],
+    max_string_bytes: 120,
+    max_array_items: 100,
   },
 ];
 

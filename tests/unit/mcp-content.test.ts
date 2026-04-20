@@ -96,6 +96,64 @@ test("mcp: supports raw-array shape (Atlassian/Claude Code wire format)", () => 
   assert.match(last.text!, /response trimmed/);
 });
 
+test("mcp: {_tokenomy: 'full'} in tool_input returns passthrough (caller opt-out)", () => {
+  const resp: McpToolResponse = {
+    content: [{ type: "text", text: makeBlob(5_000) }],
+  };
+  const r = mcpContentRule(
+    "mcp__x__y",
+    { _tokenomy: "full", issueKey: "LX-1" },
+    resp,
+    CFG,
+  );
+  assert.equal(r.kind, "passthrough");
+});
+
+test("mcp: regular call without opt-out still trims", () => {
+  const resp: McpToolResponse = {
+    content: [{ type: "text", text: makeBlob(5_000) }],
+  };
+  const r = mcpContentRule("mcp__x__y", { issueKey: "LX-1" }, resp, CFG);
+  assert.equal(r.kind, "trim");
+});
+
+test("mcp: unprofiled inventory response gets shape-trimmed (not head+tail)", () => {
+  // Simulate a tool with no built-in profile that returns a homogeneous
+  // {values: [...]} inventory over the default max_text_bytes (200).
+  const inventory = {
+    values: Array.from({ length: 40 }, (_, i) => ({
+      id: String(i),
+      name: `Thing ${i}`,
+      description: "x".repeat(800),
+      metadata: { created: "2026-01-01", owner: { name: "A" } },
+    })),
+  };
+  const resp: McpToolResponse = {
+    content: [{ type: "text", text: JSON.stringify(inventory) }],
+  };
+  const r = mcpContentRule("mcp__madeup_tool__listThings", {}, resp, {
+    ...CFG,
+    mcp: {
+      ...CFG.mcp,
+      // Input (~35 KB) exceeds this; shape-trim output (~5 KB) fits under it,
+      // so shape-trim produces the final result without byte-trim on top.
+      max_text_bytes: 16_000,
+      shape_trim: { enabled: true, max_items: 50, max_string_bytes: 40 },
+    },
+  });
+  assert.equal(r.kind, "trim");
+  if (r.kind !== "trim") return;
+  // Reason should reflect shape-trim firing (not +mcp-content-trim).
+  assert.equal(r.reason, "shape-trim");
+  // The single text block survived as structured JSON (can be parsed back).
+  const text = (r.output.content![0] as { text: string }).text;
+  const parsed = JSON.parse(text);
+  // All 40 rows preserved — not head+tail-sliced.
+  assert.equal(parsed.values.length, 40);
+  assert.equal(parsed.values[0].id, "0");
+  assert.equal(parsed.values[39].id, "39");
+});
+
 test("mcp: unknown top-level keys flow through unchanged", () => {
   const resp: McpToolResponse = {
     content: [{ type: "text", text: makeBlob(1_000) }],

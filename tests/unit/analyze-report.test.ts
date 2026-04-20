@@ -97,3 +97,72 @@ test("aggregator: usd calculation", () => {
   assert.ok(Math.abs(r.totals.estimated_usd_saved - 5) < 1e-6);
   assert.ok(Math.abs(r.totals.estimated_usd_observed - 10) < 1e-6);
 });
+
+test("aggregator: wasted_probes detects 4-call run with distinct args in 60s window", () => {
+  const a = agg();
+  const tool = "mcp__claude_ai_Atlassian__getTransitionsForJiraIssue";
+  // Four calls 10s apart, each with different call_keys (the agent probing
+  // different transitionIds / issueKeys). Total window: 30s < 60s.
+  a.feed(mk({ tool_name: tool, call_key: "k-a", ts: "2026-04-20T10:00:00Z", observed_tokens: 500 }));
+  a.feed(mk({ tool_name: tool, call_key: "k-b", ts: "2026-04-20T10:00:10Z", observed_tokens: 500 }));
+  a.feed(mk({ tool_name: tool, call_key: "k-c", ts: "2026-04-20T10:00:20Z", observed_tokens: 500 }));
+  a.feed(mk({ tool_name: tool, call_key: "k-d", ts: "2026-04-20T10:00:30Z", observed_tokens: 500 }));
+  const r = a.build();
+  assert.equal(r.wasted_probes.length, 1);
+  assert.equal(r.wasted_probes[0]!.tool, tool);
+  assert.equal(r.wasted_probes[0]!.call_count, 4);
+  assert.equal(r.wasted_probes[0]!.observed_tokens, 2000);
+  assert.equal(r.wasted_probes[0]!.first_ts, "2026-04-20T10:00:00Z");
+  assert.equal(r.wasted_probes[0]!.last_ts, "2026-04-20T10:00:30Z");
+});
+
+test("aggregator: wasted_probes ignores 2-call run (below threshold)", () => {
+  const a = agg();
+  const tool = "mcp__x__y";
+  a.feed(mk({ tool_name: tool, call_key: "k-a", ts: "2026-04-20T10:00:00Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "k-b", ts: "2026-04-20T10:00:10Z" }));
+  const r = a.build();
+  assert.equal(r.wasted_probes.length, 0);
+});
+
+test("aggregator: wasted_probes ignores same-key repeats (dedup territory)", () => {
+  const a = agg();
+  const tool = "mcp__x__y";
+  // Same call_key repeated 5 times — this is dedup's job, not a probe run.
+  for (let i = 0; i < 5; i++) {
+    a.feed(mk({
+      tool_name: tool,
+      call_key: "k-same",
+      ts: `2026-04-20T10:00:${String(i * 5).padStart(2, "0")}Z`,
+    }));
+  }
+  const r = a.build();
+  assert.equal(r.wasted_probes.length, 0);
+});
+
+test("aggregator: wasted_probes splits runs when gap exceeds 60s", () => {
+  const a = agg();
+  const tool = "mcp__x__y";
+  // Run 1: 3 calls at t=0,10,20 (distinct keys). Then gap. Run 2: 3 calls at t=120,130,140.
+  a.feed(mk({ tool_name: tool, call_key: "r1-a", ts: "2026-04-20T10:00:00Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "r1-b", ts: "2026-04-20T10:00:10Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "r1-c", ts: "2026-04-20T10:00:20Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "r2-a", ts: "2026-04-20T10:02:00Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "r2-b", ts: "2026-04-20T10:02:10Z" }));
+  a.feed(mk({ tool_name: tool, call_key: "r2-c", ts: "2026-04-20T10:02:20Z" }));
+  const r = a.build();
+  assert.equal(r.wasted_probes.length, 2);
+});
+
+test("aggregator: wasted_probes is per-session", () => {
+  const a = agg();
+  const tool = "mcp__x__y";
+  // Same tool, distinct args, but spread across two sessions — neither
+  // session alone crosses the 3-call threshold.
+  a.feed(mk({ tool_name: tool, session_id: "s1", call_key: "a", ts: "2026-04-20T10:00:00Z" }));
+  a.feed(mk({ tool_name: tool, session_id: "s2", call_key: "b", ts: "2026-04-20T10:00:10Z" }));
+  a.feed(mk({ tool_name: tool, session_id: "s1", call_key: "c", ts: "2026-04-20T10:00:20Z" }));
+  a.feed(mk({ tool_name: tool, session_id: "s2", call_key: "d", ts: "2026-04-20T10:00:30Z" }));
+  const r = a.build();
+  assert.equal(r.wasted_probes.length, 0);
+});

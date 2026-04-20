@@ -80,6 +80,17 @@ export interface McpRuleConfig {
   // Disable built-in profiles by name if a user wants to override them with
   // their own version without mutating the array from the CLI.
   disabled_profiles?: string[];
+  // Shape-aware fallback between profile match and byte trim. Kicks in for
+  // unprofiled inventory-shaped JSON responses (arrays of homogeneous
+  // records or {transitions|issues|values|results: [...]}) where head+tail
+  // byte trimming would destroy row structure.
+  shape_trim?: ShapeTrimConfig;
+}
+
+export interface ShapeTrimConfig {
+  enabled: boolean;
+  max_items: number;
+  max_string_bytes: number;
 }
 
 export interface RedactConfig {
@@ -92,6 +103,12 @@ export interface ReadRuleConfig {
   enabled: boolean;
   clamp_above_bytes: number;
   injected_limit: number;
+  // Files with these extensions (lowercase, incl. leading dot) passthrough
+  // unclamped when their size is <= doc_passthrough_max_bytes. Self-contained
+  // docs (READMEs, changelogs) read poorly when clamped — the agent wants the
+  // whole thing in one shot, not offset-paged.
+  doc_passthrough_extensions: string[];
+  doc_passthrough_max_bytes: number;
 }
 
 export interface BashRuleConfig {

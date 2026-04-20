@@ -13,11 +13,18 @@ export const DEFAULT_CONFIG: Config = {
     max_text_bytes: 16_000,
     per_block_head: 4_000,
     per_block_tail: 2_000,
+    shape_trim: {
+      enabled: true,
+      max_items: 50,
+      max_string_bytes: 200,
+    },
   },
   read: {
     enabled: true,
     clamp_above_bytes: 40_000,
     injected_limit: 500,
+    doc_passthrough_extensions: [".md", ".mdx", ".rst", ".txt", ".adoc"],
+    doc_passthrough_max_bytes: 64_000,
   },
   bash: {
     enabled: true,
@@ -115,6 +122,18 @@ const applyAggression = (cfg: Config): Config => {
       max_text_bytes: Math.round(cfg.mcp.max_text_bytes * m),
       per_block_head: Math.round(cfg.mcp.per_block_head * m),
       per_block_tail: Math.round(cfg.mcp.per_block_tail * m),
+      profiles: cfg.mcp.profiles,
+      disabled_profiles: cfg.mcp.disabled_profiles,
+      shape_trim: cfg.mcp.shape_trim
+        ? {
+            enabled: cfg.mcp.shape_trim.enabled,
+            max_items: cfg.mcp.shape_trim.max_items,
+            max_string_bytes: Math.max(
+              60,
+              Math.round(cfg.mcp.shape_trim.max_string_bytes * m),
+            ),
+          }
+        : undefined,
     },
     read: {
       enabled: cfg.read.enabled,
@@ -122,6 +141,8 @@ const applyAggression = (cfg: Config): Config => {
       // larger injected limit). Aggressive (×0.5) is stricter on both.
       clamp_above_bytes: Math.round(cfg.read.clamp_above_bytes * m),
       injected_limit: Math.max(50, Math.round(cfg.read.injected_limit * m)),
+      doc_passthrough_extensions: cfg.read.doc_passthrough_extensions,
+      doc_passthrough_max_bytes: Math.round(cfg.read.doc_passthrough_max_bytes * m),
     },
     bash: {
       ...cfg.bash,

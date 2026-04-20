@@ -144,6 +144,83 @@ test("applyProfile: no-savings returns ok:false", () => {
   assert.equal(r.ok, false);
 });
 
+test("builtin atlassian-jira-transitions: keeps all rows, trims bodies", () => {
+  // Mirror a realistic getTransitionsForJiraIssue response: ~15 transitions,
+  // each row ~400 B of JSON. Raw ~6 KB. Expectation: all rows kept, names
+  // and IDs preserved, bulk fields (fields array, expand wrapper) dropped.
+  const payload = {
+    expand: "transitions",
+    transitions: Array.from({ length: 15 }, (_, i) => ({
+      id: String(i + 1),
+      name: `Transition-${i + 1}`,
+      hasScreen: false,
+      isGlobal: true,
+      isInitial: i === 0,
+      isAvailable: true,
+      isConditional: false,
+      to: {
+        id: `1000${i}`,
+        name: `State-${i + 1}`,
+        description: "x".repeat(300),
+        iconUrl: "https://example.atlassian.net/icon",
+        statusCategory: {
+          id: 4,
+          key: i % 2 === 0 ? "indeterminate" : "done",
+          name: "In Progress",
+          colorName: "yellow",
+          self: "https://example.atlassian.net/rest/api/3/statuscategory/4",
+        },
+      },
+    })),
+  };
+  const profile = selectProfile(
+    "mcp__claude_ai_Atlassian__getTransitionsForJiraIssue",
+    BUILTIN_PROFILES,
+  );
+  assert.equal(profile?.name, "atlassian-jira-transitions");
+  const r = applyProfile(JSON.stringify(payload), profile!);
+  assert.equal(r.ok, true);
+  const parsed = JSON.parse(r.trimmed!.replace(/\n\[tokenomy:[^\]]+\]$/, ""));
+  assert.equal(parsed.transitions.length, 15);
+  assert.equal(parsed.transitions[0].id, "1");
+  assert.equal(parsed.transitions[0].name, "Transition-1");
+  assert.equal(parsed.transitions[0].to.statusCategory.key, "indeterminate");
+  // Bulk per-row fields dropped
+  assert.equal(parsed.transitions[0].hasScreen, undefined);
+  assert.equal(parsed.transitions[0].to.description, undefined);
+  assert.ok(
+    r.bytesOut < r.bytesIn / 2,
+    `expected >50% reduction, got ${r.bytesIn} → ${r.bytesOut}`,
+  );
+});
+
+test("builtin atlassian-jira-projects: keeps all rows", () => {
+  const payload = {
+    self: "https://example.atlassian.net/rest/api/3/project/search",
+    maxResults: 50,
+    startAt: 0,
+    total: 3,
+    isLast: true,
+    values: [
+      { id: "10000", key: "LX", name: "LiveX", projectTypeKey: "software", description: "x".repeat(500), lead: { displayName: "A" }, avatarUrls: { "16x16": "a", "24x24": "b" } },
+      { id: "10001", key: "ENG", name: "Engineering", projectTypeKey: "software", description: "y".repeat(500), lead: {}, avatarUrls: {} },
+      { id: "10002", key: "OPS", name: "Operations", projectTypeKey: "business", description: "z".repeat(500), lead: {}, avatarUrls: {} },
+    ],
+  };
+  const profile = selectProfile(
+    "mcp__claude_ai_Atlassian__getVisibleJiraProjects",
+    BUILTIN_PROFILES,
+  );
+  assert.equal(profile?.name, "atlassian-jira-projects");
+  const r = applyProfile(JSON.stringify(payload), profile!);
+  assert.equal(r.ok, true);
+  const parsed = JSON.parse(r.trimmed!.replace(/\n\[tokenomy:[^\]]+\]$/, ""));
+  assert.equal(parsed.values.length, 3);
+  assert.equal(parsed.values[0].key, "LX");
+  assert.equal(parsed.values[0].description, undefined);
+  assert.equal(parsed.values[0].avatarUrls, undefined);
+});
+
 test("builtin atlassian-jira-issue profile reduces a realistic payload", () => {
   const big = {
     key: "PROJ-42",
