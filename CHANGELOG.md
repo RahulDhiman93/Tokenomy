@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] — 2026-04-20
+
+Re-publish of `0.1.0-alpha.11` with a single one-line fix: `src/core/version.ts` was a hardcoded string that lagged `package.json` on every prior release (alpha.11's CLI reported `0.1.0-alpha.10`, masking the publish). Bump is now synchronized. No other code changes versus alpha.11; follow-up should plumb the version from `package.json` at build time so this can't drift again.
+
+### Fixed
+
+- **`tokenomy --version` reports the real version.** Previously the CLI imported `TOKENOMY_VERSION` from `src/core/version.ts`, which is a hand-edited constant and had been left at `0.1.0-alpha.10` since that release. Bumped to match `package.json`.
+
 ## [0.1.0-alpha.11] — 2026-04-20
 
 Dogfood-driven pass at the trim pipeline's two worst failure modes: (1) enumeration-shaped MCP responses were being head+tail-trimmed so hard that callers had to probe items one at a time (net-negative savings); (2) clamping self-contained docs like source files. Five targeted fixes — surgical profiles for the specific Jira cases, a shape-heuristic fallback so new tools don't re-hit the same bug, a report-level signal that flags when this goes wrong, a caller opt-out primitive, and a Read-clamp exception for markdown.
