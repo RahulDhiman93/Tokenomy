@@ -12,21 +12,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] — 2026-04-20
+
+Dogfood-driven hardening release. Three real install-path bugs surfaced the moment we ran Tokenomy against its own repo; fixed alongside a Bash bounder UX improvement, cross-agent auto-registration, the first measured real-savings data, and a refreshed architecture diagram.
+
 ### Added
 
 - **Bash bounder now strips trailing shell comments** instead of passing the command through. `git log # debug note` used to run unbounded because the `# …` would swallow the appended awk pipe; it now gets rewritten to `set -o pipefail; git log | awk 'NR<=200'` with the comment discarded. Stripping is quote-aware: `echo "foo # bar"` and `git log --format='%H # %s'` keep their `#` intact. New exported helper `stripTrailingComment()` with its own unit coverage.
+- **Codex auto-registration.** `tokenomy init --graph-path` now also runs `codex mcp add tokenomy-graph -- tokenomy graph serve --path <repo>` when the Codex CLI is on PATH. Non-fatal — Claude-only installs still succeed when Codex isn't installed. `tokenomy uninstall` mirrors with `codex mcp remove`.
 - **README "Real savings from one dogfood session"** — first measured real-world result (285 K tokens / ~$0.86 in a 22-minute session), drawn from `tokenomy report` running on Tokenomy's own repo.
 - **Refreshed architecture diagram** covering Phase 4 Bash bounder, the multi-stage PostToolUse pipeline, and the shared `tokenomy-graph` MCP + `tokenomy analyze` surface. Matches current state.
 
 ### Fixed
 
+- **Read clamp now handles relative file paths.** Claude Code passes the user-typed path verbatim (e.g. `"package-lock.json"`). The rule's `statSync()` ran against the hook subprocess's cwd (not the project cwd), so stat failed and the rule returned passthrough. Result: the flagship Phase 1 feature silently no-op'd for every user-friendly `Read foo.txt` invocation. Fix: `preDispatchRead` resolves relative paths against `HookInput.cwd` before calling the rule. `readBoundRule` stays pure — the resolution is a pre-dispatch concern so the rule remains trivially unit-testable in isolation.
 - **MCP registration lands in the right file for Claude Code 2.1+.** Previously `tokenomy init --graph-path` wrote the `tokenomy-graph` entry into `~/.claude/settings.json.mcpServers`, but Claude Code 2.1+ reads MCP registrations from `~/.claude.json` instead. Real installs showed `✓ Graph MCP registration — tokenomy-graph configured` in `doctor` yet `claude mcp list` never saw the server. New `src/util/claude-user-config.ts` does surgical upsert/remove on `~/.claude.json` without touching Claude Code's other internal keys (onboarding state, OAuth tokens, cache timestamps, etc.). Uninstall scrubs both the new and legacy locations for backward compat.
 - **Staged hook now loads as ESM.** Previously `stageHookBinary()` copied `dist/` under `~/.tokenomy/bin/` but didn't write a `package.json`. Node walked up from the staged `.js` files, found no `type:"module"` marker, fell back to CommonJS, and threw `Cannot use import statement outside a module` on the first hook invocation — so every live trim/clamp was silently failing in real installs (all unit tests pass via tsx, which doesn't hit this path). Init now drops a minimal `{"type":"module","private":true}` package.json alongside the staged dist. Doctor smoke check now exits 0.
 - **`doctor` counts bumped to 13/13**: added *"PreToolUse matcher covers Read + Bash"* check so Phase 4's Bash matcher can't silently regress.
-
-### Added
-
-- **Codex auto-registration.** `tokenomy init --graph-path` now also runs `codex mcp add tokenomy-graph -- tokenomy graph serve --path <repo>` when the Codex CLI is on PATH. Non-fatal — Claude-only installs still succeed when Codex isn't installed. `tokenomy uninstall` mirrors with `codex mcp remove`.
 
 ## [0.1.0-alpha.8] — 2026-04-19
 
