@@ -68,6 +68,7 @@ const RULE_LABEL: Record<string, string> = {
   profile: "Schema-aware profile trim",
   mcp_trim: "Byte head+tail trim",
   read_clamp: "Read clamp",
+  bash_bound: "Bash input-bounder",
 };
 
 // Render a progress line that overwrites itself via \r. Caller should emit

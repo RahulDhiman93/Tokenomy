@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import type { Config, PreHookInput, PreHookOutput, SavingsLogEntry } from "../core/types.js";
 import { readBoundRule } from "../rules/read-bound.js";
+import { bashBoundRule } from "../rules/bash-bound.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -24,13 +25,7 @@ const graphHint = (cwd: string, cfg: Config): string | null => {
   }
 };
 
-export const preDispatch = (
-  input: PreHookInput,
-  cfg: Config,
-): PreHookOutput | null => {
-  if (cfg.disabled_tools.includes(input.tool_name)) return null;
-  if (input.tool_name !== "Read") return null;
-
+const preDispatchRead = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
   const r = readBoundRule(input.tool_input ?? {}, cfg);
   if (r.kind !== "clamp" || !r.updatedInput) return null;
 
@@ -43,7 +38,7 @@ export const preDispatch = (
     ts: new Date().toISOString(),
     session_id: input.session_id,
     tool: "Read",
-    bytes_in: (r.fileBytes ?? 0),
+    bytes_in: r.fileBytes ?? 0,
     bytes_out: (r.injectedLimit ?? 0) * 50,
     tokens_saved_est: estimateTokens(bytesSavedEst),
     reason: "read-clamp",
@@ -60,4 +55,45 @@ export const preDispatch = (
       ...(additionalContext ? { additionalContext } : {}),
     },
   };
+};
+
+const preDispatchBash = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
+  const r = bashBoundRule(input.tool_input ?? {}, cfg);
+  if (r.kind !== "bound" || !r.updatedInput) return null;
+
+  // Pure heuristic: unbounded verbose shell commands average ~100 KB of
+  // output in long sessions; the bounded variant returns head_limit * ~50 B.
+  // Precise numbers come from `tokenomy analyze` replaying real transcripts.
+  const assumedBytesOut = cfg.bash.head_limit * 50;
+  const assumedBytesIn = Math.max(assumedBytesOut, 100_000);
+  const bytesSavedEst = Math.max(0, assumedBytesIn - assumedBytesOut);
+
+  const entry: SavingsLogEntry = {
+    ts: new Date().toISOString(),
+    session_id: input.session_id,
+    tool: "Bash",
+    bytes_in: assumedBytesIn,
+    bytes_out: assumedBytesOut,
+    tokens_saved_est: estimateTokens(bytesSavedEst),
+    reason: `bash-bound:${r.patternName ?? "unknown"}`,
+  };
+  appendSavingsLog(cfg.log_path, entry);
+
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput: r.updatedInput,
+      ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}),
+    },
+  };
+};
+
+export const preDispatch = (
+  input: PreHookInput,
+  cfg: Config,
+): PreHookOutput | null => {
+  if (cfg.disabled_tools.includes(input.tool_name)) return null;
+  if (input.tool_name === "Read") return preDispatchRead(input, cfg);
+  if (input.tool_name === "Bash") return preDispatchBash(input, cfg);
+  return null;
 };

@@ -137,6 +137,58 @@ test("hook: trims large mcp text, emits hookSpecificOutput, writes savings log",
   }
 });
 
+test("hook: PreToolUse Bash verbose command → bounded updatedInput", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-it-bash-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "t-bash",
+        transcript_path: "/tmp/t",
+        cwd: home,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git log" },
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.ok(stdout.length > 0, "expected non-empty stdout");
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
+    const cmd = parsed.hookSpecificOutput.updatedInput.command as string;
+    assert.ok(cmd.startsWith("set -o pipefail; "));
+    assert.match(cmd, /\| awk 'NR<=\d+'$/);
+    assert.match(parsed.hookSpecificOutput.additionalContext ?? "", /bounded git-log/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: PreToolUse Bash already-bounded command → passthrough", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-it-bash-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "t-bash-skip",
+        transcript_path: "/tmp/t",
+        cwd: home,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git log -n 5" },
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout, "");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("hook: malformed stdin → exit 0 with empty stdout", async () => {
   const child = spawn(process.execPath, [HOOK], { stdio: ["pipe", "pipe", "pipe"] });
   const out: Buffer[] = [];

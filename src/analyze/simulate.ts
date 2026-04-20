@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../core/types.js";
 import { mcpContentRule } from "../rules/mcp-content.js";
 import { readBoundRule } from "../rules/read-bound.js";
+import { bashBoundRule } from "../rules/bash-bound.js";
 import { shouldApply } from "../core/gate.js";
 import { configForTool, loadConfig, resolveToolOverride } from "../core/config.js";
 import type { ToolCall } from "./parse.js";
@@ -35,6 +36,7 @@ export interface SimEvent {
     profile: number;
     mcp_trim: number;
     read_clamp: number;
+    bash_bound: number;
   };
   // dedup pointer: if this event was a duplicate of an earlier one, index.
   duplicate_of_index?: number;
@@ -210,6 +212,7 @@ export class Simulator {
       profile: 0,
       mcp_trim: 0,
       read_clamp: 0,
+      bash_bound: 0,
     };
 
     let savings_tokens = 0;
@@ -219,6 +222,7 @@ export class Simulator {
     const key = callKey(call.tool_name, call.tool_input);
     const isMcp = call.tool_name.startsWith("mcp__");
     const isRead = call.tool_name === "Read";
+    const isBash = call.tool_name === "Bash";
 
     // Use per-project config when the ToolCall carries a resolvable cwd.
     // This matches how the real hook's `loadConfig(input.cwd)` picks up
@@ -326,12 +330,16 @@ export class Simulator {
           }
         }
       }
-    } else if (isRead && toolCfg.read.enabled) {
+    } else if (isRead && projectCfg.read.enabled) {
       // Rule 6: Read clamp. Mirrors preDispatch logic: no clamp if the user
       // passed explicit limit/offset, only fires above clamp_above_bytes,
       // AND — unlike the earlier naive "injected_limit * 50 B" estimate —
       // uses the actual newline count from the observed transcript text so
       // we don't falsely credit savings on minified or single-line files.
+      //
+      // Uses projectCfg (not toolCfg) to match the live PreToolUse path,
+      // which also uses plain per-project config — per-tool overrides
+      // aren't plumbed through Pre.
       //
       // Compare against the raw text byte count, not observed_bytes (which
       // is JSON.stringify(response).byteLength and inflates plain-text
@@ -341,7 +349,7 @@ export class Simulator {
       const hasExplicit =
         typeof input["limit"] === "number" || typeof input["offset"] === "number";
       const rawTextBytes = text ? Buffer.byteLength(text, "utf8") : observed_bytes;
-      if (!hasExplicit && rawTextBytes >= toolCfg.read.clamp_above_bytes) {
+      if (!hasExplicit && rawTextBytes >= projectCfg.read.clamp_above_bytes) {
         const body = text;
         // Count lines; if there aren't more than injected_limit there's
         // nothing to clamp — a single-line 80KB minified bundle stays
@@ -349,13 +357,37 @@ export class Simulator {
         let newlines = 0;
         for (let i = 0; i < body.length; i++) if (body.charCodeAt(i) === 10) newlines++;
         const totalLines = newlines + 1;
-        const kept = Math.min(totalLines, toolCfg.read.injected_limit);
+        const kept = Math.min(totalLines, projectCfg.read.injected_limit);
         if (kept < totalLines) {
           const kept_ratio = kept / totalLines;
           const keptTokens = Math.ceil(observed_tokens * kept_ratio);
           const saved = Math.max(0, observed_tokens - keptTokens);
           perRule.read_clamp = saved;
           savings_tokens += saved;
+          savings_bytes += Math.max(0, rawTextBytes - Math.ceil(rawTextBytes * kept_ratio));
+        }
+      }
+    } else if (isBash && projectCfg.bash.enabled) {
+      // Rule 7: Bash input-bounder. Mirrors live preDispatch which runs on
+      // plain per-project config (PreToolUse doesn't route through
+      // configForTool). We replay the rule against the historical tool
+      // input; if it would have fired, estimate savings from the real
+      // observed output newline count — the same honest approach as the
+      // Read-clamp simulation above.
+      const result = bashBoundRule(call.tool_input, projectCfg);
+      if (result.kind === "bound") {
+        const body = text;
+        let newlines = 0;
+        for (let i = 0; i < body.length; i++) if (body.charCodeAt(i) === 10) newlines++;
+        const totalLines = newlines + 1;
+        const kept = Math.min(totalLines, projectCfg.bash.head_limit);
+        if (kept < totalLines) {
+          const kept_ratio = kept / totalLines;
+          const keptTokens = Math.ceil(observed_tokens * kept_ratio);
+          const saved = Math.max(0, observed_tokens - keptTokens);
+          perRule.bash_bound = saved;
+          savings_tokens += saved;
+          const rawTextBytes = text ? Buffer.byteLength(text, "utf8") : observed_bytes;
           savings_bytes += Math.max(0, rawTextBytes - Math.ceil(rawTextBytes * kept_ratio));
         }
       }

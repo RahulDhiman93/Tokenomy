@@ -1,3 +1,12 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-dark.png">
+  <img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-light.png" width="480">
+</picture>
+
+</div>
+
 # Contributing to Tokenomy
 
 Thanks for wanting to make coding agents (Claude Code, Codex CLI) lighter on tokens. Tokenomy is small by design (zero runtime deps in the hot path) — which means almost any contribution lands in shippable scope within a day.
@@ -10,7 +19,7 @@ This document goes deeper than the README's "Contribute" section: setup, convent
 
 Before you open a PR, make sure:
 
-- [ ] `npm test` is green (existing 161+ tests pass)
+- [ ] `npm test` is green (existing 213+ tests pass)
 - [ ] New rule? Add at least one passthrough and one trim test case
 - [ ] Touched `init`/`uninstall`? Extend the round-trip integration test
 - [ ] New config field? Document it in `README.md` and `DEFAULT_CONFIG`
@@ -103,7 +112,7 @@ Tokenomy is TypeScript + Node ESM + `node:test`. No build magic.
 ```
 src/
   core/     — types, config, paths, gate, log, dedup, recovery hint
-  rules/    — pure transforms: mcp-content, read-bound, text-trim, profiles, stacktrace, redact
+  rules/    — pure transforms: mcp-content, read-bound, bash-bound, text-trim, profiles, stacktrace, redact
   hook/     — entry.ts + dispatch.ts + pre-dispatch.ts (stdin → rule → stdout, Claude Code)
   analyze/  — transcript scanner (Claude Code + Codex), parse, tokens, simulate, report, render
   graph/    — code-graph schema, build, query (minimal, impact, review, usages)

@@ -94,6 +94,25 @@ export interface ReadRuleConfig {
   injected_limit: number;
 }
 
+export interface BashRuleConfig {
+  enabled: boolean;
+  // Line cap appended to bounded commands. Validated as an integer in
+  // [20, 10_000] at rule-execution time; anything outside that band or
+  // not an integer degrades to a passthrough (never interpolated into
+  // shell as-is).
+  head_limit: number;
+  // Minimum command length before the rule considers injection.
+  min_command_length: number;
+  // Extra user-defined verbose prefixes (e.g. "flamegraph") treated the
+  // same as the built-in list. Matched as a literal prefix up to the
+  // next whitespace, case-sensitive.
+  custom_verbose: string[];
+  // Built-in pattern names (e.g. "git-log", "find") to exclude from
+  // bounding — escape hatch when a user wants full output for a specific
+  // command the heuristic would otherwise catch.
+  disabled_commands: string[];
+}
+
 export interface GraphQueryBudgetConfig {
   build_or_update_graph: number;
   get_minimal_context: number;
@@ -125,6 +144,7 @@ export interface Config {
   gate: GateConfig;
   mcp: McpRuleConfig;
   read: ReadRuleConfig;
+  bash: BashRuleConfig;
   graph: GraphConfig;
   redact: RedactConfig;
   log_path: string;

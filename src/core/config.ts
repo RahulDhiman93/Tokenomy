@@ -19,6 +19,14 @@ export const DEFAULT_CONFIG: Config = {
     clamp_above_bytes: 40_000,
     injected_limit: 500,
   },
+  bash: {
+    enabled: true,
+    // unscaled base; conservative ×2 → 200 lines default out of the box.
+    head_limit: 100,
+    min_command_length: 3,
+    custom_verbose: [],
+    disabled_commands: [],
+  },
   graph: {
     enabled: true,
     max_files: 2_000,
@@ -114,6 +122,11 @@ const applyAggression = (cfg: Config): Config => {
       // larger injected limit). Aggressive (×0.5) is stricter on both.
       clamp_above_bytes: Math.round(cfg.read.clamp_above_bytes * m),
       injected_limit: Math.max(50, Math.round(cfg.read.injected_limit * m)),
+    },
+    bash: {
+      ...cfg.bash,
+      // head_limit clamps into the same validation band the rule enforces.
+      head_limit: Math.max(20, Math.min(10_000, Math.round(cfg.bash.head_limit * m))),
     },
     graph: {
       ...cfg.graph,

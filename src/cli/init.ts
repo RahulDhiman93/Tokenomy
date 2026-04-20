@@ -37,7 +37,9 @@ export interface InitOptions {
 }
 
 const POST_MATCHER = "mcp__.*";
-const PRE_MATCHER = "Read";
+// PreToolUse fires for both Read (file clamp) and Bash (input bounder).
+// Claude Code matchers accept regex-style alternation, so one entry covers both.
+const PRE_MATCHER = "Read|Bash";
 const TIMEOUT_SECONDS = 10;
 const GRAPH_SERVER_NAME = "tokenomy-graph";
 

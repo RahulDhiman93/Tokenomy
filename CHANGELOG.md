@@ -1,3 +1,12 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-dark.png">
+  <img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-light.png" width="480">
+</picture>
+
+</div>
+
 # Changelog
 
 All notable changes to **Tokenomy** are documented here.
@@ -5,6 +14,34 @@ All notable changes to **Tokenomy** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting at `1.0.0`. Pre-`1.0.0` releases are alpha and may break on minor bumps.
 
 ## [Unreleased]
+
+## [0.1.0-alpha.8] — 2026-04-19
+
+Phase 4 lands: **`bash-bound`** — a PreToolUse rule that detects known output-focused shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) that the user hasn't already bounded, and rewrites the `tool_input.command` string to cap its output via `set -o pipefail; <cmd> | awk 'NR<=N'`. Awk (rather than `head`) is used to consume the producer's full output without SIGPIPE, so successful commands keep exiting 0 and failed ones propagate their real exit code through `pipefail`.
+
+### Added
+
+- **`src/rules/bash-bound.ts`** — new PreToolUse rule. Mirrors the `read-bound` fail-open contract. Built-in verbose patterns cover `git-log`, `git-show`, `find` (safe actions only), `ls-recursive`, `ps`, `docker-logs`, `journalctl`, `kubectl-logs`, `tree`. Respects `tool_input.run_in_background`, explicit bound flags (`-n N`, `--max-count`, `--tail`, `--depth`, `-maxdepth`, `--lines`), user-owned pipelines, redirections, compound commands (`;`, `&&`, `||`), subshells, heredocs, and streaming/interactive forms (`-f`, `--follow`, `watch`, `top`, `htop`, `less`, `more`).
+- **Shell-injection hardening** — `cfg.bash.head_limit` is validated via `Number.isInteger()` and clamped to `[20, 10_000]` at rule execution time; non-integer or out-of-band values degrade to passthrough. No config value is ever interpolated into shell as-is.
+- **`find -exec` ban** — `-exec`, `-execdir`, `-delete`, `-ok`, `-okdir`, `-print0`, `-fprint*` always passthrough (side-effectful or binary-output forms).
+- **`src/core/types.ts`** — new `BashRuleConfig` interface; `bash: BashRuleConfig` added to `Config`.
+- **`src/core/config.ts`** — `DEFAULT_CONFIG.bash` defaults (enabled, head_limit 100 unscaled → 200 under conservative aggression, custom_verbose + disabled_commands lists) and aggression-scaled `head_limit` band.
+- **`src/hook/pre-dispatch.ts`** — factored into `preDispatchRead` + `preDispatchBash`; the top-level `preDispatch` delegates by tool name. Both paths use plain project config (PreToolUse does not route through `configForTool` — rationale documented in CHANGELOG-adjacent plan notes).
+- **`src/cli/init.ts`** — `PRE_MATCHER` extended to `"Read|Bash"` so the installed PreToolUse entry matches both tools.
+- **`src/cli/doctor.ts`** — new `PreToolUse matcher covers Read + Bash` check; remediation is `tokenomy init`.
+- **`src/util/settings-patch.ts`** — new `matchersForPath()` helper used by the doctor check.
+- **Analyze simulator** (`src/analyze/simulate.ts`) — new `bash_bound` per-rule credit that replays the rule against historical Bash calls and estimates savings from the real observed output newline count. Existing Read-clamp branch now also uses `projectCfg` (not `toolCfg`) to keep simulator fidelity with live PreToolUse.
+- **Renderer + aggregator** — `bash_bound` rendered as *"Bash input-bounder"* and folded into the per-rule `by_rule` breakdown in `tokenomy analyze`.
+
+### Fixed
+
+- **`src/analyze/simulate.ts`** Read-clamp branch no longer uses `configForTool`, aligning with the live hook path (PreToolUse reads plain project config; the per-tool override cascade is PostToolUse-only).
+
+### Tests
+
+- New: `tests/unit/bash-bound.test.ts` (27 cases) — every passthrough branch, every binding pattern, config injection hardening, `sudo` / `time` / env-var prefix stripping, `custom_verbose` + `disabled_commands`, sibling-field preservation.
+- Extended: `tests/unit/pre-dispatch.test.ts`, `tests/unit/analyze-simulate.test.ts`, `tests/unit/analyze-report.test.ts`, `tests/integration/hook-spawn.test.ts`, `tests/integration/init-uninstall.test.ts` (matcher coverage assertion).
+- Total: 179 → 213 passing.
 
 ## [0.1.0-alpha.7] — 2026-04-18
 
