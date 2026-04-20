@@ -249,3 +249,43 @@ test("simulator: Read with explicit limit does not fire read_clamp", () => {
   const r = sim.feed(call);
   assert.equal(r.per_rule.read_clamp, 0);
 });
+
+test("simulator: Bash verbose unbounded command fires bash_bound", () => {
+  const sim = makeSim();
+  // 2000-line output vastly larger than the default head_limit.
+  const text = Array.from({ length: 2000 }, (_, i) => `commit ${i}`).join("\n");
+  const call = mkCall({
+    tool_name: "Bash",
+    tool_input: { command: "git log" },
+    tool_response: text,
+    response_bytes: Buffer.byteLength(text, "utf8"),
+  });
+  const r = sim.feed(call);
+  assert.ok(r.per_rule.bash_bound > 0, `expected non-zero bash_bound, got ${r.per_rule.bash_bound}`);
+});
+
+test("simulator: Bash already-bounded command does NOT fire bash_bound", () => {
+  const sim = makeSim();
+  const text = Array.from({ length: 2000 }, (_, i) => `commit ${i}`).join("\n");
+  const call = mkCall({
+    tool_name: "Bash",
+    tool_input: { command: "git log -n 5" },
+    tool_response: text,
+    response_bytes: Buffer.byteLength(text, "utf8"),
+  });
+  const r = sim.feed(call);
+  assert.equal(r.per_rule.bash_bound, 0);
+});
+
+test("simulator: Bash exit-status-sensitive default (npm ls) does NOT fire bash_bound", () => {
+  const sim = makeSim();
+  const text = Array.from({ length: 2000 }, (_, i) => `pkg-${i}`).join("\n");
+  const call = mkCall({
+    tool_name: "Bash",
+    tool_input: { command: "npm ls" },
+    tool_response: text,
+    response_bytes: Buffer.byteLength(text, "utf8"),
+  });
+  const r = sim.feed(call);
+  assert.equal(r.per_rule.bash_bound, 0);
+});

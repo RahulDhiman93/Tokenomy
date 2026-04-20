@@ -13,7 +13,7 @@ const mk = (over: Partial<SimEvent>): SimEvent => ({
   observed_tokens: 200,
   savings_bytes: 500,
   savings_tokens: 100,
-  per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 100, mcp_trim: 0, read_clamp: 0 },
+  per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 100, mcp_trim: 0, read_clamp: 0, bash_bound: 0 },
   call_key: "k1",
   ...over,
 });
@@ -29,7 +29,7 @@ const agg = () =>
 test("aggregator: totals are summed correctly", () => {
   const a = agg();
   a.feed(mk({}));
-  a.feed(mk({ observed_tokens: 400, savings_tokens: 300, per_rule: { dedup: 300, redact_matches: 0, stacktrace: 0, profile: 0, mcp_trim: 0, read_clamp: 0 } }));
+  a.feed(mk({ observed_tokens: 400, savings_tokens: 300, per_rule: { dedup: 300, redact_matches: 0, stacktrace: 0, profile: 0, mcp_trim: 0, read_clamp: 0, bash_bound: 0 } }));
   const r = a.build();
   assert.equal(r.totals.tool_calls, 2);
   assert.equal(r.totals.observed_tokens, 600);
@@ -38,8 +38,8 @@ test("aggregator: totals are summed correctly", () => {
 
 test("aggregator: by_tool sorted by savings tokens desc", () => {
   const a = agg();
-  a.feed(mk({ tool_name: "a", observed_tokens: 100, savings_tokens: 10, per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 10, mcp_trim: 0, read_clamp: 0 } }));
-  a.feed(mk({ tool_name: "b", observed_tokens: 100, savings_tokens: 80, per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 80, mcp_trim: 0, read_clamp: 0 } }));
+  a.feed(mk({ tool_name: "a", observed_tokens: 100, savings_tokens: 10, per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 10, mcp_trim: 0, read_clamp: 0, bash_bound: 0 } }));
+  a.feed(mk({ tool_name: "b", observed_tokens: 100, savings_tokens: 80, per_rule: { dedup: 0, redact_matches: 0, stacktrace: 0, profile: 80, mcp_trim: 0, read_clamp: 0, bash_bound: 0 } }));
   const r = a.build();
   assert.equal(r.by_tool[0]!.tool, "b");
   assert.equal(r.by_tool[1]!.tool, "a");

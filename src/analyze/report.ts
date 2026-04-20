@@ -120,6 +120,7 @@ export class Aggregator {
       ["profile", e.per_rule.profile],
       ["mcp_trim", e.per_rule.mcp_trim],
       ["read_clamp", e.per_rule.read_clamp],
+      ["bash_bound", e.per_rule.bash_bound],
     ];
     for (const [name, saved] of rules) {
       if (saved <= 0) continue;

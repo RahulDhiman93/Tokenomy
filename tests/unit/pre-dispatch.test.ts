@@ -55,3 +55,65 @@ test("preDispatch: appends graph-aware hint when a local graph snapshot exists",
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("preDispatch: Bash verbose command → bounded updatedInput", () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-bash-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    const output = preDispatch(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: home,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git log" },
+      },
+      {
+        ...DEFAULT_CONFIG,
+        log_path: join(home, ".tokenomy", "savings.jsonl"),
+      },
+    );
+    assert.ok(output);
+    const cmd = (output!.hookSpecificOutput.updatedInput as Record<string, unknown>)[
+      "command"
+    ] as string;
+    assert.ok(cmd.startsWith("set -o pipefail; "));
+    assert.ok(cmd.includes("git log"));
+    assert.ok(/\| awk 'NR<=\d+'$/.test(cmd));
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("preDispatch: Bash short command → null", () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-bash-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    const output = preDispatch(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: home,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hello" },
+      },
+      {
+        ...DEFAULT_CONFIG,
+        log_path: join(home, ".tokenomy", "savings.jsonl"),
+      },
+    );
+    assert.equal(output, null);
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});

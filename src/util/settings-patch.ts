@@ -121,6 +121,27 @@ export const countHooksForPath = (
   return n;
 };
 
+// Return the matcher strings attached to our hook command for a given event.
+// Used by doctor to verify that the PreToolUse hook covers the tool names we
+// expect (e.g. both `Read` and `Bash` after Phase 4).
+export const matchersForPath = (
+  settings: SettingsShape,
+  commandPath: string,
+  event: HookEvent,
+): string[] => {
+  const entries = settings.hooks?.[event];
+  if (!Array.isArray(entries)) return [];
+  const out: string[] = [];
+  for (const m of entries) {
+    for (const h of m.hooks ?? []) {
+      if (commandMatchesPath(h.command, commandPath)) {
+        out.push(m.matcher ?? "");
+      }
+    }
+  }
+  return out;
+};
+
 export const hasOverlappingMcpHook = (
   settings: SettingsShape,
   ourCommandPath: string,

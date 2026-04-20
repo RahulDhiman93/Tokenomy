@@ -14,6 +14,7 @@ import {
   countHooksForPath,
   getMcpServer,
   hasOverlappingMcpHook,
+  matchersForPath,
 } from "../util/settings-patch.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { DEFAULT_CONFIG } from "../core/config.js";
@@ -200,6 +201,31 @@ const manifestDriftCheck = (settings: SettingsShape | undefined): CheckResult =>
   };
 };
 
+const preMatcherCoverageCheck = (settings: SettingsShape | undefined): CheckResult => {
+  if (!settings) {
+    return { name: "PreToolUse matcher covers Read + Bash", ok: true, detail: "no settings" };
+  }
+  const matchers = matchersForPath(settings, hookBinaryPath(), "PreToolUse");
+  if (matchers.length === 0) {
+    return {
+      name: "PreToolUse matcher covers Read + Bash",
+      ok: false,
+      detail: "no PreToolUse entries for tokenomy-hook",
+      remediation: "Run `tokenomy init`.",
+    };
+  }
+  const joined = matchers.join(" | ");
+  const coversRead = /(^|\W)Read(\W|$)/.test(joined);
+  const coversBash = /(^|\W)Bash(\W|$)/.test(joined);
+  const ok = coversRead && coversBash;
+  return {
+    name: "PreToolUse matcher covers Read + Bash",
+    ok,
+    detail: ok ? joined : `missing: ${[!coversRead && "Read", !coversBash && "Bash"].filter(Boolean).join(", ")}`,
+    remediation: ok ? undefined : "Run `tokenomy init` to refresh the matcher.",
+  };
+};
+
 const overlapWarnCheck = (settings: SettingsShape | undefined): CheckResult => {
   if (!settings) return { name: "No overlapping mcp__ hook", ok: true, detail: "no settings" };
   const overlap = hasOverlappingMcpHook(settings, hookBinaryPath());
@@ -315,6 +341,7 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   const s = settingsParseCheck();
   out.push(s.result);
   out.push(hookEntryCheck(s.settings));
+  out.push(preMatcherCoverageCheck(s.settings));
   out.push(hookBinaryExecCheck());
   out.push(await smokeSpawnCheck());
   out.push(configParseCheck());

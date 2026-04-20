@@ -1,3 +1,12 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-dark.png">
+  <img alt="Tokenomy" src="https://raw.githubusercontent.com/RahulDhiman93/Tokenomy/main/src/assets/png/wordmark-wide-light.png" width="480">
+</picture>
+
+</div>
+
 # Security Policy
 
 ## Supported Versions
