@@ -62,6 +62,7 @@ export const DEFAULT_CONFIG: Config = {
       "**/*-bundle.cjs",
       "**/*-bundle.mjs",
     ],
+    auto_refresh_on_read: true,
   },
   redact: {
     enabled: true,

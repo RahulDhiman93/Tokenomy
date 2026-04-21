@@ -14,7 +14,7 @@ const HELP = `Usage:
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
-  tokenomy graph query <minimal|impact|review> [--path=<dir>] ...
+  tokenomy graph query <minimal|impact|review|usages> [--path=<dir>] ...
 `;
 
 const parseArgs = (argv: string[]): ArgMap => {

@@ -7,8 +7,10 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../../src/core/config.js";
 import { fingerprintExcludes } from "../../src/graph/exclude-fingerprint.js";
 import { sha256FileSync } from "../../src/graph/hash.js";
-import { getGraphStaleStatus } from "../../src/graph/stale.js";
+import { getGraphStaleStatus, isGraphStaleCheap } from "../../src/graph/stale.js";
+import { buildGraph } from "../../src/graph/build.js";
 import type { GraphMeta } from "../../src/graph/schema.js";
+import type { Config } from "../../src/core/types.js";
 
 const createMeta = (dir: string): GraphMeta => {
   const file = join(dir, "src", "a.ts");
@@ -78,4 +80,132 @@ test("graph stale: added and removed files are surfaced", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The MCP read-side auto-refresh path uses isGraphStaleCheap before every
+// cacheable query. These tests validate each branch of the cheap helper.
+
+const withTmpRepo = async <T>(fn: (dir: string) => T | Promise<T>): Promise<T> => {
+  const dir = mkdtempSync(join(tmpdir(), "tokenomy-stale-cheap-"));
+  const prevHome = process.env["HOME"];
+  process.env["HOME"] = mkdtempSync(join(tmpdir(), "tokenomy-home-"));
+  try {
+    return await fn(dir);
+  } finally {
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+test("isGraphStaleCheap: returns missing when no graph has been built", async () => {
+  await withTmpRepo((dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, true);
+    assert.equal(result.stale, true);
+    assert.deepEqual(result.stale_files, []);
+  });
+});
+
+test("isGraphStaleCheap: missing snapshot (meta survives) is treated as missing", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    const built = await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+    assert.equal(built.ok, true);
+
+    const { graphSnapshotPath } = await import("../../src/core/paths.js");
+    const { resolveRepoId } = await import("../../src/graph/repo-id.js");
+    const { repoId } = resolveRepoId(dir);
+    rmSync(graphSnapshotPath(repoId));
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, true);
+    assert.equal(result.stale, true);
+  });
+});
+
+test("isGraphStaleCheap: fresh graph → not stale, no files flagged", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    const build = await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+    assert.equal(build.ok, true);
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, false);
+    assert.deepEqual(result.stale_files, []);
+  });
+});
+
+test("isGraphStaleCheap: exclude-set change alone invalidates the graph", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    const buildA = await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+    assert.equal(buildA.ok, true);
+
+    const cfgB: Config = {
+      ...DEFAULT_CONFIG,
+      graph: { ...DEFAULT_CONFIG.graph, exclude: ["vendor/**"] },
+    };
+    const result = isGraphStaleCheap(dir, cfgB);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, true);
+    assert.deepEqual(result.stale_files, []);
+  });
+});
+
+test("isGraphStaleCheap: mtime change surfaces the file in stale_files", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 2;\n");
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, true);
+    assert.deepEqual(result.stale_files, ["src/a.ts"]);
+  });
+});
+
+test("isGraphStaleCheap: added/removed files surface in stale_files", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+
+    writeFileSync(join(dir, "src", "b.ts"), "export const b = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+    rmSync(join(dir, "src", "a.ts"));
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, true);
+    assert.deepEqual(result.stale_files.sort(), ["src/a.ts", "src/b.ts"]);
+  });
 });

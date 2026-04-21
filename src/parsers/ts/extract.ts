@@ -151,9 +151,10 @@ const addImportSymbol = (
   line: number,
   specifier: string,
   confidence: Confidence,
+  originalName?: string,
 ): string => {
   const slot = state.nextLineSlot(localName, line);
-  const node = createImportedSymbolNode(state.filePath, localName, line, slot);
+  const node = createImportedSymbolNode(state.filePath, localName, line, slot, originalName);
   addNode(state, node);
   addContainsEdge(state, state.fileNodeId, node.id);
   state.importedByName.set(localName, node.id);
@@ -291,7 +292,12 @@ const processImportDeclaration = (state: ExtractionState, node: TS.ImportDeclara
   if (importClause?.namedBindings && state.ts.isNamedImports(importClause.namedBindings)) {
     for (const element of importClause.namedBindings.elements) {
       if (element.isTypeOnly) continue;
-      addImportSymbol(state, element.name.text, line, specifier, "definite");
+      const localName = element.name.text;
+      // For aliased imports (`{ foo as bar }`), propertyName is the original
+      // export name (`foo`), name is the local binding (`bar`). Track the
+      // original so find_usages can match the defining export, not the local.
+      const originalName = element.propertyName?.text ?? localName;
+      addImportSymbol(state, localName, line, specifier, "definite", originalName);
     }
   }
 };

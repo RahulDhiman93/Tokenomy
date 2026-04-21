@@ -23,9 +23,18 @@ export interface GraphIndex {
 
 export const fail = (reason: string, hint?: string): FailOpen => ({ ok: false, reason, hint });
 
+export interface LoadGraphContextOptions {
+  // When true, skip calling getGraphStaleStatus internally. The caller is
+  // expected to have already computed staleness and pass it via precomputedStale.
+  // Used by the MCP read-side auto-refresh path to avoid double-enumeration.
+  skipStaleCheck?: boolean;
+  precomputedStale?: { stale: boolean; stale_files: string[] };
+}
+
 export const loadGraphContext = (
   cwd: string,
   config: Config,
+  options: LoadGraphContextOptions = {},
 ): QueryResult<GraphQueryContext> => {
   if (!config.graph.enabled) return fail("graph-disabled");
   const identity = resolveRepoId(cwd);
@@ -34,18 +43,28 @@ export const loadGraphContext = (
   const meta = store.loadMeta(identity.repoId);
   if (!graph || !meta) return fail("graph-not-built");
 
-  const stale = getGraphStaleStatus(identity.repoPath, meta, config);
-  if (!stale.ok) return stale;
+  let staleFlag: boolean;
+  let staleFiles: string[];
+
+  if (options.skipStaleCheck && options.precomputedStale) {
+    staleFlag = options.precomputedStale.stale;
+    staleFiles = options.precomputedStale.stale_files;
+  } else {
+    const stale = getGraphStaleStatus(identity.repoPath, meta, config);
+    if (!stale.ok) return stale;
+    staleFlag = stale.stale;
+    staleFiles = stale.stale_files;
+  }
 
   return {
     ok: true,
-    stale: stale.stale,
-    stale_files: stale.stale_files,
+    stale: staleFlag,
+    stale_files: staleFiles,
     data: {
       graph,
       meta,
-      stale: stale.stale,
-      stale_files: stale.stale_files,
+      stale: staleFlag,
+      stale_files: staleFiles,
       repo_id: identity.repoId,
       repo_path: identity.repoPath,
     },

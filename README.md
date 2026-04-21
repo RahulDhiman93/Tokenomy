@@ -83,14 +83,15 @@ tokenomy doctor        # 13/13 ✓
 
 ```bash
 npm install -g tokenomy
-tokenomy init --graph-path "$PWD"    # registers tokenomy-graph in both agents
-tokenomy graph build --path "$PWD"
+tokenomy init --graph-path "$PWD"    # registers tokenomy-graph in both agents AND builds the graph
 tokenomy analyze                     # benchmarks ~/.claude + ~/.codex transcripts
 ```
 
+Since alpha.15, `init --graph-path` builds the graph for you in a single shot; pass `--no-build` to skip (CI, monorepos with pre-built graphs).
+
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.14`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.14` or `tokenomy update --version 0.1.0-alpha.14`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.15`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.15` or `tokenomy update --version 0.1.0-alpha.15`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -313,9 +314,9 @@ Once live hooks stop bleeding tokens on tool chatter, the next waste is the agen
 
 ```bash
 npm install -g typescript              # peer-optional; required for the graph
-tokenomy init --graph-path "$PWD"      # registers with Claude Code AND Codex
-                                       #   (writes ~/.claude.json, shells `codex mcp add` if on PATH)
-tokenomy graph build --path "$PWD"     # parses TS/JS → ~/.tokenomy/graphs/<id>/
+tokenomy init --graph-path "$PWD"      # registers with Claude Code AND Codex — and builds the graph
+                                       #   (writes ~/.claude.json, shells `codex mcp add` if on PATH,
+                                       #    parses TS/JS → ~/.tokenomy/graphs/<id>/; pass --no-build to skip)
 tokenomy doctor                        # 13/13 ✓
 # fully quit + relaunch Claude Code (Cmd+Q) so it reloads MCP servers
 
@@ -341,7 +342,9 @@ Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy gra
 
 **Good prompt to test it:** *"Call `build_or_update_graph` if needed, then `get_minimal_context` for `{\"target\":{\"file\":\"src/index.ts\"},\"depth\":1}`, then `get_review_context` for `{\"files\":[\"src/index.ts\",\"src/foo.ts\"]}`. Only use Read if the graph result is insufficient."*
 
-**Dev CLI (no MCP needed):** `tokenomy graph status | query minimal|impact|review|usages | purge [--all]`.
+**Dev CLI (no MCP needed):** `tokenomy graph status | query minimal|impact|review|usages | purge [--all]`. Example: `tokenomy graph query usages --path "$PWD" --file src/foo.ts --symbol doThing` returns every call site for the named symbol across modules.
+
+**Read-side auto-refresh (alpha.15+).** When the user edits files between agent calls, the next `get_minimal_context` / `find_usages` / `get_impact_radius` / `get_review_context` query transparently triggers a rebuild before running — no explicit `build_or_update_graph` needed. Cheap stale check (~30–50 ms on 5 k files: meta-only load + mtime compare) short-circuits to a no-op when the graph is fresh. Opt out with `tokenomy config set graph.auto_refresh_on_read false` if you want the pre-alpha.15 behavior.
 
 **Scope + limits (v1).** TypeScript + JavaScript only (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, `.mts/.cts` probed). Soft cap 2 000 files, hard cap 5 000 (abort with `repo-too-large`). AST-only via TypeScript compiler API (no type checker); type-only imports + JSX element references skipped. No `tsconfig.paths`, no `node_modules` resolution — bare specifiers become `external-module` nodes. Fail-open: every tool returns `{ok: false, reason}` rather than throwing.
 
@@ -364,8 +367,8 @@ Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.13   # npm-style pin
-tokenomy update --version=0.1.0-alpha.13  # same, explicit flag
+tokenomy update@0.1.0-alpha.14   # npm-style pin
+tokenomy update --version=0.1.0-alpha.14  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 
