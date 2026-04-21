@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { compareVersions, isDevSymlink, runUpdate } from "../../src/cli/update.js";
+
+const CLI = join(fileURLToPath(new URL("../..", import.meta.url)), "dist/cli/entry.js");
 
 // These tests focus on the pieces that are safe to run without network:
 // arg-parsing + dev-symlink guard. The actual npm-install spawn is covered
@@ -78,6 +83,21 @@ test("compareVersions: numeric identifiers rank below alphanumeric ones", () => 
 test("compareVersions: longer prerelease list wins when common prefix is equal", () => {
   assert.ok(compareVersions("1.0.0-alpha.1", "1.0.0-alpha") > 0);
   assert.ok(compareVersions("1.0.0-alpha", "1.0.0-alpha.1") < 0);
+});
+
+test("CLI: bare --version on `update` rejected, not silently defaulted", () => {
+  // Spawn the built CLI so the parseArgs → entry-level guard is exercised
+  // end-to-end. The guard must fire BEFORE the update branch triggers any
+  // npm install, so exit=1 and stderr names the required arg.
+  const r = spawnSync(process.execPath, [CLI, "update", "--version"], { encoding: "utf8" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--version requires a value/);
+});
+
+test("CLI: bare --tag on `update` rejected, not silently defaulted", () => {
+  const r = spawnSync(process.execPath, [CLI, "update", "--tag"], { encoding: "utf8" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--tag requires a value/);
 });
 
 test("compareVersions: build metadata ignored (semver §10)", () => {

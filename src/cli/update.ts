@@ -211,7 +211,7 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
         `tokenomy update: target tokenomy@${target} resolves to ${resolved}, ` +
           `which is older than the currently installed ${installed}.\n` +
           `  Refusing to downgrade. Pass --force to override, or use\n` +
-          `  --version=${installed.split("-alpha.")[0] ?? installed} to pin a specific release.\n`,
+          `  --version=${installed} to pin the currently-installed release.\n`,
       );
       return 1;
     }

@@ -129,6 +129,23 @@ const main = async (): Promise<number> => {
   }
 
   if (cmd === "update") {
+    // Reject bare value flags: `tokenomy update --version` (no value)
+    // would otherwise silently fall back to the default `latest` target
+    // and perform an unintended global update. parseArgs stores a bare
+    // flag as `true`, so we detect that and fail fast with guidance.
+    if (args.flags["version"] === true) {
+      process.stderr.write(
+        `tokenomy update: --version requires a value, e.g. --version=0.1.0-alpha.13 ` +
+          `(or the shorthand \`tokenomy update@0.1.0-alpha.13\`).\n`,
+      );
+      return 1;
+    }
+    if (args.flags["tag"] === true) {
+      process.stderr.write(
+        `tokenomy update: --tag requires a value, e.g. --tag=latest (or alpha|beta|rc).\n`,
+      );
+      return 1;
+    }
     const explicitVersion =
       typeof args.flags["version"] === "string" ? args.flags["version"] : undefined;
     // Precedence: --version flag > `update@X` shorthand > --tag flag > default
