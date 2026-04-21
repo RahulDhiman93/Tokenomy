@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Config } from "../core/types.js";
 import type { GraphMeta } from "./schema.js";
 import { enumerateGraphFiles } from "./enumerate.js";
+import { fingerprintExcludes } from "./exclude-fingerprint.js";
 import { sha256FileSync } from "./hash.js";
 import type { FailOpen } from "./types.js";
 
@@ -19,6 +20,13 @@ export const getGraphStaleStatus = (
   meta: GraphMeta,
   cfg: Config,
 ): GraphStaleResult => {
+  // A change to the exclude set (or an older meta that predates fingerprinting)
+  // invalidates the whole graph: we can't diff without reparsing, so force a
+  // rebuild instead of returning a silently-wrong cached graph.
+  if (meta.exclude_fingerprint !== fingerprintExcludes(cfg.graph.exclude)) {
+    return { ok: true, stale: true, stale_files: [] };
+  }
+
   const enumerated = enumerateGraphFiles(repoPath, cfg);
   if (!enumerated.ok) return enumerated;
 

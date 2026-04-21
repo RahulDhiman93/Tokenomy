@@ -58,6 +58,8 @@ export interface GraphMeta {
   soft_cap: number;
   hard_cap: number;
   parse_error_count: number;
+  skipped_files?: string[];
+  exclude_fingerprint?: string;
 }
 
 export interface GraphBuildLogEntry {
@@ -70,6 +72,7 @@ export interface GraphBuildLogEntry {
   parse_error_count: number;
   duration_ms: number;
   reason?: string;
+  skipped_files?: string[];
 }
 
 export const createFileNode = (file: string): Node => ({

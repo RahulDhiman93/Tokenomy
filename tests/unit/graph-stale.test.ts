@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../../src/core/config.js";
+import { fingerprintExcludes } from "../../src/graph/exclude-fingerprint.js";
 import { sha256FileSync } from "../../src/graph/hash.js";
 import { getGraphStaleStatus } from "../../src/graph/stale.js";
 import type { GraphMeta } from "../../src/graph/schema.js";
@@ -25,6 +26,7 @@ const createMeta = (dir: string): GraphMeta => {
     soft_cap: 2_000,
     hard_cap: 5_000,
     parse_error_count: 0,
+    exclude_fingerprint: fingerprintExcludes(DEFAULT_CONFIG.graph.exclude),
   };
 };
 

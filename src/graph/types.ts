@@ -34,6 +34,7 @@ export interface GraphStatusData {
   node_count: number;
   edge_count: number;
   parse_error_count: number;
+  skipped_files: string[];
 }
 
 export interface MinimalContextInput {

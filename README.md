@@ -90,7 +90,7 @@ tokenomy analyze                     # benchmarks ~/.claude + ~/.codex transcrip
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.13`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.13` or `tokenomy update --version 0.1.0-alpha.13`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.14`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.14` or `tokenomy update --version 0.1.0-alpha.14`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -345,6 +345,18 @@ Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy gra
 
 **Scope + limits (v1).** TypeScript + JavaScript only (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, `.mts/.cts` probed). Soft cap 2 000 files, hard cap 5 000 (abort with `repo-too-large`). AST-only via TypeScript compiler API (no type checker); type-only imports + JSX element references skipped. No `tsconfig.paths`, no `node_modules` resolution — bare specifiers become `external-module` nodes. Fail-open: every tool returns `{ok: false, reason}` rather than throwing.
 
+**Excluding vendor bundles / minified artifacts.** Committed bundles (e.g. a 24k-line `public/cdn/firebase/firebase-bundle.js`) blow past the per-file edge cap and also pollute queries with minified identifiers. Tokenomy ships with safe defaults for common generated names — `**/*.min.{js,cjs,mjs}`, `**/*-min.{js,cjs,mjs}`, `**/*.bundle.{js,cjs,mjs}`, `**/*-bundle.{js,cjs,mjs}` — and you can layer more:
+
+```bash
+# Repeatable CLI flag (one-shot, appended to config defaults)
+tokenomy graph build --path "$PWD" --exclude "public/**" --exclude "vendor/**"
+
+# Persistent config (writes ~/.tokenomy/config.json; array value)
+tokenomy config set graph.exclude '["public/**","vendor/**","**/*.bundle.js"]'
+```
+
+Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a segment, patterns anchor to the full posix path. Changing the exclude set invalidates any cached graph (fingerprinted on `meta`), so the next build is a clean rebuild — no stale node/edge sludge. Excluded files are reported in `tokenomy graph status` output and in the build log at `~/.tokenomy/graphs/<repo_id>/build.jsonl`.
+
 ---
 
 ## 🔄 Update
@@ -352,8 +364,8 @@ Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy gra
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.12   # npm-style pin
-tokenomy update --version=0.1.0-alpha.12  # same, explicit flag
+tokenomy update@0.1.0-alpha.13   # npm-style pin
+tokenomy update --version=0.1.0-alpha.13  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 

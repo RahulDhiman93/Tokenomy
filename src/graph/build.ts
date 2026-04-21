@@ -5,6 +5,7 @@ import { graphBuildLogPath, graphLockPath } from "../core/paths.js";
 import { stableStringify } from "../util/json.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { enumerateGraphFiles } from "./enumerate.js";
+import { fingerprintExcludes } from "./exclude-fingerprint.js";
 import { sha256FileSync } from "./hash.js";
 import { resolveRepoId } from "./repo-id.js";
 import {
@@ -44,8 +45,14 @@ const logGraphBuild = (
     edge_count: result.ok ? result.data.edge_count : 0,
     parse_error_count: result.ok ? result.data.parse_error_count : 0,
     duration_ms: result.ok ? result.data.duration_ms : 0,
-    ...(result.ok ? {} : { reason: result.reason }),
+    ...(result.ok ? { skipped_files: result.data.skipped_files } : { reason: result.reason }),
   });
+};
+
+const suggestExcludeGlob = (file: string): string => {
+  const slash = file.indexOf("/");
+  if (slash === -1) return file;
+  return `${file.slice(0, slash)}/**`;
 };
 
 const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
@@ -89,7 +96,10 @@ const buildGraphFromFiles = async (
     const source = readFileSync(absPath, "utf8");
     const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts);
     if (extracted.edges.length > cfg.graph.max_edges_per_file) {
-      return fail("graph-too-large", `Edge cap exceeded in ${file}`);
+      return fail(
+        "graph-too-large",
+        `Edge cap exceeded in ${file} — add it to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
+      );
     }
     nodes.push(...extracted.nodes);
     edges.push(...extracted.edges);
@@ -122,6 +132,8 @@ const buildGraphFromFiles = async (
     soft_cap: cfg.graph.max_files,
     hard_cap: cfg.graph.hard_max_files,
     parse_error_count: graph.parse_errors.length,
+    skipped_files,
+    exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
   };
   new JsonGraphStore().save(repoId, graph, meta);
 
@@ -180,7 +192,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               edge_count: existingMeta.edge_count,
               parse_error_count: existingMeta.parse_error_count,
               duration_ms: Date.now() - start,
-              skipped_files: [],
+              skipped_files: existingMeta.skipped_files ?? [],
             },
           };
           logGraphBuild(identity.repoId, identity.repoPath, result);
@@ -246,6 +258,7 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
       node_count: meta.node_count,
       edge_count: meta.edge_count,
       parse_error_count: meta.parse_error_count,
+      skipped_files: meta.skipped_files ?? [],
     },
   };
 };
