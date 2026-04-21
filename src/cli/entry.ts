@@ -6,6 +6,7 @@ import { configGet, configSet } from "./config-cmd.js";
 import { runGraph } from "./graph.js";
 import { runReport } from "./report.js";
 import { runAnalyze } from "./analyze.js";
+import { runUpdate } from "./update.js";
 import type { TokenizerChoice } from "../analyze/tokens.js";
 import type { Config } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
@@ -24,6 +25,7 @@ Usage:
   tokenomy graph purge [--path=<dir>|--all]
   tokenomy graph query <minimal|impact|review|usages> ...
   tokenomy uninstall [--purge] [--no-backup]
+  tokenomy update [--tag=alpha|latest|beta|rc] [--version=<v>] [--check] [--force]
   tokenomy config get <key>
   tokenomy config set <key> <value>
   tokenomy --version | --help
@@ -87,7 +89,15 @@ const main = async (): Promise<number> => {
     return args._.length === 0 ? 1 : 0;
   }
 
-  const cmd = args._[0];
+  // Accept `tokenomy update@<version>` as shorthand for the npm-style
+  // invocation (e.g. `update@latest`, `update@0.1.0-alpha.12`). Split the
+  // first positional into (cmd, inlineVersion) for downstream handlers.
+  let cmd = args._[0];
+  let inlineVersion: string | undefined;
+  if (typeof cmd === "string" && cmd.startsWith("update@")) {
+    inlineVersion = cmd.slice("update@".length);
+    cmd = "update";
+  }
 
   if (cmd === "init") {
     const aggRaw = args.flags["aggression"];
@@ -113,6 +123,20 @@ const main = async (): Promise<number> => {
       ].join("\n"),
     );
     return 0;
+  }
+
+  if (cmd === "update") {
+    const explicitVersion =
+      typeof args.flags["version"] === "string" ? args.flags["version"] : undefined;
+    // Precedence: --version flag > `update@X` shorthand > --tag flag > default
+    const version = explicitVersion ?? inlineVersion;
+    const tag = typeof args.flags["tag"] === "string" ? args.flags["tag"] : undefined;
+    return runUpdate({
+      tag,
+      version,
+      check: args.flags["check"] === true,
+      force: args.flags["force"] === true,
+    });
   }
 
   if (cmd === "uninstall") {
