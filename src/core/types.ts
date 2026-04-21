@@ -146,6 +146,7 @@ export interface GraphConfig {
   max_edges_per_file: number;
   max_snapshot_bytes: number;
   query_budget_bytes: GraphQueryBudgetConfig;
+  exclude: string[];
 }
 
 export interface PerToolOverride {

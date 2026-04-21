@@ -10,7 +10,7 @@ interface ArgMap {
 }
 
 const HELP = `Usage:
-  tokenomy graph build [--force] [--path=<dir>]
+  tokenomy graph build [--force] [--path=<dir>] [--exclude=<glob>...]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
@@ -58,11 +58,20 @@ export const runGraph = async (argv: string[]): Promise<number> => {
     return runGraphQuery({ cwd: process.cwd(), path, argv: argv.slice(1) });
   }
 
-  const args = parseArgs(argv);
+  // `--exclude` is repeatable and the shared parseArgs collapses repeats, so
+  // pre-scan + strip before delegating. Supports both `--exclude glob` and
+  // `--exclude=glob` forms.
+  const { excludes, rest } = extractRepeatedExcludes(argv);
+  const args = parseArgs(rest);
   const path = typeof args.flags["path"] === "string" ? args.flags["path"] : undefined;
 
   if (cmd === "build") {
-    return runGraphBuild({ cwd: process.cwd(), path, force: args.flags["force"] === true });
+    return runGraphBuild({
+      cwd: process.cwd(),
+      path,
+      force: args.flags["force"] === true,
+      exclude: excludes,
+    });
   }
   if (cmd === "status") {
     return runGraphStatus({ cwd: process.cwd(), path });
@@ -89,4 +98,29 @@ const extractPath = (argv: string[]): string | undefined => {
     if (a.startsWith("--path=")) return a.slice("--path=".length);
   }
   return undefined;
+};
+
+const extractRepeatedExcludes = (
+  argv: string[],
+): { excludes: string[]; rest: string[] } => {
+  const excludes: string[] = [];
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === undefined) continue;
+    if (a === "--exclude") {
+      const next = argv[i + 1];
+      if (typeof next === "string" && !next.startsWith("--")) {
+        excludes.push(next);
+        i++;
+      }
+      continue;
+    }
+    if (a.startsWith("--exclude=")) {
+      excludes.push(a.slice("--exclude=".length));
+      continue;
+    }
+    rest.push(a);
+  }
+  return { excludes, rest };
 };

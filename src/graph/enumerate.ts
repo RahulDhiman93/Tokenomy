@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 import type { Config } from "../core/types.js";
+import { compileGlobs, matchesAny } from "../util/glob.js";
 import type { FailOpen } from "./types.js";
 
 const CODE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -39,8 +40,10 @@ const filterFiles = (
   repoPath: string,
   candidates: string[],
   cfg: Config,
+  excludeRegexes: RegExp[],
 ): EnumerateFilesResult => {
   const files = new Set<string>();
+  const skipped: string[] = [];
   for (const candidate of candidates) {
     if (!isCodeFile(candidate)) continue;
     const abs = join(repoPath, ...candidate.split("/"));
@@ -51,15 +54,29 @@ const filterFiles = (
     } catch {
       continue;
     }
-    files.add(posix.normalize(candidate));
+    const rel = posix.normalize(candidate);
+    if (matchesAny(rel, excludeRegexes)) {
+      skipped.push(rel);
+      continue;
+    }
+    files.add(rel);
     if (files.size > cfg.graph.hard_max_files) {
       return { ok: false, reason: "repo-too-large" };
     }
   }
-  return { ok: true, files: [...files].sort(), skipped_files: [], source: "git" };
+  return {
+    ok: true,
+    files: [...files].sort(),
+    skipped_files: skipped.sort(),
+    source: "git",
+  };
 };
 
-const enumerateViaGit = (repoPath: string, cfg: Config): EnumerateFilesResult => {
+const enumerateViaGit = (
+  repoPath: string,
+  cfg: Config,
+  excludeRegexes: RegExp[],
+): EnumerateFilesResult => {
   try {
     const out = execFileSync(
       "git",
@@ -70,7 +87,7 @@ const enumerateViaGit = (repoPath: string, cfg: Config): EnumerateFilesResult =>
       .toString("utf8")
       .split("\u0000")
       .filter((entry) => entry.length > 0);
-    return filterFiles(repoPath, candidates, cfg);
+    return filterFiles(repoPath, candidates, cfg, excludeRegexes);
   } catch {
     return { ok: false, reason: "git-unavailable" };
   }
@@ -80,19 +97,32 @@ const walkDir = (
   repoPath: string,
   dirPath: string,
   files: Set<string>,
+  skipped: string[],
   cfg: Config,
+  excludeRegexes: RegExp[],
 ): FailOpen | null => {
   const entries = readdirSync(dirPath, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name)) continue;
-      const nested = walkDir(repoPath, join(dirPath, entry.name), files, cfg);
+      const nested = walkDir(
+        repoPath,
+        join(dirPath, entry.name),
+        files,
+        skipped,
+        cfg,
+        excludeRegexes,
+      );
       if (nested) return nested;
       continue;
     }
     if (!entry.isFile()) continue;
     const rel = posix.normalize(toPosixRelative(repoPath, join(dirPath, entry.name)));
     if (!isCodeFile(rel)) continue;
+    if (matchesAny(rel, excludeRegexes)) {
+      skipped.push(rel);
+      continue;
+    }
     files.add(rel);
     if (files.size > cfg.graph.hard_max_files) {
       return { ok: false, reason: "repo-too-large" };
@@ -101,16 +131,27 @@ const walkDir = (
   return null;
 };
 
-const enumerateViaWalk = (repoPath: string, cfg: Config): EnumerateFilesResult => {
+const enumerateViaWalk = (
+  repoPath: string,
+  cfg: Config,
+  excludeRegexes: RegExp[],
+): EnumerateFilesResult => {
   const files = new Set<string>();
-  const error = walkDir(repoPath, repoPath, files, cfg);
+  const skipped: string[] = [];
+  const error = walkDir(repoPath, repoPath, files, skipped, cfg, excludeRegexes);
   if (error) return error;
-  return { ok: true, files: [...files].sort(), skipped_files: [], source: "walk" };
+  return {
+    ok: true,
+    files: [...files].sort(),
+    skipped_files: skipped.sort(),
+    source: "walk",
+  };
 };
 
 export const enumerateGraphFiles = (repoPath: string, cfg: Config): EnumerateFilesResult => {
-  const viaGit = enumerateViaGit(repoPath, cfg);
+  const excludeRegexes = compileGlobs(cfg.graph.exclude);
+  const viaGit = enumerateViaGit(repoPath, cfg, excludeRegexes);
   if (viaGit.ok) return viaGit;
   if (viaGit.reason !== "git-unavailable") return viaGit;
-  return enumerateViaWalk(repoPath, cfg);
+  return enumerateViaWalk(repoPath, cfg, excludeRegexes);
 };

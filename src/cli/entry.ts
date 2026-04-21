@@ -19,7 +19,7 @@ Usage:
   tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
   tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
                    [--top=<N>] [--tokenizer=heuristic|tiktoken|auto] [--json] [--no-color] [--verbose]
-  tokenomy graph build [--force] [--path=<dir>]
+  tokenomy graph build [--force] [--path=<dir>] [--exclude=<glob>...]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
