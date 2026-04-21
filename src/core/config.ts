@@ -42,11 +42,20 @@ export const DEFAULT_CONFIG: Config = {
     max_edges_per_file: 1_000,
     max_snapshot_bytes: 20_000_000,
     query_budget_bytes: {
+      // Build summary is a fixed small payload — 4KB is plenty.
       build_or_update_graph: 4_000,
-      get_minimal_context: 4_000,
-      get_impact_radius: 6_000,
-      get_review_context: 1_000,
-      find_usages: 4_000,
+      // Neighborhood dumps at depth 1-2 can enumerate 20-50 neighbors on a
+      // widely-imported module; 8KB covers typical real-world hubs.
+      get_minimal_context: 8_000,
+      // Reverse deps on a hot symbol (e.g. a widely-used hook or utility)
+      // commonly exceed 30 entries at depth 2. 16KB fits ~150 entries.
+      get_impact_radius: 16_000,
+      // Fanout summary + hotspots — 4KB fits a reasonable review set.
+      get_review_context: 4_000,
+      // find_usages on a popular export (a shared hook, helper, or type)
+      // routinely returns 20-50+ usages in real repos. 16KB fits ~100
+      // entries without clipping, matching limitByCount(callSites, 100).
+      find_usages: 16_000,
     },
     exclude: [
       "**/*.min.js",

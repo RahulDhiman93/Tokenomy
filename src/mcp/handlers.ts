@@ -1,5 +1,5 @@
 import { loadConfig } from "../core/config.js";
-import type { Config } from "../core/types.js";
+import type { Config, GraphQueryBudgetConfig } from "../core/types.js";
 import { buildGraph } from "../graph/build.js";
 import type { GraphQueryContext, LoadGraphContextOptions } from "../graph/query/common.js";
 import { loadGraphContext } from "../graph/query/common.js";
@@ -183,6 +183,16 @@ const earlyValidateReadArgs = (
 export const _resetQueryCacheForTests = (): void => queryCache.invalidate();
 export const _queryCacheSize = (): number => queryCache.size;
 
+// Cache-version helper: the LRU is keyed on (tool, args, version). We mix
+// the per-tool budget into `version` so a `tokenomy config set
+// graph.query_budget_bytes.<tool> <N>` invalidates prior (clipped) responses
+// for that tool without requiring a graph rebuild. Other tools' caches are
+// unaffected because only their own budget is part of their version string.
+const cacheVersion = (tool: string, builtAt: string, cfg: Config): string => {
+  const budget = cfg.graph.query_budget_bytes[tool as keyof GraphQueryBudgetConfig];
+  return `${builtAt}#b=${budget ?? 0}`;
+};
+
 const withBudget = <T>(
   result: QueryResult<T>,
   budgetBytes: number,
@@ -272,7 +282,12 @@ export const dispatchGraphTool = async (
       }
     }
     if (graphContext.ok) {
-      const version = graphContext.data.meta.built_at;
+      // Cache version binds the graph snapshot (`built_at`) AND the
+      // per-tool response budget. Without the budget binding, a
+      // `tokenomy config set graph.query_budget_bytes.<tool> <N>` is a
+      // silent no-op until the next rebuild: cached clipped responses
+      // keep returning the old (smaller) result.
+      const version = cacheVersion(name, graphContext.data.meta.built_at, config);
       cacheKey = queryCache.key(name, args, version);
       const cached = queryCache.get(cacheKey);
       if (cached !== undefined) return cached as QueryResult<unknown>;

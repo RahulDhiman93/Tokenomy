@@ -50,9 +50,11 @@ test("config: global file controls aggression; project overrides thresholds; agg
     assert.equal(cfg.mcp.max_text_bytes, 1000);
     assert.equal(cfg.mcp.per_block_head, 100);
     assert.equal(cfg.mcp.per_block_tail, 50);
+    // get_review_context default is 4000; aggressive ×0.5 → 2000 (above the
+    // Math.max floor of 512 enforced in applyAggression).
     assert.equal(
       cfg.graph.query_budget_bytes.get_review_context,
-      512,
+      Math.round(DEFAULT_CONFIG.graph.query_budget_bytes.get_review_context * 0.5),
     );
   });
 });
