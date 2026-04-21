@@ -80,15 +80,6 @@ const printDoctor = async (): Promise<number> => {
 const main = async (): Promise<number> => {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.flags["version"] || args.flags["v"]) {
-    process.stdout.write(`tokenomy ${TOKENOMY_VERSION}\n`);
-    return 0;
-  }
-  if (args.flags["help"] || args.flags["h"] || args._.length === 0) {
-    process.stdout.write(HELP);
-    return args._.length === 0 ? 1 : 0;
-  }
-
   // Accept `tokenomy update@<version>` as shorthand for the npm-style
   // invocation (e.g. `update@latest`, `update@0.1.0-alpha.12`). Split the
   // first positional into (cmd, inlineVersion) for downstream handlers.
@@ -97,6 +88,18 @@ const main = async (): Promise<number> => {
   if (typeof cmd === "string" && cmd.startsWith("update@")) {
     inlineVersion = cmd.slice("update@".length);
     cmd = "update";
+  }
+
+  // Global --version / -v prints the CLI version and exits — but only when
+  // no subcommand is present. Otherwise `tokenomy update --version=X` would
+  // short-circuit here and never reach the update branch (Codex round-2).
+  if ((args.flags["version"] || args.flags["v"]) && !cmd) {
+    process.stdout.write(`tokenomy ${TOKENOMY_VERSION}\n`);
+    return 0;
+  }
+  if (args.flags["help"] || args.flags["h"] || args._.length === 0) {
+    process.stdout.write(HELP);
+    return args._.length === 0 ? 1 : 0;
   }
 
   if (cmd === "init") {

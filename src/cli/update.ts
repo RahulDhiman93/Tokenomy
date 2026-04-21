@@ -77,35 +77,65 @@ export const isDevSymlink = (): boolean => {
 // AND `latest` hasn't been set.
 const defaultTag = (): string => "latest";
 
-// Semver-ish pre-release comparison: returns >0 when a > b, <0 when a < b,
-// 0 when equal. Handles `0.1.0-alpha.12` vs `0.1.0-alpha.3` correctly
-// (numeric suffix) without pulling in a semver dep. Non-matching shapes
-// fall back to lexical compare — safe because the guard only needs to
-// detect obvious downgrades, not impose strict ordering on edge cases.
+// SemVer-style version comparison. Returns >0 when a > b, <0 when a < b,
+// 0 when equal. Follows semver.org precedence rules (§11):
+//   1. Main version components compared numerically left-to-right.
+//   2. A version with prerelease is LOWER than the same main without one.
+//   3. Prerelease identifiers compared dot-separated:
+//      - Numeric identifiers compared numerically.
+//      - Alphanumeric identifiers compared lexically (ASCII order).
+//      - Numeric identifiers always rank below alphanumeric ones.
+//      - If one side runs out of identifiers, the longer side wins.
+//
+// Examples the earlier [numeric-only] implementation got wrong:
+//   0.1.0-alpha.12 vs 0.1.0-beta.1 → beta.1 is newer (lexical "alpha"<"beta")
+//   0.1.0 vs 0.1.0-rc.1            → 0.1.0 is newer (no prerelease > with)
+// Non-numeric identifiers now compare as strings, so beta/rc/alpha order
+// like a user expects.
 export const compareVersions = (a: string, b: string): number => {
-  const parse = (v: string): [number[], number[]] => {
-    const [main, pre = ""] = v.split("-", 2);
-    const mainNums = (main ?? "").split(".").map((x) => Number(x)).map((x) => (Number.isFinite(x) ? x : 0));
-    const preNums = pre
+  const parse = (v: string): { main: number[]; pre: string[] } => {
+    // Strip build metadata after `+` (ignored for precedence per semver).
+    const stripped = v.split("+", 1)[0] ?? v;
+    const [mainStr, preStr] = stripped.split("-", 2) as [string, string | undefined];
+    const main = mainStr
       .split(".")
-      .map((x) => {
-        const n = Number(x);
-        return Number.isFinite(n) ? n : NaN;
-      });
-    return [mainNums, preNums.filter((n) => Number.isFinite(n)) as number[]];
+      .map((x) => Number(x))
+      .map((x) => (Number.isFinite(x) ? x : 0));
+    const pre = preStr && preStr.length > 0 ? preStr.split(".") : [];
+    return { main, pre };
   };
-  const [aMain, aPre] = parse(a);
-  const [bMain, bPre] = parse(b);
-  for (let i = 0; i < Math.max(aMain.length, bMain.length); i++) {
-    const diff = (aMain[i] ?? 0) - (bMain[i] ?? 0);
+  const aP = parse(a);
+  const bP = parse(b);
+
+  // 1. Main version components.
+  for (let i = 0; i < Math.max(aP.main.length, bP.main.length); i++) {
+    const diff = (aP.main[i] ?? 0) - (bP.main[i] ?? 0);
     if (diff !== 0) return diff;
   }
-  // No pre-release > with pre-release (e.g. 0.1.0 > 0.1.0-alpha.1)
-  if (aPre.length === 0 && bPre.length > 0) return 1;
-  if (aPre.length > 0 && bPre.length === 0) return -1;
-  for (let i = 0; i < Math.max(aPre.length, bPre.length); i++) {
-    const diff = (aPre[i] ?? 0) - (bPre[i] ?? 0);
-    if (diff !== 0) return diff;
+
+  // 2. Presence of prerelease lowers precedence.
+  if (aP.pre.length === 0 && bP.pre.length > 0) return 1;
+  if (aP.pre.length > 0 && bP.pre.length === 0) return -1;
+
+  // 3. Identifier-by-identifier comparison.
+  for (let i = 0; i < Math.max(aP.pre.length, bP.pre.length); i++) {
+    const ai = aP.pre[i];
+    const bi = bP.pre[i];
+    // A shorter prerelease list ranks lower than a longer equal-prefix one.
+    if (ai === undefined) return -1;
+    if (bi === undefined) return 1;
+    const aNum = /^\d+$/.test(ai);
+    const bNum = /^\d+$/.test(bi);
+    if (aNum && bNum) {
+      const diff = Number(ai) - Number(bi);
+      if (diff !== 0) return diff;
+      continue;
+    }
+    // Numeric identifiers rank lower than alphanumeric ones.
+    if (aNum && !bNum) return -1;
+    if (!aNum && bNum) return 1;
+    // Both alphanumeric — lexical ASCII.
+    if (ai !== bi) return ai < bi ? -1 : 1;
   }
   return 0;
 };
