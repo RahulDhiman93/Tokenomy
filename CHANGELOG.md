@@ -12,6 +12,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.13] — 2026-04-20
+
+### Added
+
+- **`tokenomy update` — one-command self-update.** Wraps `npm install -g tokenomy@<target>` and re-stages the hook (`~/.tokenomy/bin/dist/`) so the refreshed code takes effect without a separate `tokenomy init`. Flags:
+  - `tokenomy update` — install the `latest` dist-tag.
+  - `tokenomy update@<version>` / `tokenomy update --version=<v>` — pin an exact release.
+  - `tokenomy update --tag=alpha|beta|rc|latest` — choose a dist-tag.
+  - `tokenomy update --check` — query the registry, print installed vs remote, exit 0 when up to date.
+  - `tokenomy update --force` — override the dev-symlink guard and the downgrade guard.
+  - Safety: detects `npm link`-style dev checkouts (by verifying the realpath of the CLI entry contains `node_modules/tokenomy/`) and refuses to install over them. Refuses downgrades when the target tag resolves to an older version than the one installed — `latest` may trail a stale `alpha` dist-tag.
+- **README "Update" section** between *Code-graph MCP server* and *Uninstall*, with the full CLI surface + safety notes. Upgrade hint in the Quickstart note now points at `tokenomy update`.
+
 ## [0.1.0-alpha.12] — 2026-04-20
 
 Re-publish of `0.1.0-alpha.11` with a single one-line fix: `src/core/version.ts` was a hardcoded string that lagged `package.json` on every prior release (alpha.11's CLI reported `0.1.0-alpha.10`, masking the publish). Bump is now synchronized. No other code changes versus alpha.11; follow-up should plumb the version from `package.json` at build time so this can't drift again.

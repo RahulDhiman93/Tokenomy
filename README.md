@@ -90,7 +90,7 @@ tokenomy analyze                     # benchmarks ~/.claude + ~/.codex transcrip
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.12`. Upgrade: re-run the install — idempotent; config + logs preserved. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.13`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.13` or `tokenomy update --version 0.1.0-alpha.13`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -347,6 +347,26 @@ Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy gra
 
 ---
 
+## 🔄 Update
+
+```bash
+tokenomy update            # install latest + re-stage hook in one shot
+tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
+tokenomy update@0.1.0-alpha.12   # npm-style pin
+tokenomy update --version=0.1.0-alpha.12  # same, explicit flag
+tokenomy update --tag=beta # opt into a non-default dist-tag
+```
+
+Wraps `npm install -g tokenomy@<target>` **and** re-runs `tokenomy init` — the staged hook under `~/.tokenomy/bin/dist/` is a frozen copy taken at init time, so a plain npm upgrade leaves the hook running old code. `tokenomy update` does both in one call.
+
+Safety:
+- Refuses to install over a `npm link`-style dev checkout (your local source would be replaced by the published package). Override with `--force`.
+- Refuses downgrades when the resolved version is older than what you have installed — catches cases where the `alpha` dist-tag lags `latest`. Override with `--force` (warns loudly before proceeding).
+
+Use `--check` in CI or a daily cron to get a non-blocking "update available" signal without touching the install.
+
+---
+
 ## 🛑 Uninstall
 
 ```bash
@@ -415,7 +435,8 @@ npm run coverage     # c8 → coverage/lcov.info + HTML
 npm run typecheck    # tsc --noEmit
 npm link             # point `tokenomy` at your local build
 tokenomy doctor      # 13/13 ✓
-# revert: npm unlink -g tokenomy && npm install -g tokenomy
+# revert to published version: npm unlink -g tokenomy && npm install -g tokenomy
+# or just:                      tokenomy update --force   (from a fresh npm-installed shell)
 ```
 
 **Guiding principles.** (1) Fail-open always — broken hook worse than no hook; never exit 2. (2) Schema invariants over trust — outputs never fabricate keys, flip types, shrink arrays. (3) Path-match over markers — uninstall identifies entries by absolute command path. (4) Measure before bragging — no "X % savings" claims without Phase 2 benchmark data. (5) Small + legible — a dozen lines aren't worth a 200 KB install.
