@@ -27,6 +27,12 @@ export interface Node {
   file?: string;
   range?: { start: number; end: number; line: number };
   exported?: boolean;
+  // For imported-symbol nodes: the name as declared in the source module's
+  // export, when it differs from `name` (the local binding). Set for aliased
+  // named imports like `import { foo as bar } from './mod'` — `name` is
+  // "bar", `original_name` is "foo". `find_usages` matches on the original
+  // export name to avoid crediting aliased imports to unrelated exports.
+  original_name?: string;
 }
 
 export interface Edge {
@@ -145,12 +151,19 @@ export const createImportedSymbolNode = (
   name: string,
   line: number,
   n: number,
+  originalName?: string,
 ): Node => ({
   id: `imp:${file}#${name}@${line}:${n}`,
   kind: "imported-symbol",
   name,
   file,
   range: symbolRange(0, 0, line),
+  // Always persist `original_name` when the extractor supplies it — including
+  // the trivial case where originalName === name — so `find_usages` can
+  // positively identify nodes that came from a named import as opposed to a
+  // default/namespace/require-style import (where originalName is omitted and
+  // the query must NOT credit the local binding to an export of the same name).
+  ...(originalName ? { original_name: originalName } : {}),
 });
 
 export const createExportedSymbolNode = (file: string, name: string): Node => ({

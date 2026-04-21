@@ -7,6 +7,8 @@ import { runGraph } from "./graph.js";
 import { runReport } from "./report.js";
 import { runAnalyze } from "./analyze.js";
 import { runUpdate } from "./update.js";
+import { buildGraph } from "../graph/build.js";
+import { loadConfig } from "../core/config.js";
 import type { TokenizerChoice } from "../analyze/tokens.js";
 import type { Config } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
@@ -14,7 +16,7 @@ import { TOKENOMY_VERSION } from "../core/version.js";
 const HELP = `tokenomy — transparent MCP tool-output trimmer for Claude Code
 
 Usage:
-  tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>]
+  tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>] [--no-build]
   tokenomy doctor [--fix]
   tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
   tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
@@ -107,9 +109,36 @@ const main = async (): Promise<number> => {
     const aggression =
       typeof aggRaw === "string" && isAggression(aggRaw) ? aggRaw : undefined;
     const backup = args.flags["no-backup"] !== true;
+    const noBuild = args.flags["no-build"] === true;
     const graphPath =
       typeof args.flags["graph-path"] === "string" ? args.flags["graph-path"] : undefined;
     const result = runInit({ aggression, backup, graphPath });
+
+    // Auto-build the graph when --graph-path is set, unless --no-build opted out.
+    // Runs after runInit so the config file (aggression, excludes, etc.) is
+    // already persisted and loadConfig below picks up fresh values.
+    let buildLine: string | null = null;
+    if (result.graphServerPath && !noBuild) {
+      try {
+        const graphConfig = loadConfig(result.graphServerPath);
+        const buildResult = await buildGraph({
+          cwd: result.graphServerPath,
+          config: graphConfig,
+        });
+        if (buildResult.ok) {
+          const { node_count, edge_count, duration_ms, skipped_files } = buildResult.data;
+          const skippedSuffix =
+            skipped_files.length > 0 ? ` (${skipped_files.length} skipped)` : "";
+          buildLine = `  build:    ${node_count} nodes / ${edge_count} edges in ${duration_ms}ms${skippedSuffix}`;
+        } else {
+          buildLine = `  build:    skipped (${buildResult.reason})`;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        buildLine = `  build:    skipped (${message})`;
+      }
+    }
+
     process.stdout.write(
       [
         `✓ Tokenomy installed`,
@@ -120,6 +149,7 @@ const main = async (): Promise<number> => {
         ...(result.graphServerPath
           ? [`  graph:    tokenomy-graph -> ${result.graphServerPath}`]
           : []),
+        ...(buildLine ? [buildLine] : []),
         `  manifest: ${result.manifestPath}`,
         `  Run: tokenomy doctor`,
         ``,

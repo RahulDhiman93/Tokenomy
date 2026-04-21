@@ -147,6 +147,7 @@ export interface GraphConfig {
   max_snapshot_bytes: number;
   query_budget_bytes: GraphQueryBudgetConfig;
   exclude: string[];
+  auto_refresh_on_read: boolean;
 }
 
 export interface PerToolOverride {

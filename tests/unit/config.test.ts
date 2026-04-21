@@ -65,3 +65,24 @@ test("config: malformed JSON falls back to defaults", () => {
     assert.equal(cfg.aggression, DEFAULT_CONFIG.aggression);
   });
 });
+
+test("config: graph.auto_refresh_on_read defaults to true", () => {
+  withStubHome((home) => {
+    const cfg = loadConfig(home);
+    assert.equal(cfg.graph.auto_refresh_on_read, true);
+  });
+});
+
+test("config: graph.auto_refresh_on_read can be overridden via ~/.tokenomy/config.json", () => {
+  withStubHome((home) => {
+    mkdirSync(join(home, ".tokenomy"), { recursive: true });
+    writeFileSync(
+      join(home, ".tokenomy", "config.json"),
+      JSON.stringify({ graph: { auto_refresh_on_read: false } }),
+    );
+    const cfg = loadConfig(home);
+    assert.equal(cfg.graph.auto_refresh_on_read, false);
+    // Other graph defaults should still be in place.
+    assert.equal(cfg.graph.enabled, DEFAULT_CONFIG.graph.enabled);
+  });
+});

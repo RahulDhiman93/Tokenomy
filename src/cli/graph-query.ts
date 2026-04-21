@@ -4,6 +4,7 @@ import { impactRadius } from "../graph/query/impact.js";
 import { loadGraphContext } from "../graph/query/common.js";
 import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
+import { findUsages } from "../graph/query/usages.js";
 
 const parseIntegerFlag = (
   value: string | boolean | undefined,
@@ -125,9 +126,28 @@ export const runGraphQuery = async (opts: {
     );
   }
 
+  if (mode === "usages") {
+    const file = typeof flags["file"] === "string" ? flags["file"] : undefined;
+    if (!file) return print({ ok: false, reason: "invalid-input", hint: "Pass --file=<path>." });
+    return print(
+      findUsages(
+        context.data.graph,
+        {
+          target: {
+            file,
+            ...(typeof flags["symbol"] === "string" ? { symbol: flags["symbol"] } : {}),
+          },
+        },
+        config,
+        context.data.stale,
+        context.data.stale_files,
+      ),
+    );
+  }
+
   return print({
     ok: false,
     reason: "invalid-input",
-    hint: "Use `minimal`, `impact`, or `review`.",
+    hint: "Use `minimal`, `impact`, `review`, or `usages`.",
   });
 };

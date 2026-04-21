@@ -1,13 +1,16 @@
 import { loadConfig } from "../core/config.js";
+import type { Config } from "../core/types.js";
 import { buildGraph } from "../graph/build.js";
-import type { GraphQueryContext } from "../graph/query/common.js";
+import type { GraphQueryContext, LoadGraphContextOptions } from "../graph/query/common.js";
 import { loadGraphContext } from "../graph/query/common.js";
 import { impactRadius } from "../graph/query/impact.js";
 import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
+import { isGraphStaleCheap } from "../graph/stale.js";
 import type {
   BuildGraphResult,
+  FailOpen,
   FindUsagesInput,
   ImpactRadiusInput,
   MinimalContextInput,
@@ -92,14 +95,89 @@ const parseReviewContextInput = (args: Record<string, unknown>): ReviewContextIn
   return files.length > 0 ? { files } : null;
 };
 
+interface PrecomputedStale {
+  stale: boolean;
+  stale_files: string[];
+}
+
 const withGraphContext = <T>(
   cwd: string,
-  run: (config: ReturnType<typeof loadConfig>, graphContext: GraphQueryContext) => QueryResult<T>,
+  run: (config: Config, graphContext: GraphQueryContext) => QueryResult<T>,
+  precomputedStale?: PrecomputedStale,
 ): QueryResult<T> => {
   const config = loadConfig(cwd);
-  const graphContext = loadGraphContext(cwd, config);
+  const loadOptions: LoadGraphContextOptions = precomputedStale
+    ? { skipStaleCheck: true, precomputedStale }
+    : {};
+  const graphContext = loadGraphContext(cwd, config, loadOptions);
   if (!graphContext.ok) return graphContext;
   return run(config, graphContext.data);
+};
+
+// Read-side auto-refresh helper. Called before every cacheable graph tool
+// ONLY when cfg.graph.auto_refresh_on_read is true — the opt-out path in
+// dispatchGraphTool skips this helper entirely and lets loadGraphContext
+// run the regular SHA-based stale check instead (preserving pre-alpha.15
+// behavior exactly).
+//
+// Uses isGraphStaleCheap (meta-only, mtime-only) to short-circuit when the
+// graph is fresh; invokes buildGraph({force:false}) when stale; trusts
+// buildGraph's authoritative result over the cheap precheck when it returns
+// ok.
+//
+// Returns a FailOpen when the rebuild itself fails (repo-too-large, timeout,
+// build-in-progress, io-error, etc.) — this is propagated up to the MCP
+// caller so they see the actionable reason instead of silently receiving
+// a stale snapshot. Catches unexpected throws and falls back to the cheap
+// pre-check's stale state so the read path doesn't tear down.
+const ensureFreshGraph = async (
+  cwd: string,
+  cfg: Config,
+): Promise<PrecomputedStale | FailOpen> => {
+  const check = isGraphStaleCheap(cwd, cfg);
+  if (!check.missing && !check.stale) return { stale: false, stale_files: [] };
+  try {
+    const result = await buildGraph({ cwd, config: cfg, force: false });
+    if (result.ok) {
+      if (result.data.built) queryCache.invalidate();
+      return {
+        stale: result.stale ?? false,
+        stale_files: result.stale_files ?? [],
+      };
+    }
+    // Rebuild failed with an actionable reason. Don't silently serve the
+    // old snapshot — propagate the FailOpen so the caller sees e.g.
+    // repo-too-large or timeout and can correct their setup.
+    return result;
+  } catch {
+    // Unexpected throw (buildGraph is meant to be non-throwing) — fail-open
+    // to the cheap pre-check view so the read path still produces a result.
+    return { stale: check.stale, stale_files: check.stale_files };
+  }
+};
+
+// Lightweight arg validation for the four cacheable read-side tools. Runs
+// BEFORE ensureFreshGraph so a malformed call (e.g. `{}` to get_minimal_context)
+// returns `invalid-input` directly rather than silently triggering a graph
+// rebuild that might surface a misleading reason like `repo-too-large`.
+const earlyValidateReadArgs = (
+  name: string,
+  args: Record<string, unknown>,
+): QueryResult<unknown> | null => {
+  if (name === "get_minimal_context") {
+    if (!parseMinimalContextInput(args))
+      return fail("invalid-input", "Expected { target: { file, symbol? }, depth? }.");
+  } else if (name === "get_impact_radius") {
+    if (!parseImpactRadiusInput(args))
+      return fail("invalid-input", "Expected { changed: [{ file, symbols? }], max_depth? }.");
+  } else if (name === "find_usages") {
+    if (!parseFindUsagesInput(args))
+      return fail("invalid-input", "Expected { target: { file, symbol? } }.");
+  } else if (name === "get_review_context") {
+    if (!parseReviewContextInput(args))
+      return fail("invalid-input", "Expected { files: string[] }.");
+  }
+  return null;
 };
 
 export const _resetQueryCacheForTests = (): void => queryCache.invalidate();
@@ -136,9 +214,63 @@ export const dispatchGraphTool = async (
   // build_or_update_graph path.
   const cacheable = CACHEABLE_TOOLS.has(name);
   let cacheKey: string | null = null;
+  let precomputedStale: PrecomputedStale | undefined;
   if (cacheable) {
+    // Validate tool-specific arguments BEFORE touching the graph. A malformed
+    // read call must not trigger a rebuild — users deserve the actionable
+    // `invalid-input` hint rather than a rebuild-failure reason.
+    const invalid = earlyValidateReadArgs(name, args);
+    if (invalid) return invalid;
+
     const config = loadConfig(cwd);
-    const graphContext = loadGraphContext(cwd, config);
+
+    // Auto-refresh is opt-in via config. When enabled, run the cheap stale
+    // check + conditional rebuild FIRST; when disabled, skip entirely and let
+    // loadGraphContext do its normal SHA-based stale check (pre-alpha.15
+    // behavior — mtime-only stale isn't good enough for the opt-out path
+    // because a `touch` would incorrectly flag a file as changed).
+    if (config.graph.auto_refresh_on_read) {
+      const fresh = await ensureFreshGraph(cwd, config);
+      if ("ok" in fresh && fresh.ok === false) {
+        // Rebuild failed with an actionable reason — surface it to the caller
+        // instead of serving a silently-stale snapshot.
+        return fresh;
+      }
+      precomputedStale = fresh as PrecomputedStale;
+    }
+
+    let graphContext = loadGraphContext(
+      cwd,
+      config,
+      precomputedStale ? { skipStaleCheck: true, precomputedStale } : {},
+    );
+    // Recovery path: isGraphStaleCheap only does existsSync on the snapshot
+    // file, so a corrupt/unparsable snapshot (meta intact) slips through as
+    // "fresh". The full load here is the first place we actually parse the
+    // snapshot — if that fails with graph-not-built while auto-refresh is on,
+    // force a rebuild and retry once.
+    if (
+      !graphContext.ok &&
+      graphContext.reason === "graph-not-built" &&
+      config.graph.auto_refresh_on_read
+    ) {
+      try {
+        const rebuild = await buildGraph({ cwd, config, force: false });
+        if (!rebuild.ok) return rebuild;
+        queryCache.invalidate();
+        precomputedStale = {
+          stale: rebuild.stale ?? false,
+          stale_files: rebuild.stale_files ?? [],
+        };
+        graphContext = loadGraphContext(cwd, config, {
+          skipStaleCheck: true,
+          precomputedStale,
+        });
+      } catch {
+        // Fail-open to the original graph-not-built so the caller at least
+        // sees an actionable reason rather than a thrown exception.
+      }
+    }
     if (graphContext.ok) {
       const version = graphContext.data.meta.built_at;
       cacheKey = queryCache.key(name, args, version);
@@ -147,7 +279,7 @@ export const dispatchGraphTool = async (
     }
   }
 
-  const result = await dispatchGraphToolUncached(name, args, cwd);
+  const result = await dispatchGraphToolUncached(name, args, cwd, precomputedStale);
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
   return result;
 };
@@ -156,73 +288,86 @@ const dispatchGraphToolUncached = async (
   name: string,
   args: Record<string, unknown>,
   cwd: string,
+  precomputedStale?: PrecomputedStale,
 ): Promise<QueryResult<unknown>> => {
 
   if (name === "get_minimal_context") {
     const input = parseMinimalContextInput(args);
     if (!input) return fail("invalid-input", "Expected { target: { file, symbol? }, depth? }.");
-    return withGraphContext(cwd, (config, graphContext) =>
-      withBudget(
-        minimalContext(
-          graphContext.graph,
-          input,
-          config,
-          graphContext.stale,
-          graphContext.stale_files,
+    return withGraphContext(
+      cwd,
+      (config, graphContext) =>
+        withBudget(
+          minimalContext(
+            graphContext.graph,
+            input,
+            config,
+            graphContext.stale,
+            graphContext.stale_files,
+          ),
+          config.graph.query_budget_bytes.get_minimal_context,
         ),
-        config.graph.query_budget_bytes.get_minimal_context,
-      ),
+      precomputedStale,
     );
   }
 
   if (name === "get_impact_radius") {
     const input = parseImpactRadiusInput(args);
     if (!input) return fail("invalid-input", "Expected { changed: [{ file, symbols? }], max_depth? }.");
-    return withGraphContext(cwd, (config, graphContext) =>
-      withBudget(
-        impactRadius(
-          graphContext.graph,
-          input,
-          config,
-          graphContext.stale,
-          graphContext.stale_files,
+    return withGraphContext(
+      cwd,
+      (config, graphContext) =>
+        withBudget(
+          impactRadius(
+            graphContext.graph,
+            input,
+            config,
+            graphContext.stale,
+            graphContext.stale_files,
+          ),
+          config.graph.query_budget_bytes.get_impact_radius,
         ),
-        config.graph.query_budget_bytes.get_impact_radius,
-      ),
+      precomputedStale,
     );
   }
 
   if (name === "find_usages") {
     const input = parseFindUsagesInput(args);
     if (!input) return fail("invalid-input", "Expected { target: { file, symbol? } }.");
-    return withGraphContext(cwd, (config, graphContext) =>
-      withBudget(
-        findUsages(
-          graphContext.graph,
-          input,
-          config,
-          graphContext.stale,
-          graphContext.stale_files,
+    return withGraphContext(
+      cwd,
+      (config, graphContext) =>
+        withBudget(
+          findUsages(
+            graphContext.graph,
+            input,
+            config,
+            graphContext.stale,
+            graphContext.stale_files,
+          ),
+          config.graph.query_budget_bytes.find_usages,
         ),
-        config.graph.query_budget_bytes.find_usages,
-      ),
+      precomputedStale,
     );
   }
 
   if (name === "get_review_context") {
     const input = parseReviewContextInput(args);
     if (!input) return fail("invalid-input", "Expected { files: string[] }.");
-    return withGraphContext(cwd, (config, graphContext) =>
-      withBudget(
-        reviewContext(
-          graphContext.graph,
-          input,
-          config,
-          graphContext.stale,
-          graphContext.stale_files,
+    return withGraphContext(
+      cwd,
+      (config, graphContext) =>
+        withBudget(
+          reviewContext(
+            graphContext.graph,
+            input,
+            config,
+            graphContext.stale,
+            graphContext.stale_files,
+          ),
+          config.graph.query_budget_bytes.get_review_context,
         ),
-        config.graph.query_budget_bytes.get_review_context,
-      ),
+      precomputedStale,
     );
   }
 
