@@ -146,32 +146,47 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
   const target = opts.version ?? tag;
 
   if (opts.check) {
-    const latest = fetchRegistryVersion(tag);
-    if (latest === null) {
+    // Honor an explicit pin: if the user passed --version=X or the
+    // update@X shorthand, check resolves against THAT version — not the
+    // default tag. A pinned target like `0.1.0-alpha.13` asks the registry
+    // directly; npm resolves it to the version itself (or fails if the
+    // version doesn't exist on the registry).
+    const resolved = fetchRegistryVersion(target);
+    if (resolved === null) {
       process.stderr.write(
-        `tokenomy update: could not query npm registry for tokenomy@${tag}. ` +
-          `Is npm on PATH and is the network reachable?\n`,
+        `tokenomy update: could not query npm registry for tokenomy@${target}. ` +
+          `Is npm on PATH, is the network reachable, and does that version exist?\n`,
       );
       return 2;
     }
+    // The right-hand column labels what we actually queried: a dist-tag
+    // (e.g. `latest on npm`) vs a pinned version (`pin 0.1.0-alpha.13`).
+    const isPinnedVersion = opts.version !== undefined;
+    const label = isPinnedVersion ? `pin ${target}` : `${target} on npm`;
     process.stdout.write(`  installed:       ${installed}\n`);
-    process.stdout.write(`  ${(tag + " on npm").padEnd(16)}: ${latest}\n`);
-    const cmp = compareVersions(latest, installed);
+    process.stdout.write(`  ${label.padEnd(16)}: ${resolved}\n`);
+    const cmp = compareVersions(resolved, installed);
     if (cmp === 0) {
       process.stdout.write(`  ✓ Up to date\n`);
       return 0;
     }
     if (cmp < 0) {
       process.stdout.write(
-        `  ✓ Up to date (installed is newer than the \`${tag}\` dist-tag on npm).\n`,
+        isPinnedVersion
+          ? `  ✓ Installed is newer than the pinned target.\n`
+          : `  ✓ Up to date (installed is newer than the \`${target}\` dist-tag on npm).\n`,
       );
       return 0;
     }
-    process.stdout.write(
-      `  ⚠ Update available. Run \`tokenomy update${
-        opts.tag && opts.tag !== defaultTag() ? ` --tag=${tag}` : ""
-      }\`.\n`,
-    );
+    // Suggest the exact command that would perform the upgrade the user
+    // just asked about — preserve the pin / tag so they don't accidentally
+    // jump to a different release.
+    const suggest = isPinnedVersion
+      ? `tokenomy update --version=${target}`
+      : opts.tag && opts.tag !== defaultTag()
+      ? `tokenomy update --tag=${target}`
+      : `tokenomy update`;
+    process.stdout.write(`  ⚠ Update available. Run \`${suggest}\`.\n`);
     return 1;
   }
 

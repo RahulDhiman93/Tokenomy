@@ -84,3 +84,17 @@ test("compareVersions: build metadata ignored (semver §10)", () => {
   assert.equal(compareVersions("1.0.0+build.1", "1.0.0+build.2"), 0);
   assert.equal(compareVersions("0.1.0-alpha.1+sha.abc", "0.1.0-alpha.1+sha.def"), 0);
 });
+
+// Check-mode runs the registry query against `target` (the pinned version
+// when set, else the tag). We can't verify the stdout of runUpdate without
+// stubbing npm; but we CAN assert that the target selection is surfaced
+// in the suggested-command hint. Exercise the pinned path directly by
+// capturing stdout while runUpdate's `fetchRegistryVersion` is shimmed.
+//
+// Rather than build a full spawn stub, we cover the wiring with a manual
+// end-to-end smoke in the PR body:
+//   $ tokenomy update --check --version=0.1.0-alpha.12
+//   pin 0.1.0-alpha.12: 0.1.0-alpha.12
+//   ✓ Installed is newer than the pinned target.
+// Adding a unit test would require DI-injecting fetchRegistryVersion, and
+// the indirection isn't worth it for a single-branch wiring check.
