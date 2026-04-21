@@ -12,6 +12,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.16] — 2026-04-21
+
+Small follow-up to alpha.15 after dogfooding the new `find_usages` on chatbox-js hot symbols. Two papercuts to fix:
+
+### Fixed
+
+- **`tokenomy config set graph.query_budget_bytes.<tool> <N>` now takes effect on the very next query** — without needing a graph rebuild or Claude Code session restart. The MCP read-side cache was keyed on `(tool, args, meta.built_at)`; the per-tool budget wasn't part of the key, so a cached clipped response would keep returning until the next rebuild. Cache version now binds `meta.built_at` AND the per-tool budget: `${built_at}#b=${budget}` (`src/mcp/handlers.ts`). Only the tool whose budget changed gets invalidated — other tools' caches stay warm.
+
+### Changed
+
+- **Default `graph.query_budget_bytes` bumped for real-world repos.** The previous defaults clipped aggressively on medium-size repos (chatbox-js: `find_usages` on a hook with 37 usages truncated to 23 at the 4 KB default). New defaults:
+  - `get_minimal_context`: 4 000 → **8 000** B
+  - `get_impact_radius`: 6 000 → **16 000** B
+  - `get_review_context`: 1 000 → **4 000** B
+  - `find_usages`: 4 000 → **16 000** B
+  - `build_or_update_graph`: unchanged (4 000 B — fixed-size payload).
+  
+  `find_usages` at 16 KB comfortably fits the `limitByCount(callSites, 100)` post-sort cap without truncation on all but the most extreme hot symbols. Users who want the pre-alpha.16 budget can set explicit values via `tokenomy config set graph.query_budget_bytes.<tool> <N>`. Aggression multipliers (conservative ×2 / balanced ×1 / aggressive ×0.5) still apply, floored at 512 B.
+
+### Tests
+
+- +1 test (`tests/unit/graph-auto-refresh.test.ts`): assert that raising `graph.query_budget_bytes.find_usages` at runtime (no rebuild, no session restart) invalidates the prior clipped cache entry and returns the full result. Full suite: **304/304 passing**.
+
 ## [0.1.0-alpha.15] — 2026-04-21
 
 Follow-up pass after dogfooding the graph on `chatbox-js` (LiveX-AI's chatbot runtime, ~5 800 nodes / 16 700 edges). Surfaced three real gaps and two UX asks; this release ships fixes for all of them plus an explicit breaking-change callout on the `init` behavior.
@@ -310,7 +333,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.15...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.16...HEAD
+[0.1.0-alpha.16]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.16
 [0.1.0-alpha.15]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.13

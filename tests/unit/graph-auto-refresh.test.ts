@@ -193,6 +193,57 @@ test("read-side auto-refresh: malformed input returns invalid-input without trig
   });
 });
 
+test("read-side cache: raising query_budget_bytes via config invalidates prior clipped response", async () => {
+  await withSandbox(async (repo) => {
+    // Seed enough source files that find_usages on a widely-imported
+    // symbol produces a response bigger than a tiny budget.
+    const callers = 12;
+    for (let i = 0; i < callers; i++) {
+      writeFileSync(
+        join(repo, "src", `caller${i}.ts`),
+        `import { a } from "./a";\nexport function use${i}() { return a; }\n`,
+      );
+    }
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+
+    // Constrain budget aggressively so the first query clips.
+    writeConfig(process.env["HOME"]!, {
+      graph: { query_budget_bytes: { find_usages: 200 } },
+    });
+
+    await dispatchGraphTool("build_or_update_graph", {}, repo);
+    const clipped = (await dispatchGraphTool(
+      "find_usages",
+      { target: { file: "src/a.ts", symbol: "a" } },
+      repo,
+    )) as { ok: boolean; data?: { call_sites: unknown[] }; truncated?: { dropped_count: number } };
+    assert.equal(clipped.ok, true);
+    assert.ok(
+      (clipped.truncated?.dropped_count ?? 0) > 0,
+      `expected truncation at tight budget; got ${JSON.stringify(clipped.truncated)}`,
+    );
+    const clippedCount = clipped.data?.call_sites.length ?? 0;
+
+    // Raise the budget via config — NO rebuild, NO session restart.
+    writeConfig(process.env["HOME"]!, {
+      graph: { query_budget_bytes: { find_usages: 200_000 } },
+    });
+
+    const full = (await dispatchGraphTool(
+      "find_usages",
+      { target: { file: "src/a.ts", symbol: "a" } },
+      repo,
+    )) as { ok: boolean; data?: { call_sites: unknown[] }; truncated?: { dropped_count: number } };
+    assert.equal(full.ok, true);
+    // Cache miss → fresh query with new budget → more entries + no truncation.
+    assert.ok(
+      (full.data?.call_sites.length ?? 0) > clippedCount,
+      `expected more call sites after raising budget; got ${full.data?.call_sites.length} vs ${clippedCount}`,
+    );
+    assert.equal(full.truncated, undefined, "no truncation at generous budget");
+  });
+});
+
 test("read-side auto-refresh: fresh graph hits cache; rebuild only on stale", async () => {
   await withSandbox(async (repo) => {
     await dispatchGraphTool("build_or_update_graph", {}, repo);
