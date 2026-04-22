@@ -175,12 +175,11 @@ export interface NudgeConfig {
   // intercept nudge never fires. Default: true.
   enabled: boolean;
   oss_search: {
-    // Hard wall-clock cap for the npm search subprocess. Default: 5000.
+    // Hard wall-clock cap for registry search / npm CLI fallback. Default: 5000.
     timeout_ms: number;
     // Filter threshold on npm's popularity score proxy. Default: 1000.
-    // (Not a true weekly-download count today since `npm search --json`
-    // doesn't expose that directly — kept as a field name for future use
-    // when we enrich with `npm view <name>` in a follow-up release.)
+    // (Not a true weekly-download count today; npm's popularity score is used
+    // as the proxy until we enrich with package-level download data.)
     min_weekly_downloads: number;
     // How many ranked candidates to return at most. Hard-capped at 10.
     // Default: 5.

@@ -2,14 +2,15 @@ import { spawnSync } from "node:child_process";
 import { get } from "node:https";
 import type { FailOpen } from "../graph/types.js";
 
-// Thin, sync wrapper over `npm search --json <query>`. Used by the
-// `find_oss_alternatives` MCP tool to surface ranked, well-maintained
-// libraries before the agent reimplements functionality from scratch.
+// Thin wrapper over npm registry search. Used by the `find_oss_alternatives`
+// MCP tool to surface ranked, well-maintained libraries before the agent
+// reimplements functionality from scratch.
 //
 // Design notes:
-// - Subprocess rather than direct HTTP: matches the existing precedent at
-//   `src/cli/update.ts` (spawnSync "npm view ...") and avoids introducing a
-//   new HTTP client dep. Users already have npm because they install tokenomy.
+// - Direct registry HTTP first because the npm CLI no longer exposes
+//   score/searchScore in `npm search --json`.
+// - CLI fallback stays in place for offline/corporate-proxy environments where
+//   `npm search` might still work through local npm configuration.
 // - Fail-open everywhere: npm missing / timeout / malformed output all return
 //   a structured FailOpen so callers (and the agent) proceed gracefully to a
 //   from-scratch implementation.
@@ -51,13 +52,15 @@ export interface NpmSearchOk {
 
 export type NpmSearchResult = NpmSearchOk | FailOpen;
 
-// npm search --json shape (observed on npm 10.x+). Nested `package` and
-// `score` objects; some fields are optional depending on npm version.
+// npm registry search object shape. The CLI fallback is accepted too: some npm
+// versions return the same nested package/score object, while newer versions
+// flatten package fields and omit score data.
 interface NpmSearchEntry {
   package?: {
     name?: string;
     version?: string;
     description?: string;
+    keywords?: string[];
     date?: string;
     links?: { npm?: string; homepage?: string; repository?: string };
   };
@@ -79,6 +82,27 @@ interface NpmSearchEntry {
   deprecated?: string | boolean;
 }
 
+interface NpmRegistrySearchResponse {
+  objects?: NpmSearchEntry[];
+}
+
+interface NpmRegistryQueryResponse {
+  query: string;
+  weight: number;
+  entries: NpmSearchEntry[];
+}
+
+interface NpmCandidate {
+  entry: OssAlternative;
+  raw: NpmSearchEntry;
+  aggregate: number;
+  downloads?: number;
+}
+
+interface SearchDeadline {
+  expiresAt: number;
+}
+
 const fail = (reason: string, hint?: string): FailOpen => ({
   ok: false,
   reason,
@@ -91,12 +115,12 @@ const readField = <T>(entry: NpmSearchEntry, key: keyof NpmSearchEntry): T | und
   return entry[key] as T | undefined;
 };
 
-const normalizeEntry = (raw: NpmSearchEntry): OssAlternative | null => {
+const normalizeEntry = (raw: NpmSearchEntry, normalizedFinal?: number): OssAlternative | null => {
   const name = readField<string>(raw, "name");
   if (typeof name !== "string" || name.length === 0) return null;
   const version = readField<string>(raw, "version") ?? "unknown";
   const description = readField<string>(raw, "description") ?? "";
-  const final = raw.score?.final ?? 0.5;
+  const final = normalizedFinal ?? raw.score?.final ?? 0.5;
   const quality = raw.score?.detail?.quality ?? final;
   const popularity = raw.score?.detail?.popularity ?? final;
   const maintenance = raw.score?.detail?.maintenance ?? final;
@@ -140,6 +164,19 @@ const fetchText = (url: string, timeoutMs: number): Promise<string | null> =>
     });
     req.on("error", () => resolve(null));
   });
+
+const remainingMs = (deadline: SearchDeadline): number =>
+  Math.max(0, deadline.expiresAt - Date.now());
+
+type FetchText = typeof fetchText;
+
+let npmRegistryFetchText: FetchText = fetchText;
+const npmDownloadCache = new Map<string, number | null>();
+
+export const _setNpmSearchFetchForTests = (fn?: FetchText): void => {
+  npmRegistryFetchText = fn ?? fetchText;
+  npmDownloadCache.clear();
+};
 
 const registryAlternative = (
   ecosystem: OssEcosystem,
@@ -294,14 +331,318 @@ const passesDownloadProxy = (
   minWeeklyDownloads: number,
 ): boolean => entry.score.popularity >= popularityFloorForDownloads(minWeeklyDownloads);
 
-export const npmSearch = (query: string, opts: NpmSearchOptions): NpmSearchResult => {
-  const trimmed = query.trim();
-  if (trimmed.length === 0) {
-    return fail("invalid-input", "description must be a non-empty string");
+const parseCandidates = (
+  rawEntries: NpmSearchEntry[],
+  opts: NpmSearchOptions,
+): Array<{ entry: OssAlternative; raw: NpmSearchEntry }> => {
+  const candidates: Array<{ entry: OssAlternative; raw: NpmSearchEntry }> = [];
+  const maxFinal = Math.max(0, ...rawEntries.map((entry) => entry.score?.final ?? 0));
+  for (let i = 0; i < rawEntries.length; i++) {
+    const rawEntry = rawEntries[i];
+    if (!rawEntry) continue;
+    const normalizedFinal =
+      maxFinal > 1 && rawEntry.score?.final !== undefined
+        ? rawEntry.score.final / maxFinal
+        : undefined;
+    const entry = normalizeEntry(rawEntry, normalizedFinal);
+    if (!entry) continue;
+    if (!filterJunk(entry, rawEntry)) continue;
+    if (!passesDownloadProxy(entry, opts.minWeeklyDownloads)) continue;
+    candidates.push({ entry, raw: rawEntry });
   }
+  return candidates;
+};
+
+const rankedResult = (entries: OssAlternative[], entriesRaw: NpmSearchEntry[], opts: NpmSearchOptions): NpmSearchOk => {
+  const ranked = rank(entries, entriesRaw);
+  const cap = Math.max(1, Math.min(opts.maxResults, 10));
+  return { ok: true, results: ranked.slice(0, cap) };
+};
+
+const parseRankedEntries = (
+  rawEntries: NpmSearchEntry[],
+  opts: NpmSearchOptions,
+): NpmSearchOk => {
+  const candidates = parseCandidates(rawEntries, opts);
+  return rankedResult(
+    candidates.map((candidate) => candidate.entry),
+    candidates.map((candidate) => candidate.raw),
+    opts,
+  );
+};
+
+const parseRegistryBody = (body: string): NpmSearchEntry[] | FailOpen => {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(body) as NpmRegistrySearchResponse;
+  } catch {
+    return fail("registry-bad-json", "npm registry search returned unparseable JSON");
+  }
+  if (!raw || typeof raw !== "object") {
+    return fail("registry-bad-shape", "expected objects array from npm registry search");
+  }
+  const objects = (raw as NpmRegistrySearchResponse).objects;
+  if (!Array.isArray(objects)) {
+    return fail("registry-bad-shape", "expected objects array from npm registry search");
+  }
+  return objects;
+};
+
+const tokenizeQuery = (query: string): string[] => {
+  const stop = new Set([
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+  ]);
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2 && !stop.has(part));
+};
+
+const pushUnique = (items: string[], value: string): void => {
+  if (!items.includes(value)) items.push(value);
+};
+
+const buildNpmRegistryQueries = (query: string): Array<{ query: string; weight: number }> => {
+  const variants: string[] = [];
+  const tokens = tokenizeQuery(query);
+  const tokenSet = new Set(tokens);
+  const compact = tokens.join(" ");
+  pushUnique(variants, query);
+  if (compact && compact !== query.toLowerCase()) pushUnique(variants, compact);
+
+  // Adjacent-token concatenations ("deep merge" → "deepmerge", "rate limit" →
+  // "ratelimit") — many canonical npm packages are named as a single joined
+  // word even when the concept is universally spoken as two. Without this,
+  // the registry's text-match ranker sends `deepmerge`, `ratelimit`, etc. to
+  // the back of the list.
+  for (let i = 0; i < tokens.length - 1 && variants.length < 8; i++) {
+    const a = tokens[i]!;
+    const b = tokens[i + 1]!;
+    if (a.length >= 3 && b.length >= 3) pushUnique(variants, `${a}${b}`);
+  }
+
+  if (tokenSet.has("retry") || tokenSet.has("backoff")) {
+    pushUnique(variants, "async retry backoff");
+    pushUnique(variants, "promise retry backoff");
+    if (tokenSet.has("backoff")) pushUnique(variants, "keywords:backoff");
+    pushUnique(variants, "keywords:retry");
+  }
+
+  if (tokenSet.has("http") || tokenSet.has("fetch") || tokenSet.has("request")) {
+    if (tokenSet.has("client")) pushUnique(variants, "keywords:http client");
+    pushUnique(variants, "keywords:http");
+    pushUnique(variants, "keywords:fetch");
+    pushUnique(variants, "http request");
+    pushUnique(variants, "fetch http client");
+  }
+
+  return variants.slice(0, 8).map((variant, index) => ({
+    query: variant,
+    weight: index === 0 ? 1.15 : 1,
+  }));
+};
+
+const npmRegistrySearchUrl = (query: string): string =>
+  `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=20`;
+
+const npmDownloadsUrl = (name: string): string =>
+  `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`;
+
+const fetchDownloadCount = async (
+  name: string,
+  deadline: SearchDeadline,
+): Promise<number | null> => {
+  if (npmDownloadCache.has(name)) return npmDownloadCache.get(name) ?? null;
+  const timeoutMs = remainingMs(deadline);
+  if (timeoutMs <= 0) return null;
+  const body = await npmRegistryFetchText(npmDownloadsUrl(name), timeoutMs);
+  if (!body) {
+    npmDownloadCache.set(name, null);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(body) as { downloads?: unknown };
+    const downloads =
+      typeof parsed.downloads === "number" && Number.isFinite(parsed.downloads)
+        ? parsed.downloads
+        : null;
+    npmDownloadCache.set(name, downloads);
+    return downloads;
+  } catch {
+    npmDownloadCache.set(name, null);
+    return null;
+  }
+};
+
+// Known big-vendor scopes. Packages under these scopes are usually vendor-SDK
+// fragments that happen to keyword-match a general utility query. We penalize
+// them unless the query mentions any part of the vendor name.
+const VENDOR_SCOPES: ReadonlySet<string> = new Set([
+  "@aws-amplify",
+  "@aws-cdk",
+  "@aws-sdk",
+  "@google-cloud",
+  "@google-ai",
+  "@azure",
+  "@microsoft",
+  "@oracle",
+  "@cloudflare",
+  "@alibaba-cloud",
+  "@tencent-cloud",
+  "@huaweicloud",
+  "@sap",
+  "@ibm",
+  "@salesforce",
+]);
+
+const scoreIntentPenalty = (name: string, queryTokens: Set<string>): number => {
+  let penalty = 1;
+  if (name.startsWith("@")) {
+    penalty *= 0.8;
+    const slash = name.indexOf("/");
+    const scope = slash > 0 ? name.slice(0, slash) : name;
+    if (VENDOR_SCOPES.has(scope)) {
+      const vendorWords = scope.slice(1).split("-");
+      const mentioned = vendorWords.some((word) => queryTokens.has(word));
+      if (!mentioned) penalty *= 0.5;
+    }
+  }
+  if (!queryTokens.has("cli") && /(?:^|[-_/])cli(?:$|[-_/])/.test(name)) penalty *= 0.65;
+  if (queryTokens.has("retry") && !name.toLowerCase().includes("retry")) penalty *= 0.85;
+  return penalty;
+};
+
+const rankRegistryResponses = async (
+  originalQuery: string,
+  responses: NpmRegistryQueryResponse[],
+  opts: NpmSearchOptions,
+  deadline: SearchDeadline,
+): Promise<NpmSearchOk> => {
+  const byName = new Map<string, NpmCandidate>();
+  for (const response of responses) {
+    const candidates = parseCandidates(response.entries, opts);
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      if (!candidate) continue;
+      const key = candidate.entry.name.toLowerCase();
+      const aggregate = response.weight / (i + 4);
+      const existing = byName.get(key);
+      if (!existing) {
+        byName.set(key, { ...candidate, aggregate });
+      } else {
+        existing.aggregate += aggregate;
+        if (candidate.entry.score.overall > existing.entry.score.overall) {
+          existing.entry = candidate.entry;
+          existing.raw = candidate.raw;
+        }
+      }
+    }
+  }
+
+  const candidates = [...byName.values()];
+  candidates.sort((a, b) => b.aggregate - a.aggregate);
+  const enrichmentPool = candidates.slice(0, 15);
+  for (let i = 0; i < enrichmentPool.length; i += 4) {
+    if (remainingMs(deadline) <= 0) break;
+    await Promise.all(
+      enrichmentPool.slice(i, i + 4).map(async (candidate) => {
+        const downloads = await fetchDownloadCount(candidate.entry.name, deadline);
+        if (downloads !== null) candidate.downloads = downloads;
+      }),
+    );
+  }
+
+  const maxDownloadLog = Math.max(
+    0,
+    ...enrichmentPool.map((candidate) => Math.log1p(candidate.downloads ?? 0)),
+  );
+  const queryTokens = new Set(tokenizeQuery(originalQuery));
+  const scored = candidates.map((candidate) => {
+    const downloadScore =
+      maxDownloadLog > 0 && candidate.downloads !== undefined
+        ? Math.log1p(candidate.downloads) / maxDownloadLog
+        : candidate.entry.score.popularity;
+    const key =
+      (candidate.aggregate * 0.65 + downloadScore * 0.35) *
+      scoreIntentPenalty(candidate.entry.name, queryTokens);
+    return { candidate, key, downloadScore };
+  });
+  scored.sort((a, b) => b.key - a.key);
+
+  const maxKey = Math.max(0, ...scored.map((item) => item.key));
+  const cap = Math.max(1, Math.min(opts.maxResults, 10));
+  return {
+    ok: true,
+    results: scored.slice(0, cap).map(({ candidate, key, downloadScore }) => {
+      const overall = Math.max(
+        maxKey > 0 ? key / maxKey : 0,
+        candidate.entry.score.overall,
+      );
+      return {
+        ...candidate.entry,
+        score: {
+          ...candidate.entry.score,
+          overall,
+          popularity: downloadScore,
+        },
+        fit_reason: buildFitReason(
+          candidate.entry.score.quality,
+          downloadScore,
+          candidate.entry.score.maintenance,
+        ),
+      };
+    }),
+  };
+};
+
+const searchNpmRegistry = async (
+  query: string,
+  opts: NpmSearchOptions,
+): Promise<NpmSearchResult> => {
+  const deadline = { expiresAt: Date.now() + opts.timeoutMs };
+  const queries = buildNpmRegistryQueries(query);
+  const fetched = await Promise.all(
+    queries.map(async (searchQuery) => {
+      const timeoutMs = remainingMs(deadline);
+      if (timeoutMs <= 0) return null;
+      const body = await npmRegistryFetchText(npmRegistrySearchUrl(searchQuery.query), timeoutMs);
+      if (!body) return null;
+      const entries = parseRegistryBody(body);
+      return Array.isArray(entries) ? { ...searchQuery, entries } : entries;
+    }),
+  );
+  const failures = fetched.filter(
+    (item): item is FailOpen => !!item && "ok" in item && item.ok === false,
+  );
+  const responses = fetched.filter(
+    (item): item is NpmRegistryQueryResponse => !!item && !("ok" in item),
+  );
+  if (responses.length === 0) {
+    if (failures[0]) return failures[0];
+    return fail(
+      "registry-unavailable",
+      "npm registry search did not return results; falling back to npm CLI.",
+    );
+  }
+  return rankRegistryResponses(query, responses, opts, deadline);
+};
+
+const searchNpmCli = (query: string, opts: NpmSearchOptions): NpmSearchResult => {
   let r;
   try {
-    r = spawnSync("npm", ["search", "--json", trimmed], {
+    r = spawnSync("npm", ["search", "--json", query], {
       encoding: "utf8",
       timeout: opts.timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
@@ -328,21 +669,25 @@ export const npmSearch = (query: string, opts: NpmSearchOptions): NpmSearchResul
   }
   if (!Array.isArray(raw)) return fail("bad-shape", "expected JSON array from npm search");
 
-  const rawEntries = raw as NpmSearchEntry[];
-  const normalized: OssAlternative[] = [];
-  const rawForRanked: NpmSearchEntry[] = [];
-  for (let i = 0; i < rawEntries.length; i++) {
-    const rawEntry = rawEntries[i];
-    if (!rawEntry) continue;
-    const entry = normalizeEntry(rawEntry);
-    if (!entry) continue;
-    if (!filterJunk(entry, rawEntry)) continue;
-    if (!passesDownloadProxy(entry, opts.minWeeklyDownloads)) continue;
-    normalized.push(entry);
-    rawForRanked.push(rawEntry);
+  return parseRankedEntries(raw as NpmSearchEntry[], opts);
+};
+
+const shouldFallbackToCli = (result: NpmSearchResult): boolean =>
+  !result.ok &&
+  (result.reason === "registry-unavailable" ||
+    result.reason === "registry-bad-json" ||
+    result.reason === "registry-bad-shape");
+
+export const npmSearch = async (
+  query: string,
+  opts: NpmSearchOptions,
+): Promise<NpmSearchResult> => {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) {
+    return fail("invalid-input", "description must be a non-empty string");
   }
 
-  const ranked = rank(normalized, rawForRanked);
-  const cap = Math.max(1, Math.min(opts.maxResults, 10));
-  return { ok: true, results: ranked.slice(0, cap) };
+  const registry = await searchNpmRegistry(trimmed, opts);
+  if (!shouldFallbackToCli(registry)) return registry;
+  return searchNpmCli(trimmed, opts);
 };

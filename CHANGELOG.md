@@ -12,6 +12,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.19] — 2026-04-22
+
+Improves npm package ranking for `find_oss_alternatives` by querying the npm
+registry search endpoint directly, restoring npm's score/searchScore signals
+for relevance, quality, popularity, and maintenance.
+
+### Fixed
+
+- **npm OSS alternative ranking** now uses
+  `https://registry.npmjs.org/-/v1/search?text=<query>&size=20` before falling
+  back to `npm search --json`. This avoids the flat `0.5` fallback scores from
+  newer npm CLI output and lets canonical packages like `p-retry`,
+  `async-retry`, `retry`, `axios`, `got`, and `node-fetch` surface by real npm
+  relevance/composite scores.
+- npm ranking now aggregates a bounded set of query variants with reciprocal
+  rank scoring, then enriches the top candidate pool with npm's weekly download
+  counts. This prevents literal text-match packages like `retry-cli` and scoped
+  `http-client` utilities from crowding out broadly adopted libraries.
+- Query-variant builder emits adjacent-token concatenations (`deep merge` →
+  `deepmerge`, `rate limit` → `ratelimit`), so canonical single-word packages
+  surface correctly instead of losing to multi-word near-synonyms.
+- Intent penalty now covers big-vendor scopes (`@aws-amplify`, `@aws-cdk`,
+  `@aws-sdk`, `@google-cloud`, `@azure`, `@cloudflare`, `@sap`, `@ibm`, …) at
+  0.5× when the user's query does not mention the vendor. Keeps generic
+  utility queries from returning vendor-SDK fragments that happen to keyword-
+  match.
+- Registry responses whose `score.final` is returned in raw relevance units are
+  normalized back into a 0–1 overall score for stable tool output.
+
+### Tests
+
+- Updated npm-search fixtures to the registry `{ objects: [...] }` response
+  shape and added coverage for registry-first behavior, CLI fallback, query
+  variant aggregation, and raw registry score normalization.
+
 ## [0.1.0-alpha.18] — 2026-04-22
 
 Adds an OSS-alternatives-first nudge so agents check for existing repo work and maintained packages before writing utility code from scratch. The feature has two parts: a new `find_oss_alternatives` MCP tool on `tokenomy-graph`, and a conservative `PreToolUse` `Write` nudge for new utility-like files.
@@ -399,7 +434,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.18...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.19...HEAD
+[0.1.0-alpha.19]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.19
 [0.1.0-alpha.18]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.18
 [0.1.0-alpha.17]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.17
 [0.1.0-alpha.16]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.16

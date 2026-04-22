@@ -493,7 +493,7 @@ const dispatchGraphToolUncached = async (
     const searches = await Promise.all(
       ecosystems.map((ecosystem) =>
         ecosystem === "npm"
-          ? Promise.resolve(npmSearch(query, searchOptions))
+          ? npmSearch(query, searchOptions)
           : registrySearch(ecosystem, query, searchOptions),
       ),
     );

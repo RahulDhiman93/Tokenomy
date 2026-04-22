@@ -14,6 +14,7 @@ import {
   _resetQueryCacheForTests,
   dispatchGraphTool,
 } from "../../src/mcp/handlers.js";
+import { _setNpmSearchFetchForTests } from "../../src/nudge/npm-search.js";
 
 interface FakeNpmSetup {
   stdout: string;
@@ -36,6 +37,7 @@ const withFakeNpm = async <T>(
     chmodSync(npmPath, 0o755);
     process.env["PATH"] = `${bin}${delimiter}${originalPath ?? ""}`;
     process.env["HOME"] = home;
+    _setNpmSearchFetchForTests(async () => null);
     _resetQueryCacheForTests();
     return await fn(repo, home);
   } finally {
@@ -43,6 +45,7 @@ const withFakeNpm = async <T>(
     else process.env["PATH"] = originalPath;
     if (originalHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = originalHome;
+    _setNpmSearchFetchForTests();
     _resetQueryCacheForTests();
     rmSync(home, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
