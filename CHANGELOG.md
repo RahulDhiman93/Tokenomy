@@ -12,6 +12,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.20] — 2026-04-22
+
+Fixes a silent truncation in `find_oss_alternatives` repo-search that collapsed
+`repo_results` to `[]` on any real-world codebase, and teaches `tokenomy update`
+to restage the graph MCP server when one is already registered.
+
+### Fixed
+
+- **`repo_results` was silently empty on large repos.** `src/nudge/repo-search.ts`
+  spawned a one-stage `git grep -n -E "tok1|tok2"` with `maxBuffer: 64_000`. On
+  chatbox-js with a query like `runtime configuration loader`, the same command
+  produces ~2.7 MB of output — 43× over the buffer. `spawnSync` aborts with
+  `ENOBUFS`, returns `status: null`, and the caller returns `[]`. Users never
+  saw repo matches regardless of how many existed.
+
+  Fix: two-stage search. Stage 1 runs `git grep -l` (filenames only — one short
+  line per match file, bounded in practice by repo file count) with a 4 MB
+  buffer. Stage 2 runs `git grep -n --max-count 3` against only the first 50
+  returned files with an 8 MB buffer (generous enough to survive repos that
+  commit bundled / minified assets with very long lines). Output is always
+  small relative to repo size, and matches are still capped by `--max-count 3`
+  per file and `maxResults` overall. Applied to both current-branch and
+  other-branch paths.
+
+### Changed
+
+- **`tokenomy update` now restages the graph MCP server when one was already
+  registered.** Previously, `update` only re-patched the PostToolUse /
+  PreToolUse hooks; users with a `tokenomy-graph` entry in `~/.claude.json`
+  had to remember to re-run `tokenomy init --graph-path=<repo>` manually to
+  pick up schema changes. `update` now reads the existing graph path from
+  `~/.claude.json`, validates that the directory still exists, and forwards
+  `--graph-path=<existing path>` to the re-init. No new flag required; when
+  no graph is registered, behavior is unchanged.
+
+### Tests
+
+- Added a unit test that writes enough matching files to overflow the old
+  64 KB buffer (100 files, each containing the query tokens repeatedly), then
+  asserts `repo_results` is still non-empty and well-formed. Full suite:
+  **357/357 passing**.
+
 ## [0.1.0-alpha.19] — 2026-04-22
 
 Improves npm package ranking for `find_oss_alternatives` by querying the npm
@@ -435,7 +477,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.19...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.20...HEAD
+[0.1.0-alpha.20]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.20
 [0.1.0-alpha.19]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.19
 [0.1.0-alpha.18]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.18
 [0.1.0-alpha.17]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.17

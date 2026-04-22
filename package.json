@@ -1,6 +1,6 @@
 {
   "name": "tokenomy",
-  "version": "0.1.0-alpha.19",
+  "version": "0.1.0-alpha.20",
   "description": "Surgical Claude Code hook that transparently trims bloated MCP tool responses and clamps oversized file reads — stop burning tokens on tool chatter.",
   "type": "module",
   "engines": {

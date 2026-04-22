@@ -117,3 +117,43 @@ test("repoSearch: returns matches from another local branch", () => {
     );
   });
 });
+
+test("repoSearch: survives >64 KB of git-grep output (large-repo regression)", () => {
+  withGitRepo((repo) => {
+    // Seed 120 files that each match the search pattern on multiple lines.
+    // With the legacy single-stage `git grep -n` + 64 KB maxBuffer, the
+    // subprocess overflows with ENOBUFS, status becomes null, and repoSearch
+    // silently returns []. The two-stage implementation caps Stage 1 output
+    // at filenames only, then runs Stage 2 against the first 50 files.
+    mkdirSync(join(repo, "src", "providers"), { recursive: true });
+    const noise = "provider runtime configuration ".repeat(40);
+    for (let i = 0; i < 120; i++) {
+      writeFileSync(
+        join(repo, "src", "providers", `Provider${i}.ts`),
+        `// ${noise}\nexport const Provider${i} = () => null;\n// ${noise}\n`,
+      );
+    }
+    runGit(repo, ["add", "."]);
+    runGit(repo, [
+      "-c",
+      "user.name=Tokenomy Test",
+      "-c",
+      "user.email=tokenomy@example.test",
+      "commit",
+      "-m",
+      "seed large repo",
+    ]);
+
+    const result = repoSearch(repo, "provider runtime configuration", {
+      timeoutMs: 10_000,
+      maxResults: 5,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    if (!result.ok) return;
+    assert.ok(
+      result.results.length > 0,
+      "repo search must return matches even when raw git grep output exceeds 64 KB",
+    );
+    assert.equal(result.results[0]?.source, "current-branch");
+  });
+});

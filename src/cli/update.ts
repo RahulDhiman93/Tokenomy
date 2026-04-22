@@ -1,8 +1,31 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOKENOMY_VERSION } from "../core/version.js";
+import { getClaudeMcpServer } from "../util/claude-user-config.js";
+
+// Read the previously-registered graph path so `tokenomy update` can restage
+// the graph MCP server for the user without making them remember their path.
+// Returns null when no graph is registered, when the registered entry is
+// malformed, or when the directory no longer exists on disk.
+const previouslyRegisteredGraphPath = (): string | null => {
+  const entry = getClaudeMcpServer("tokenomy-graph") as
+    | { command?: unknown; args?: unknown }
+    | undefined;
+  if (!entry || entry.command !== "tokenomy" || !Array.isArray(entry.args)) return null;
+  const args = entry.args as string[];
+  const pathIdx = args.indexOf("--path");
+  if (pathIdx === -1 || pathIdx + 1 >= args.length) return null;
+  const path = args[pathIdx + 1];
+  if (typeof path !== "string" || path.length === 0) return null;
+  try {
+    if (!existsSync(path) || !statSync(path).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return path;
+};
 
 // `tokenomy update` — self-update command.
 //
@@ -233,8 +256,21 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
   // the newly-installed version. We call runInit() from the *new* install
   // via a separate node invocation so we don't stage a stale in-memory
   // dist from the old process.
-  process.stdout.write("\nRe-staging hook + config…\n");
-  const reinit = spawnSync("tokenomy", ["init"], { stdio: "inherit" });
+  //
+  // If the user previously registered `tokenomy-graph` (detectable via
+  // ~/.claude.json), forward the same --graph-path to `tokenomy init` so
+  // the MCP registration stays in sync and the graph is refreshed under
+  // the new binary's schema. Skipped silently when no graph is registered.
+  const existingGraphPath = previouslyRegisteredGraphPath();
+  const initArgs = existingGraphPath
+    ? ["init", `--graph-path=${existingGraphPath}`]
+    : ["init"];
+  process.stdout.write(
+    existingGraphPath
+      ? `\nRe-staging hook + config + graph (${existingGraphPath})…\n`
+      : "\nRe-staging hook + config…\n",
+  );
+  const reinit = spawnSync("tokenomy", initArgs, { stdio: "inherit" });
   if (reinit.status !== 0) {
     process.stderr.write(
       "tokenomy update: install succeeded but `tokenomy init` failed. " +
