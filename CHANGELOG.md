@@ -42,7 +42,7 @@ Retires the largest correctness gap in the graph: `tsconfig.json` / `jsconfig.js
 
 ### Tests
 
-- +14 tests: 11 resolver scenarios (alias with wildcard, baseUrl-only, extends chain, monorepo nested tsconfigs, jsconfig.json, excluded alias targets → external-module, no-tsconfig-no-change, config toggle off, malformed tsconfig fail-open, fingerprint stability + extends-chain invalidation), 2 stale-check (tsconfig paths edit invalidates, pre-alpha.17 meta rebuilds), 1 e2e (`find_usages` on a Next.js-style repo returns real callers through `@/` alias). Full suite: **318/318 passing**.
+- +16 tests: 12 resolver scenarios (alias with wildcard, baseUrl-only, extends chain, monorepo nested tsconfigs, jsconfig.json, excluded alias targets → external-module, no-tsconfig-no-change, config toggle off, malformed tsconfig fail-open, fingerprint stability + extends-chain invalidation, auxiliary variants like `tsconfig.app.json` don't shadow the canonical `tsconfig.json`), 3 stale-check (tsconfig paths edit invalidates, toggling `tsconfig.enabled` invalidates, pre-alpha.17 meta rebuilds), 1 e2e (`find_usages` on a Next.js-style repo returns real callers through `@/` alias). Full suite: **320/320 passing**.
 
 ## [0.1.0-alpha.16] — 2026-04-21
 
