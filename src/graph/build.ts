@@ -4,8 +4,11 @@ import type { Config } from "../core/types.js";
 import { graphBuildLogPath, graphLockPath } from "../core/paths.js";
 import { stableStringify } from "../util/json.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
-import { enumerateGraphFiles } from "./enumerate.js";
+import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
+import { computeTsconfigFingerprint } from "./tsconfig-fingerprint.js";
+import { createTsconfigResolver } from "./tsconfig-resolver.js";
+import type { TsconfigResolver } from "./tsconfig-resolver.js";
 import { sha256FileSync } from "./hash.js";
 import { resolveRepoId } from "./repo-id.js";
 import {
@@ -87,6 +90,24 @@ const buildGraphFromFiles = async (
   const file_hashes: Record<string, string> = {};
   const file_mtimes: Record<string, number> = {};
 
+  // Build the tsconfig-paths resolver once per build, share across every
+  // file's extraction. Skipped when disabled or when TypeScript isn't
+  // present — pre-alpha.17 behavior falls out naturally.
+  let tsconfigResolver: TsconfigResolver | undefined;
+  // Always compute + persist the tsconfig fingerprint — even when the
+  // resolver is disabled — so toggling `graph.tsconfig.enabled` from true
+  // ↔ false invalidates any previously-cached graph. The "disabled" state
+  // uses a distinct sentinel hash so the stale check never confuses the two.
+  const raw = enumerateAllFiles(repoPath);
+  if (cfg.graph.tsconfig.enabled) {
+    tsconfigResolver = createTsconfigResolver(repoPath, fileSet, tsLoaded.ts, raw.files);
+  }
+  const tsconfigFingerprint = computeTsconfigFingerprint(
+    repoPath,
+    raw.files,
+    cfg.graph.tsconfig.enabled,
+  );
+
   for (const file of files) {
     if (Date.now() > deadline) return fail("timeout");
     const absPath = join(repoPath, ...file.split("/"));
@@ -94,7 +115,7 @@ const buildGraphFromFiles = async (
     file_hashes[file] = sha256FileSync(absPath);
     file_mtimes[file] = st.mtimeMs;
     const source = readFileSync(absPath, "utf8");
-    const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts);
+    const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts, tsconfigResolver);
     if (extracted.edges.length > cfg.graph.max_edges_per_file) {
       return fail(
         "graph-too-large",
@@ -134,6 +155,7 @@ const buildGraphFromFiles = async (
     parse_error_count: graph.parse_errors.length,
     skipped_files,
     exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
+    tsconfig_fingerprint: tsconfigFingerprint,
   };
   new JsonGraphStore().save(repoId, graph, meta);
 

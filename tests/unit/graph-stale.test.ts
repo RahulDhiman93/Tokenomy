@@ -6,15 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../../src/core/config.js";
 import { fingerprintExcludes } from "../../src/graph/exclude-fingerprint.js";
+import { computeTsconfigFingerprint } from "../../src/graph/tsconfig-fingerprint.js";
 import { sha256FileSync } from "../../src/graph/hash.js";
 import { getGraphStaleStatus, isGraphStaleCheap } from "../../src/graph/stale.js";
 import { buildGraph } from "../../src/graph/build.js";
+import { enumerateAllFiles } from "../../src/graph/enumerate.js";
 import type { GraphMeta } from "../../src/graph/schema.js";
 import type { Config } from "../../src/core/types.js";
 
 const createMeta = (dir: string): GraphMeta => {
   const file = join(dir, "src", "a.ts");
   const st = statSync(file);
+  const raw = enumerateAllFiles(dir);
   return {
     schema_version: 1,
     repo_id: "repo",
@@ -29,6 +32,11 @@ const createMeta = (dir: string): GraphMeta => {
     hard_cap: 5_000,
     parse_error_count: 0,
     exclude_fingerprint: fingerprintExcludes(DEFAULT_CONFIG.graph.exclude),
+    tsconfig_fingerprint: computeTsconfigFingerprint(
+      dir,
+      raw.files,
+      DEFAULT_CONFIG.graph.tsconfig.enabled,
+    ),
   };
 };
 
@@ -187,6 +195,87 @@ test("isGraphStaleCheap: mtime change surfaces the file in stale_files", async (
     assert.equal(result.missing, false);
     assert.equal(result.stale, true);
     assert.deepEqual(result.stale_files, ["src/a.ts"]);
+  });
+});
+
+test("isGraphStaleCheap: editing tsconfig paths invalidates the graph", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } },
+      }),
+    );
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+
+    // Edit paths — no source-file change, but resolution semantics changed.
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["src/*"] } },
+      }),
+    );
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, true, "tsconfig paths edit must invalidate");
+  });
+});
+
+test("isGraphStaleCheap: toggling graph.tsconfig.enabled invalidates the graph", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } },
+      }),
+    );
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    // Build with resolver enabled (the default).
+    await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+
+    // Flip to disabled — meta's fingerprint reflects enabled state, current
+    // check uses disabled sentinel. Must mismatch → stale.
+    const disabledCfg: Config = {
+      ...DEFAULT_CONFIG,
+      graph: { ...DEFAULT_CONFIG.graph, tsconfig: { enabled: false } },
+    };
+    const result = isGraphStaleCheap(dir, disabledCfg);
+    assert.equal(result.missing, false);
+    assert.equal(result.stale, true, "disabling tsconfig must invalidate a graph built with it enabled");
+  });
+});
+
+test("isGraphStaleCheap: pre-alpha.17 meta (no tsconfig_fingerprint) is stale", async () => {
+  await withTmpRepo(async (dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    await buildGraph({ cwd: dir, config: DEFAULT_CONFIG });
+
+    // Strip tsconfig_fingerprint from meta to simulate pre-alpha.17 state.
+    const { graphMetaPath } = await import("../../src/core/paths.js");
+    const { resolveRepoId } = await import("../../src/graph/repo-id.js");
+    const { repoId } = resolveRepoId(dir);
+    const { readFileSync, writeFileSync: wfs } = await import("node:fs");
+    const metaPath = graphMetaPath(repoId);
+    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as Record<string, unknown>;
+    delete meta["tsconfig_fingerprint"];
+    wfs(metaPath, JSON.stringify(meta, null, 2));
+
+    const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
+    assert.equal(result.stale, true, "missing tsconfig_fingerprint must invalidate on upgrade");
   });
 });
 

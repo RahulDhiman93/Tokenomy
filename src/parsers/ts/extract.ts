@@ -15,6 +15,7 @@ import {
   type Node,
 } from "../../graph/schema.js";
 import { resolveSpecifier } from "../../graph/resolve.js";
+import type { TsconfigResolver } from "../../graph/tsconfig-resolver.js";
 import { scriptKindFor } from "./script-kind.js";
 
 export interface ExtractFileResult {
@@ -45,6 +46,10 @@ interface ExtractionState {
   readonly pendingLocalExports: Array<{ exportNodeId: string; localName: string }>;
   readonly nextLineSlot: (name: string, line: number) => number;
   readonly testNodeId?: string;
+  // Optional tsconfig-paths resolver. When present, non-relative specifiers
+  // try this resolver first; on null it falls through to `resolveSpecifier`
+  // (which yields the existing external-module fallback).
+  readonly tsconfigResolver?: TsconfigResolver;
 }
 
 interface TraversalContext {
@@ -111,7 +116,18 @@ const resolveTarget = (
   state: ExtractionState,
   specifier: string,
 ): { id: string; kind: "file" | "external-module" } => {
-  const target = resolveSpecifier(state.filePath, specifier, state.files);
+  // For non-relative specifiers (e.g. `@/hooks/foo`, `react`), try the
+  // tsconfig path-alias resolver first. If it returns non-null, the
+  // specifier resolved to an in-graph file via `paths`/`baseUrl` — use
+  // that. Otherwise fall through to the baseline `resolveSpecifier`, which
+  // yields an external-module node (preserves pre-alpha.17 behavior for
+  // genuine bare imports like `react`).
+  const isRelative = specifier.startsWith(".") || specifier.startsWith("/");
+  const target =
+    !isRelative && state.tsconfigResolver
+      ? state.tsconfigResolver.resolve(state.filePath, specifier) ??
+        resolveSpecifier(state.filePath, specifier, state.files)
+      : resolveSpecifier(state.filePath, specifier, state.files);
   if (target.kind === "external-module") {
     addNode(state, createExternalModuleNode(target.target));
     return { id: `ext:${target.target}`, kind: "external-module" };
@@ -633,6 +649,7 @@ export const extractTsFileGraph = (
   sourceText: string,
   files: ReadonlySet<string>,
   ts: typeof TS,
+  tsconfigResolver?: TsconfigResolver,
 ): ExtractFileResult => {
   const sourceFile = ts.createSourceFile(
     filePath,
@@ -664,6 +681,7 @@ export const extractTsFileGraph = (
     pendingLocalExports: [],
     nextLineSlot: withLineCounter(),
     ...(isTestFile(filePath) ? { testNodeId: `test:${filePath}` } : {}),
+    ...(tsconfigResolver ? { tsconfigResolver } : {}),
   };
 
   if (state.testNodeId) {
@@ -718,4 +736,6 @@ export const extractTsFileGraphFromDisk = (
   filePath: string,
   files: ReadonlySet<string>,
   ts: typeof TS,
-): ExtractFileResult => extractTsFileGraph(filePath, readFileSync(filePath, "utf8"), files, ts);
+  tsconfigResolver?: TsconfigResolver,
+): ExtractFileResult =>
+  extractTsFileGraph(filePath, readFileSync(filePath, "utf8"), files, ts, tsconfigResolver);

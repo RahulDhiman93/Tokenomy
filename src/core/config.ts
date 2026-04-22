@@ -72,6 +72,9 @@ export const DEFAULT_CONFIG: Config = {
       "**/*-bundle.mjs",
     ],
     auto_refresh_on_read: true,
+    tsconfig: {
+      enabled: true,
+    },
   },
   redact: {
     enabled: true,
