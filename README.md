@@ -12,7 +12,7 @@ A surgical hook + analysis toolkit for **Claude Code and Codex CLI** that transp
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#quickstart)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 [![Phase](https://img.shields.io/badge/phase%204-alpha-blue)](#roadmap)
-[![Tests](https://img.shields.io/badge/tests-350%20passing-brightgreen)](#contribute)
+[![Tests](https://img.shields.io/badge/tests-356%20passing-brightgreen)](#contribute)
 
 </div>
 
@@ -92,7 +92,7 @@ Since alpha.15, `init --graph-path` builds the graph for you in a single shot; p
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.18`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.18` or `tokenomy update --version 0.1.0-alpha.18`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.19`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.19` or `tokenomy update --version 0.1.0-alpha.19`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -419,8 +419,8 @@ Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.18   # npm-style pin
-tokenomy update --version=0.1.0-alpha.18  # same, explicit flag
+tokenomy update@0.1.0-alpha.19   # npm-style pin
+tokenomy update --version=0.1.0-alpha.19  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 
@@ -458,7 +458,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 
 ## 🤝 Contribute
 
-Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (350/350 currently green, 96% stmt / 85% branch / 100% func coverage).
+Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (356/356 currently green, 96% stmt / 85% branch / 100% func coverage).
 
 **Good first issues:**
 
@@ -498,7 +498,7 @@ Rules are pure: `(toolName, toolInput, toolResponse, config) → { kind: "passth
 ```bash
 git clone https://github.com/RahulDhiman93/Tokenomy && cd Tokenomy
 npm install && npm run build
-npm test             # 350 tests, ~2s
+npm test             # 356 tests, ~2s
 npm run coverage     # c8 → coverage/lcov.info + HTML
 npm run typecheck    # tsc --noEmit
 npm link             # point `tokenomy` at your local build

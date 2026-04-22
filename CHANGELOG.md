@@ -45,7 +45,8 @@ for relevance, quality, popularity, and maintenance.
 
 - Updated npm-search fixtures to the registry `{ objects: [...] }` response
   shape and added coverage for registry-first behavior, CLI fallback, query
-  variant aggregation, and raw registry score normalization.
+  variant aggregation, and raw registry score normalization. Full suite:
+  **356/356 passing**.
 
 ## [0.1.0-alpha.18] — 2026-04-22
 
