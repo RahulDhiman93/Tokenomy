@@ -139,6 +139,16 @@ export const DEFAULT_CONFIG: Config = {
       ],
       min_size_bytes: 500,
     },
+    prompt_classifier: {
+      enabled: true,
+      intents: {
+        build: true,
+        change: true,
+        remove: true,
+        review: true,
+      },
+      min_prompt_chars: 20,
+    },
   },
 };
 

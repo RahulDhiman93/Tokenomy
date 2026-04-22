@@ -227,6 +227,55 @@ test("hook: PreToolUse Write redacts content in debug preview", async () => {
   }
 });
 
+test("hook: UserPromptSubmit build-intent prompt → nudge with find_oss_alternatives", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-prompt-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Build a retry-with-backoff wrapper for our fetch calls.",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.ok(stdout.length > 0, "expected nudge output for build-intent prompt");
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+    assert.match(parsed.hookSpecificOutput.additionalContext, /find_oss_alternatives/);
+    // Savings log entry must be appended so `tokenomy report` picks it up.
+    const log = readFileSync(join(home, ".tokenomy", "savings.jsonl"), "utf8");
+    assert.match(log, /nudge:prompt-classifier:build/);
+    assert.match(log, /"tool":"UserPromptSubmit"/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: UserPromptSubmit short / neutral prompt → passthrough (no stdout)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-prompt-neutral-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Thanks, looks good",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout, "", "short/neutral prompts must not emit nudge output");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("hook: malformed stdin → exit 0 with empty stdout", async () => {
   const child = spawn(process.execPath, [HOOK], { stdio: ["pipe", "pipe", "pipe"] });
   const out: Buffer[] = [];

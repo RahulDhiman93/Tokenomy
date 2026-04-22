@@ -12,7 +12,7 @@ A surgical hook + analysis toolkit for **Claude Code and Codex CLI** that transp
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#quickstart)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 [![Phase](https://img.shields.io/badge/phase%204-alpha-blue)](#roadmap)
-[![Tests](https://img.shields.io/badge/tests-358%20passing-brightgreen)](#contribute)
+[![Tests](https://img.shields.io/badge/tests-373%20passing-brightgreen)](#contribute)
 
 </div>
 
@@ -76,7 +76,7 @@ Top tools by tokens saved
 ```bash
 npm install -g tokenomy
 tokenomy init          # patches ~/.claude/settings.json (backed up first)
-tokenomy doctor        # 13/13 ✓
+tokenomy doctor        # 14/14 ✓
 # restart Claude Code — then use it normally
 ```
 
@@ -92,7 +92,7 @@ Since alpha.15, `init --graph-path` builds the graph for you in a single shot; p
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.21`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.21` or `tokenomy update --version 0.1.0-alpha.21`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.22`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.22` or `tokenomy update --version 0.1.0-alpha.22`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -146,6 +146,8 @@ Invariants: `content.length` never shrinks, `is_error` flows through, non-text b
 **Bash input-bounder (`PreToolUse`).** Detects unbounded verbose shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) and rewrites to `set -o pipefail; <cmd> | awk 'NR<=200'`. Awk consumes producer output (no SIGPIPE); `pipefail` preserves exit codes. Excludes exit-status-sensitive commands (`git diff --exit-code`, `npm ls`, `git status --porcelain`), streaming forms (`-f`/`--follow`/`watch`/`top`), and destructive `find` actions (`-exec`, `-delete`). User pipelines, redirections, compound commands (`;`/`&&`/`||`), subshells, heredocs all passthrough. `head_limit` validated as integer in `[20, 10_000]` before interpolation (no command injection).
 
 **OSS-alternatives nudge (`PreToolUse` Write + MCP).** When Claude Code is about to create a new utility-like file (`src/utils/**`, `src/lib/**`, `pkg/**`, `internal/**`, Java `src/main/java/**`, etc.) above `nudge.write_intercept.min_size_bytes`, Tokenomy appends `additionalContext` recommending `mcp__tokenomy-graph__find_oss_alternatives` before bespoke implementation. The Write input is unchanged; Tokenomy never blocks the file write. The MCP tool searches the current repo, other local branches, npm, PyPI, pkg.go.dev, and Maven Central based on project files or explicit `ecosystems`, then returns `{query, ecosystems, repo_results, results, summary, hint}`. It is fail-open and budget-clipped like the graph tools. Privacy note: the search description/keywords go to public package registries when registry search runs; local repo/branch search stays on the machine. Disable the proactive Write nudge with `tokenomy config set nudge.write_intercept.enabled false` and avoid the MCP call for sensitive proprietary descriptions.
+
+**Prompt-classifier nudge (`UserPromptSubmit`, alpha.22+).** Fires once per user turn, BEFORE Claude plans. Classifies the prompt's intent and injects `additionalContext` pointing at the right `tokenomy-graph` MCP tool: `build|implement|add|create` → `find_oss_alternatives`; `refactor|rename|migrate|extract|replace` → `find_usages` + `get_impact_radius`; `remove|delete|drop|deprecate` → `get_impact_radius`; `review|audit|blast radius|what changed` → `get_review_context`. Conservative gates: skips prompts under 20 chars, skips when the prompt already mentions a tokenomy-graph tool, graph-dependent intents only fire when a graph snapshot exists for the repo. Per-intent toggles via `nudge.prompt_classifier.intents.{build,change,remove,review}`. Disable entirely: `tokenomy config set nudge.prompt_classifier.enabled false`.
 
 **Fail-open is non-negotiable.** Malformed stdin / parse errors / unknown shapes → exit 0 with empty stdout. 10 MB stdin cap. 2.5 s internal timeout. Exit code 2 (blocking) never used. Breaking the agent is worse than wasting tokens.
 
@@ -270,7 +272,7 @@ tokenomy config set nudge.oss_search.max_results 8    # return more OSS candidat
 ✓ Graph MCP SDK available
 ✓ Hook perf budget — p50=5ms p95=12ms max=14ms (n=30, budget 50ms)
 
-13/13 checks passed
+14/14 checks passed
 ```
 
 Every check has an actionable remediation hint on failure. For routine repair, run `tokenomy doctor --fix` — it creates the log directory, `chmod +x`'s the hook binary, and re-patches `~/.claude/settings.json` on manifest drift.
@@ -359,7 +361,7 @@ npm install -g typescript              # peer-optional; required for the graph
 tokenomy init --graph-path "$PWD"      # registers with Claude Code AND Codex — and builds the graph
                                        #   (writes ~/.claude.json, shells `codex mcp add` if on PATH,
                                        #    parses TS/JS → ~/.tokenomy/graphs/<id>/; pass --no-build to skip)
-tokenomy doctor                        # 13/13 ✓
+tokenomy doctor                        # 14/14 ✓
 # fully quit + relaunch Claude Code (Cmd+Q) so it reloads MCP servers
 
 # verify
@@ -419,8 +421,8 @@ Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.21   # npm-style pin
-tokenomy update --version=0.1.0-alpha.21  # same, explicit flag
+tokenomy update@0.1.0-alpha.22   # npm-style pin
+tokenomy update --version=0.1.0-alpha.22  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 
@@ -458,7 +460,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 
 ## 🤝 Contribute
 
-Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (358/358 currently green, 96% stmt / 85% branch / 100% func coverage).
+Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (373/373 currently green, 96% stmt / 85% branch / 100% func coverage).
 
 **Good first issues:**
 
@@ -498,11 +500,11 @@ Rules are pure: `(toolName, toolInput, toolResponse, config) → { kind: "passth
 ```bash
 git clone https://github.com/RahulDhiman93/Tokenomy && cd Tokenomy
 npm install && npm run build
-npm test             # 358 tests, ~2s
+npm test             # 373 tests, ~2s
 npm run coverage     # c8 → coverage/lcov.info + HTML
 npm run typecheck    # tsc --noEmit
 npm link             # point `tokenomy` at your local build
-tokenomy doctor      # 13/13 ✓
+tokenomy doctor      # 14/14 ✓
 # revert to published version: npm unlink -g tokenomy && npm install -g tokenomy
 # or just:                      tokenomy update --force   (from a fresh npm-installed shell)
 ```

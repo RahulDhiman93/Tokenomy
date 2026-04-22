@@ -2,10 +2,14 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { dispatch } from "./dispatch.js";
-import { preDispatch } from "./pre-dispatch.js";
+import { preDispatch, dispatchUserPrompt } from "./pre-dispatch.js";
 import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
-import type { HookInput, PreHookInput } from "../core/types.js";
+import type {
+  HookInput,
+  PreHookInput,
+  UserPromptHookInput,
+} from "../core/types.js";
 
 // Returns a shallow, size-capped snapshot of the tool_input for diagnostics.
 // Strings longer than 200 chars are truncated; unknown types are stringified.
@@ -95,9 +99,12 @@ const main = async (): Promise<void> => {
       return;
     }
 
-    let parsed: HookInput | PreHookInput;
+    let parsed: HookInput | PreHookInput | UserPromptHookInput;
     try {
-      parsed = JSON.parse(buf.toString("utf8")) as HookInput | PreHookInput;
+      parsed = JSON.parse(buf.toString("utf8")) as
+        | HookInput
+        | PreHookInput
+        | UserPromptHookInput;
     } catch {
       debugLog({ phase: "parse-fail", stdin_bytes: buf.length });
       process.exit(0);
@@ -105,6 +112,21 @@ const main = async (): Promise<void> => {
     }
 
     const cfg = loadConfig(parsed?.cwd ?? process.cwd());
+
+    if (parsed?.hook_event_name === "UserPromptSubmit") {
+      const promptInput = parsed as UserPromptHookInput;
+      const out = dispatchUserPrompt(promptInput, cfg);
+      debugLog({
+        phase: out ? "prompt-nudged" : "prompt-passthrough",
+        session_id: promptInput.session_id,
+        event: "UserPromptSubmit",
+        elapsed_ms: Date.now() - hookStart,
+        prompt_len: promptInput.prompt?.length ?? 0,
+      });
+      if (out) process.stdout.write(JSON.stringify(out));
+      process.exit(0);
+      return;
+    }
 
     if (parsed?.hook_event_name === "PreToolUse") {
       const preInput = parsed as PreHookInput;

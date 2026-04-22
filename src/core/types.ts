@@ -47,6 +47,24 @@ export interface PreHookOutput {
   };
 }
 
+// Claude Code fires UserPromptSubmit once per user turn, before the model
+// sees the prompt. The hook can inject `additionalContext` that's appended
+// to the user's message so the model sees it inline.
+export interface UserPromptHookInput {
+  session_id: string;
+  transcript_path: string;
+  cwd: string;
+  hook_event_name: "UserPromptSubmit";
+  prompt: string;
+}
+
+export interface UserPromptHookOutput {
+  hookSpecificOutput: {
+    hookEventName: "UserPromptSubmit";
+    additionalContext: string;
+  };
+}
+
 export type RuleResult =
   | { kind: "passthrough" }
   | {
@@ -200,6 +218,27 @@ export interface NudgeConfig {
     // Filters out tiny stubs / types-only files that aren't real reinvention.
     // Default: 500 bytes.
     min_size_bytes: number;
+  };
+  // UserPromptSubmit prompt-classifier nudge. Fires once per user turn,
+  // BEFORE Claude plans. Classifies the prompt's intent (build / change /
+  // remove / review) and injects `additionalContext` pointing at the right
+  // `tokenomy-graph` MCP tool. This closes the gap where Write-only nudges
+  // miss planning-phase turns ("plan X", "no code") and questions about
+  // refactors / removals that never reach a Write.
+  prompt_classifier: {
+    // Master switch for all prompt-classifier intents. Default: true.
+    enabled: boolean;
+    // Per-intent toggles — tune down if an intent produces false positives
+    // on a particular user's working style.
+    intents: {
+      build: boolean;      // "build X", "implement Y" → find_oss_alternatives
+      change: boolean;     // "refactor", "rename", "migrate" → find_usages + get_impact_radius
+      remove: boolean;     // "remove", "delete", "drop" → get_impact_radius
+      review: boolean;     // "review", "audit", "what changed" → get_review_context
+    };
+    // Skip classification on prompts shorter than this — avoids firing on
+    // "yes", "go ahead", single-word confirmations. Default: 20 chars.
+    min_prompt_chars: number;
   };
 }
 

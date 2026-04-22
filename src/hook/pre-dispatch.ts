@@ -1,9 +1,17 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { Config, PreHookInput, PreHookOutput, SavingsLogEntry } from "../core/types.js";
+import type {
+  Config,
+  PreHookInput,
+  PreHookOutput,
+  SavingsLogEntry,
+  UserPromptHookInput,
+  UserPromptHookOutput,
+} from "../core/types.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { bashBoundRule } from "../rules/bash-bound.js";
 import { writeNudgeRule } from "../rules/write-nudge.js";
+import { classifyPromptRule } from "../rules/prompt-classifier.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -127,4 +135,49 @@ export const preDispatch = (
   if (input.tool_name === "Bash") return preDispatchBash(input, cfg);
   if (input.tool_name === "Write") return preDispatchWrite(input, cfg);
   return null;
+};
+
+// Conservative token-savings estimates per intent. These are the typical
+// downstream cost when an agent skips the MCP tool and brute-forces the
+// alternative path (Read sweep, from-scratch implementation, etc.). Values
+// tuned to the low end of the observed range so reports don't overstate.
+// Bytes are back-calculated from tokens via the same ~4 bytes/token factor
+// `estimateTokens` uses internally so `tokenomy report` aggregates sanely.
+const INTENT_SAVINGS_TOKENS: Record<string, number> = {
+  build: 15_000, // from-scratch rewrite of a utility that has a library
+  change: 8_000, // brute-force Read sweep to enumerate callers
+  remove: 5_000, // verification reads before a "safe" deletion
+  review: 6_000, // reading every changed file vs hotspot-ranked list
+};
+
+export const dispatchUserPrompt = (
+  input: UserPromptHookInput,
+  cfg: Config,
+): UserPromptHookOutput | null => {
+  const r = classifyPromptRule(input.prompt ?? "", cfg, input.cwd);
+  if (r.kind !== "nudge" || !r.additionalContext) return null;
+
+  // Log a savings entry so `tokenomy report` and `tokenomy analyze` surface
+  // these nudges alongside Read/Bash/MCP trims. Token estimates are
+  // intentionally conservative — this is the value the nudge unlocks IF
+  // the agent follows through on the MCP call, not a guaranteed saving.
+  const tokensSavedEst = INTENT_SAVINGS_TOKENS[r.intent ?? ""] ?? 5_000;
+  const bytesSavedEst = tokensSavedEst * 4;
+  const entry: SavingsLogEntry = {
+    ts: new Date().toISOString(),
+    session_id: input.session_id,
+    tool: "UserPromptSubmit",
+    bytes_in: bytesSavedEst,
+    bytes_out: 0,
+    tokens_saved_est: tokensSavedEst,
+    reason: `nudge:prompt-classifier:${r.intent ?? "unknown"}`,
+  };
+  appendSavingsLog(cfg.log_path, entry);
+
+  return {
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: r.additionalContext,
+    },
+  };
 };
