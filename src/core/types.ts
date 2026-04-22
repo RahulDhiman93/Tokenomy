@@ -148,6 +148,15 @@ export interface GraphConfig {
   query_budget_bytes: GraphQueryBudgetConfig;
   exclude: string[];
   auto_refresh_on_read: boolean;
+  tsconfig: {
+    // When true, the graph builder resolves import specifiers through the
+    // nearest tsconfig.json / jsconfig.json `paths` + `baseUrl` (honors
+    // `extends` chains, including `@tsconfig/*` bases from node_modules).
+    // Covers aliases like `@/`, `~/`, `@@/`, `@app/` etc. When false, all
+    // non-relative imports fall back to external-module nodes (pre-alpha.17
+    // behavior). Default: true.
+    enabled: boolean;
+  };
 }
 
 export interface PerToolOverride {

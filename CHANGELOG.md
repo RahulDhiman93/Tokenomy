@@ -12,6 +12,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.17] — 2026-04-21
+
+Retires the largest correctness gap in the graph: `tsconfig.json` / `jsconfig.json` `paths` and `baseUrl` are now resolved, so alias-based imports (`@/hooks/foo`, `~/lib/bar`, `@@/services/baz`, `@app/widgets`, etc.) link to real source files instead of silently becoming `external-module` nodes. Surfaces correct results on Next.js, Vite, Nuxt, and monorepo codebases — repos where `find_usages` / `get_impact_radius` previously returned 0 for widely-imported hooks because the graph had no idea what the alias meant.
+
+### Added
+
+- **`tsconfig.paths` / `jsconfig.paths` resolution** (`src/graph/tsconfig-resolver.ts`). Delegates to `ts.resolveModuleName` via the already-loaded TypeScript package — inherits the full TS resolver: `baseUrl`, wildcard `paths`, `extends` chains (including `@tsconfig/*` bases from `node_modules`), conditional exports, the works. Two-layer caching per build: `ts.createModuleResolutionCache` per tsconfig (TS's native probing cache, with case-insensitive canonicalization on macOS/Windows) plus a tokenomy-level `(tsconfig, importerDir, specifier)` result memo. Cache hit rate on real repos is > 95 %.
+- **Monorepo-aware discovery.** For each file being extracted, the resolver walks up from `dirname(file)` to the repo root and picks the nearest `tsconfig.json` / `jsconfig.json`. Different packages in a monorepo automatically use their own alias tables. Memoized per directory.
+- **`graph.tsconfig.enabled` config toggle** (default `true`). Set to `false` to restore pre-alpha.17 behavior — non-relative imports fall straight to `external-module`. Useful if TS module resolution is pathologically slow on an atypical repo.
+- **`meta.tsconfig_fingerprint`** — sha256 over the raw content of every `tsconfig.json` / `jsconfig.json` reachable via `extends` chains (including package-provided bases resolved via Node's own `require.resolve`). Editing any of them — even a deeply-nested base — invalidates the cached graph. Content-based + sync, so the MCP read-side stale check can check it without loading TypeScript.
+- **`enumerateAllFiles` + `enumerateGraphFilesFromRaw`** (`src/graph/enumerate.ts`) — extracted so one git-ls-files / walk is shared between source-file enumeration AND tsconfig discovery AND stale-check fingerprinting (no duplicate walks).
+
+### Fixed
+
+- **Cross-module resolution for alias-based imports.** Before: agent asking `find_usages` on a hook imported via `@/hooks/useFoo` in a Next.js repo got **zero callers**, because the graph edge pointed at `ext:@/hooks/useFoo` (an external node with no link to the source). After: the resolver rewires those edges to the real file, so `find_usages` / `get_impact_radius` / `get_review_context` all return correct results regardless of import style.
+
+### Backwards-compat
+
+- Legacy (alpha.16 and earlier) `meta.json` files have no `tsconfig_fingerprint`. On first post-upgrade build, `undefined !== currentFingerprint` → graph marked stale → one free rebuild. Same graceful-rollout pattern used for `exclude_fingerprint` in alpha.14.
+- Repos with no `tsconfig.json` or `jsconfig.json` behave exactly as pre-alpha.17. No regressions.
+- `src/graph/resolve.ts` signature unchanged — the new resolver layers inside the extractor via `resolveTarget`, not at the pure specifier-parsing layer.
+
+### Known limitations (documented for future work)
+
+- **TS solution-style configs** (`"references": [...]` with no `compilerOptions` of their own) — the nearest-parent heuristic picks the package-level tsconfig correctly, but root solution configs are skipped rather than treated as a project graph. Rare in practice.
+- **`include`/`files` scoping within a tsconfig** — we don't filter by these patterns, so a file technically governed by a different tsconfig could resolve using the wrong one. Also rare.
+- **Non-TS config-based aliases** (Webpack `resolve.alias`, Vite `alias`, Rollup aliases, Babel module-resolver) — deferred. Users with such setups typically mirror their aliases into `tsconfig.json` anyway (required for editor tooling / type-check).
+
+### Tests
+
+- +16 tests: 12 resolver scenarios (alias with wildcard, baseUrl-only, extends chain, monorepo nested tsconfigs, jsconfig.json, excluded alias targets → external-module, no-tsconfig-no-change, config toggle off, malformed tsconfig fail-open, fingerprint stability + extends-chain invalidation, auxiliary variants like `tsconfig.app.json` don't shadow the canonical `tsconfig.json`), 3 stale-check (tsconfig paths edit invalidates, toggling `tsconfig.enabled` invalidates, pre-alpha.17 meta rebuilds), 1 e2e (`find_usages` on a Next.js-style repo returns real callers through `@/` alias). Full suite: **320/320 passing**.
+
 ## [0.1.0-alpha.16] — 2026-04-21
 
 Small follow-up to alpha.15 after dogfooding the new `find_usages` on chatbox-js hot symbols. Two papercuts to fix:
@@ -333,7 +365,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.16...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.17...HEAD
+[0.1.0-alpha.17]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.17
 [0.1.0-alpha.16]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.16
 [0.1.0-alpha.15]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.14

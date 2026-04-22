@@ -66,6 +66,13 @@ export interface GraphMeta {
   parse_error_count: number;
   skipped_files?: string[];
   exclude_fingerprint?: string;
+  // sha256 over the extends-resolved CompilerOptions of every tsconfig/jsconfig
+  // in the repo. Invalidates the cached graph when `paths` / `baseUrl` / any
+  // base config in the extends chain changes. Optional for backwards-compat:
+  // legacy (alpha.16 and earlier) meta files deserialize fine, and on first
+  // post-upgrade build `undefined !== currentFingerprint` naturally marks
+  // stale → one free rebuild on upgrade.
+  tsconfig_fingerprint?: string;
 }
 
 export interface GraphBuildLogEntry {

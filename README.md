@@ -91,7 +91,7 @@ Since alpha.15, `init --graph-path` builds the graph for you in a single shot; p
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.16`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.16` or `tokenomy update --version 0.1.0-alpha.16`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.17`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.17` or `tokenomy update --version 0.1.0-alpha.17`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -346,7 +346,16 @@ Stale detection always-on (`{stale, stale_files}` on every query); `tokenomy gra
 
 **Read-side auto-refresh (alpha.15+).** When the user edits files between agent calls, the next `get_minimal_context` / `find_usages` / `get_impact_radius` / `get_review_context` query transparently triggers a rebuild before running — no explicit `build_or_update_graph` needed. Cheap stale check (~30–50 ms on 5 k files: meta-only load + mtime compare) short-circuits to a no-op when the graph is fresh. Opt out with `tokenomy config set graph.auto_refresh_on_read false` if you want the pre-alpha.15 behavior.
 
-**Scope + limits (v1).** TypeScript + JavaScript only (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, `.mts/.cts` probed). Soft cap 2 000 files, hard cap 5 000 (abort with `repo-too-large`). AST-only via TypeScript compiler API (no type checker); type-only imports + JSX element references skipped. No `tsconfig.paths`, no `node_modules` resolution — bare specifiers become `external-module` nodes. Fail-open: every tool returns `{ok: false, reason}` rather than throwing.
+**Scope + limits (v1).** TypeScript + JavaScript only (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, `.mts/.cts` probed). Soft cap 2 000 files, hard cap 5 000 (abort with `repo-too-large`). AST-only via TypeScript compiler API (no type checker); type-only imports + JSX element references skipped. `tsconfig.paths` / `jsconfig.paths` **are resolved** (alpha.17+) — see below. No `node_modules` resolution — bare specifiers like `react` become `external-module` nodes. Fail-open: every tool returns `{ok: false, reason}` rather than throwing.
+
+**Path-alias resolution (alpha.17+).** Imports like `@/hooks/useFoo`, `~/lib/bar`, `@@/services/baz`, or any other alias declared in `tsconfig.json`/`jsconfig.json` are resolved to the real source file via `ts.resolveModuleName`. Works on:
+
+- Single-package repos (Next.js, Vite, plain TS with a root `tsconfig.json`).
+- Monorepos with per-package tsconfigs — each file uses its nearest ancestor config (e.g. `packages/app-a/tsconfig.json`).
+- `extends` chains, including `@tsconfig/*` bases from `node_modules`.
+- `baseUrl` without `paths`.
+
+Disable with `tokenomy config set graph.tsconfig.enabled false` (restores pre-alpha.17 behavior — useful if TS resolution is pathologically slow on your repo). Known limits: TS solution-style configs (`"references": [...]` with no `compilerOptions`) and `include`/`files` scoping within a tsconfig aren't modeled — extremely rare in practice. Editing any `tsconfig.json`, `jsconfig.json`, or base config invalidates the cached graph via a content-based fingerprint on `meta.tsconfig_fingerprint`.
 
 **Excluding vendor bundles / minified artifacts.** Committed bundles (e.g. a 24k-line `public/cdn/firebase/firebase-bundle.js`) blow past the per-file edge cap and also pollute queries with minified identifiers. Tokenomy ships with safe defaults for common generated names — `**/*.min.{js,cjs,mjs}`, `**/*-min.{js,cjs,mjs}`, `**/*.bundle.{js,cjs,mjs}`, `**/*-bundle.{js,cjs,mjs}` — and you can layer more:
 
@@ -367,8 +376,8 @@ Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.15   # npm-style pin
-tokenomy update --version=0.1.0-alpha.15  # same, explicit flag
+tokenomy update@0.1.0-alpha.16   # npm-style pin
+tokenomy update --version=0.1.0-alpha.16  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 

@@ -3,8 +3,13 @@ import { join } from "node:path";
 import type { Config } from "../core/types.js";
 import { graphSnapshotPath } from "../core/paths.js";
 import type { GraphMeta } from "./schema.js";
-import { enumerateGraphFiles } from "./enumerate.js";
+import {
+  enumerateAllFiles,
+  enumerateGraphFiles,
+  enumerateGraphFilesFromRaw,
+} from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
+import { computeTsconfigFingerprint } from "./tsconfig-fingerprint.js";
 import { sha256FileSync } from "./hash.js";
 import { resolveRepoId } from "./repo-id.js";
 import { JsonGraphStore } from "./store.js";
@@ -36,7 +41,21 @@ export const getGraphStaleStatus = (
     return { ok: true, stale: true, stale_files: [] };
   }
 
-  const enumerated = enumerateGraphFiles(repoPath, cfg);
+  // Share one raw walk between tsconfig fingerprint + graph-file enumeration.
+  const raw = enumerateAllFiles(repoPath);
+
+  // A change to any tsconfig/jsconfig `paths` (or an extends-chain base) OR
+  // a toggle of `graph.tsconfig.enabled` rewires imports in ways we can't
+  // diff per-file. Invalidate the whole graph. The fingerprint helper uses
+  // a sentinel when disabled so toggling true↔false always mismatches.
+  if (
+    meta.tsconfig_fingerprint !==
+    computeTsconfigFingerprint(repoPath, raw.files, cfg.graph.tsconfig.enabled)
+  ) {
+    return { ok: true, stale: true, stale_files: [] };
+  }
+
+  const enumerated = enumerateGraphFilesFromRaw(repoPath, cfg, raw);
   if (!enumerated.ok) return enumerated;
 
   const current = new Set(enumerated.files);
@@ -104,7 +123,17 @@ export const isGraphStaleCheap = (
     return { missing: false, stale: true, stale_files: [] };
   }
 
-  const enumerated = enumerateGraphFiles(identity.repoPath, cfg);
+  // Share one raw walk between tsconfig-fingerprint + graph-file enumeration.
+  const raw = enumerateAllFiles(identity.repoPath);
+
+  if (
+    meta.tsconfig_fingerprint !==
+    computeTsconfigFingerprint(identity.repoPath, raw.files, cfg.graph.tsconfig.enabled)
+  ) {
+    return { missing: false, stale: true, stale_files: [] };
+  }
+
+  const enumerated = enumerateGraphFilesFromRaw(identity.repoPath, cfg, raw);
   if (!enumerated.ok) {
     // Enumerate failed (git-unavailable shouldn't happen since
     // enumerateGraphFiles falls back to walk; repo-too-large would fail the
