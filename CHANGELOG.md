@@ -12,6 +12,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.21] — 2026-04-22
+
+Relevance ranking for `find_oss_alternatives` `repo_results`. Files that match
+more distinct query tokens now rank above files that only hit the most common
+token, so the actually-relevant code surfaces first.
+
+### Changed
+
+- **Repo-search ranks candidate files by distinct token hits before Stage 2.**
+  Previously, a query like `useRuntimeConfig provider` on a large React
+  codebase returned only `Provider`-matching files because `git grep` emits
+  Stage 2 output in alphabetical/tree order and the `maxResults` cap stopped
+  before the actually-relevant `useRuntimeConfig.ts` file got a turn.
+
+  New behavior: Stage 1 runs one `git grep -l` per query token (capped at 8
+  per query in `queryTokens`; typical queries have 2-4 tokens) and scores
+  each candidate file by the number of distinct tokens it contains. The
+  top-scoring files feed Stage 2 in ranked order. Because `git grep` doesn't
+  honor pathspec argument order, Stage 2 output is re-sorted in code against
+  the ranking before slicing to `maxResults`. Applied symmetrically to
+  current-branch and other-branch paths.
+
+  Cost: 2-4 extra `git grep -l` subprocess spawns per query (~50 ms each on
+  a 5 000-file repo). Output volume is unchanged.
+
+### Tests
+
+- Added a unit test that seeds two files — one matching only the common
+  token (`provider`) and one matching both tokens (`useRuntimeConfig` +
+  `provider`) — and asserts the multi-token file ranks first. Full suite:
+  **358/358 passing**.
+
 ## [0.1.0-alpha.20] — 2026-04-22
 
 Fixes a silent truncation in `find_oss_alternatives` repo-search that collapsed
@@ -477,7 +509,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.20...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.21...HEAD
+[0.1.0-alpha.21]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.21
 [0.1.0-alpha.20]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.20
 [0.1.0-alpha.19]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.19
 [0.1.0-alpha.18]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.18
