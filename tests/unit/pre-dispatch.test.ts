@@ -158,3 +158,86 @@ test("preDispatch: Bash short command → null", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("preDispatch: Write new utility file appends OSS alternatives nudge", () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-write-"));
+  const repo = mkdtempSync(join(tmpdir(), "tokenomy-pre-write-repo-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    const output = preDispatch(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: repo,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: {
+          file_path: "src/utils/retry.ts",
+          content: "x".repeat(800),
+        },
+      },
+      {
+        ...DEFAULT_CONFIG,
+        log_path: join(home, ".tokenomy", "savings.jsonl"),
+      },
+    );
+
+    assert.ok(output);
+    assert.deepEqual(output!.hookSpecificOutput.updatedInput, {
+      file_path: "src/utils/retry.ts",
+      content: "x".repeat(800),
+    });
+    assert.match(
+      output!.hookSpecificOutput.additionalContext ?? "",
+      /find_oss_alternatives/,
+    );
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("preDispatch: Write nudge disabled via config → null", () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-pre-write-off-"));
+  const repo = mkdtempSync(join(tmpdir(), "tokenomy-pre-write-off-repo-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    const output = preDispatch(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: repo,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: {
+          file_path: "src/utils/retry.ts",
+          content: "x".repeat(800),
+        },
+      },
+      {
+        ...DEFAULT_CONFIG,
+        nudge: {
+          ...DEFAULT_CONFIG.nudge!,
+          write_intercept: {
+            ...DEFAULT_CONFIG.nudge!.write_intercept,
+            enabled: false,
+          },
+        },
+        log_path: join(home, ".tokenomy", "savings.jsonl"),
+      },
+    );
+
+    assert.equal(output, null);
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

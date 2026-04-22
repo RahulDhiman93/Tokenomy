@@ -2,7 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -184,6 +191,37 @@ test("hook: PreToolUse Bash already-bounded command → passthrough", async () =
     );
     assert.equal(code, 0);
     assert.equal(stdout, "");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: PreToolUse Write redacts content in debug preview", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-it-write-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const secret = "SECRET_WRITE_CONTENT_SHOULD_NOT_BE_LOGGED";
+    const { code, stdout } = await runHook(
+      {
+        session_id: "t-write",
+        transcript_path: "/tmp/t",
+        cwd: home,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: {
+          file_path: "src/utils/secret.ts",
+          content: `${secret}\n${"x".repeat(800)}`,
+        },
+      },
+      env,
+    );
+
+    assert.equal(code, 0);
+    assert.ok(stdout.length > 0, "expected Write nudge output");
+    const debug = readFileSync(join(home, ".tokenomy", "debug.jsonl"), "utf8");
+    assert.doesNotMatch(debug, new RegExp(secret));
+    assert.match(debug, /<redacted: Write content>/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

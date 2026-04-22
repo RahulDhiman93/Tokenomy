@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig } from "../core/config.js";
-import type { Config, GraphQueryBudgetConfig } from "../core/types.js";
+import type { Config, GraphQueryBudgetConfig, OssSearchEcosystem } from "../core/types.js";
 import { buildGraph } from "../graph/build.js";
 import type { GraphQueryContext, LoadGraphContextOptions } from "../graph/query/common.js";
 import { loadGraphContext } from "../graph/query/common.js";
@@ -8,6 +10,8 @@ import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
+import { npmSearch, registrySearch } from "../nudge/npm-search.js";
+import { repoSearch } from "../nudge/repo-search.js";
 import type {
   BuildGraphResult,
   FailOpen,
@@ -95,6 +99,74 @@ const parseReviewContextInput = (args: Record<string, unknown>): ReviewContextIn
   return files.length > 0 ? { files } : null;
 };
 
+interface FindAlternativesInput {
+  description: string;
+  keywords?: string[];
+  min_weekly_downloads?: number;
+  max_results?: number;
+  ecosystems?: OssSearchEcosystem[];
+}
+
+const parseFindAlternativesInput = (
+  args: Record<string, unknown>,
+): FindAlternativesInput | null => {
+  const description = args["description"];
+  if (typeof description !== "string" || description.trim().length === 0) return null;
+  const keywords = Array.isArray(args["keywords"])
+    ? args["keywords"].filter((k): k is string => typeof k === "string" && k.length > 0)
+    : undefined;
+  const min =
+    typeof args["min_weekly_downloads"] === "number" && args["min_weekly_downloads"] >= 0
+      ? args["min_weekly_downloads"]
+      : undefined;
+  const max =
+    typeof args["max_results"] === "number" && args["max_results"] > 0
+      ? args["max_results"]
+      : undefined;
+  const allowed = new Set(["npm", "pypi", "go", "maven"]);
+  const ecosystems = Array.isArray(args["ecosystems"])
+    ? args["ecosystems"].filter(
+        (value): value is OssSearchEcosystem =>
+          typeof value === "string" && allowed.has(value),
+      )
+    : undefined;
+  return {
+    description: description.trim(),
+    ...(keywords && keywords.length > 0 ? { keywords } : {}),
+    ...(min !== undefined ? { min_weekly_downloads: min } : {}),
+    ...(max !== undefined ? { max_results: max } : {}),
+    ...(ecosystems && ecosystems.length > 0 ? { ecosystems } : {}),
+  };
+};
+
+const inferProjectEcosystems = (cwd: string): OssSearchEcosystem[] => {
+  const out: OssSearchEcosystem[] = [];
+  const has = (file: string): boolean => existsSync(join(cwd, file));
+  if (has("package.json") || has("pnpm-lock.yaml") || has("yarn.lock")) out.push("npm");
+  if (
+    has("pyproject.toml") ||
+    has("setup.py") ||
+    has("setup.cfg") ||
+    has("requirements.txt")
+  ) {
+    out.push("pypi");
+  }
+  if (has("go.mod")) out.push("go");
+  if (has("pom.xml") || has("build.gradle") || has("build.gradle.kts")) out.push("maven");
+  return out;
+};
+
+const resolveOssEcosystems = (
+  input: FindAlternativesInput,
+  cwd: string,
+  config: Config,
+): OssSearchEcosystem[] => {
+  if (input.ecosystems && input.ecosystems.length > 0) return input.ecosystems;
+  const inferred = inferProjectEcosystems(cwd);
+  if (inferred.length > 0) return inferred;
+  return config.nudge?.oss_search.ecosystems ?? ["npm"];
+};
+
 interface PrecomputedStale {
   stale: boolean;
   stale_files: string[];
@@ -176,6 +248,12 @@ const earlyValidateReadArgs = (
   } else if (name === "get_review_context") {
     if (!parseReviewContextInput(args))
       return fail("invalid-input", "Expected { files: string[] }.");
+  } else if (name === "find_oss_alternatives") {
+    if (!parseFindAlternativesInput(args))
+      return fail(
+        "invalid-input",
+        "Expected { description: string, keywords?, min_weekly_downloads?, max_results?, ecosystems? }.",
+      );
   }
   return null;
 };
@@ -225,6 +303,7 @@ export const dispatchGraphTool = async (
   const cacheable = CACHEABLE_TOOLS.has(name);
   let cacheKey: string | null = null;
   let precomputedStale: PrecomputedStale | undefined;
+
   if (cacheable) {
     // Validate tool-specific arguments BEFORE touching the graph. A malformed
     // read call must not trigger a rebuild — users deserve the actionable
@@ -383,6 +462,84 @@ const dispatchGraphToolUncached = async (
           config.graph.query_budget_bytes.get_review_context,
         ),
       precomputedStale,
+    );
+  }
+
+  if (name === "find_oss_alternatives") {
+    const input = parseFindAlternativesInput(args);
+    if (!input) {
+      return fail(
+        "invalid-input",
+        "Expected { description: string, keywords?, min_weekly_downloads?, max_results?, ecosystems? }.",
+      );
+    }
+    const config = loadConfig(cwd);
+    const nudge = config.nudge;
+    const timeoutMs = nudge?.oss_search.timeout_ms ?? 5_000;
+    const minDownloads = input.min_weekly_downloads ?? nudge?.oss_search.min_weekly_downloads ?? 1_000;
+    const maxResults = input.max_results ?? nudge?.oss_search.max_results ?? 5;
+    const ecosystems = resolveOssEcosystems(input, cwd, config);
+    const query =
+      input.keywords && input.keywords.length > 0
+        ? `${input.description} ${input.keywords.join(" ")}`
+        : input.description;
+    const repo = repoSearch(cwd, query, { timeoutMs, maxResults });
+    const repoResults = repo.ok ? repo.results : [];
+    const searchOptions = {
+      timeoutMs,
+      minWeeklyDownloads: minDownloads,
+      maxResults,
+    };
+    const searches = await Promise.all(
+      ecosystems.map((ecosystem) =>
+        ecosystem === "npm"
+          ? Promise.resolve(npmSearch(query, searchOptions))
+          : registrySearch(ecosystem, query, searchOptions),
+      ),
+    );
+    const hardFailure = searches.find((search) => !search.ok);
+    const results = searches.flatMap((search) => (search.ok ? search.results : []));
+    if (results.length === 0 && repoResults.length === 0 && hardFailure && !hardFailure.ok) {
+      return withBudget(hardFailure, config.graph.query_budget_bytes.find_oss_alternatives);
+    }
+    const top = results[0];
+    const summaryParts: string[] = [];
+    if (repoResults.length > 0) {
+      summaryParts.push(
+        `Found ${repoResults.length} repo match${repoResults.length === 1 ? "" : "es"} ` +
+          `on the current or another branch.`,
+      );
+    }
+    if (results.length > 0) {
+      summaryParts.push(
+        `Found ${results.length} package candidate${results.length === 1 ? "" : "s"} ` +
+          `across ${ecosystems.join(", ")}. ` +
+          `Top pick: ${top ? top.name : "(none)"}${top ? ` (${top.fit_reason})` : ""}.`,
+      );
+    }
+    const summary =
+      summaryParts.length === 0
+        ? "No repo matches or maintained package candidates found above quality threshold."
+        : summaryParts.join(" ");
+    const hint =
+      repoResults.length > 0
+        ? "Review repo matches first to avoid rebuilding existing work; then compare package candidates before implementing."
+        : results.length === 0
+          ? "No match — it's reasonable to proceed with a from-scratch implementation."
+          : "Present these package candidates to the user; let them pick. If none fit, proceed to implement.";
+    return withBudget(
+      {
+        ok: true,
+        data: {
+          query,
+          ecosystems,
+          repo_results: repoResults,
+          results,
+          summary,
+          hint,
+        },
+      } as QueryResult<unknown>,
+      config.graph.query_budget_bytes.find_oss_alternatives,
     );
   }
 

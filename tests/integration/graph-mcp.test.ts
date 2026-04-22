@@ -35,6 +35,7 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
       tools.tools.map((tool) => tool.name).sort(),
       [
         "build_or_update_graph",
+        "find_oss_alternatives",
         "find_usages",
         "get_impact_radius",
         "get_minimal_context",

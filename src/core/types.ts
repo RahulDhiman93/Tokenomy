@@ -136,6 +136,7 @@ export interface GraphQueryBudgetConfig {
   get_impact_radius: number;
   get_review_context: number;
   find_usages: number;
+  find_oss_alternatives: number;
 }
 
 export interface GraphConfig {
@@ -167,6 +168,42 @@ export interface PerToolOverride {
   disable_stacktrace?: boolean;
 }
 
+export type OssSearchEcosystem = "npm" | "pypi" | "go" | "maven";
+
+export interface NudgeConfig {
+  // Master switch. When false, the MCP tool still exists but the Write-
+  // intercept nudge never fires. Default: true.
+  enabled: boolean;
+  oss_search: {
+    // Hard wall-clock cap for the npm search subprocess. Default: 5000.
+    timeout_ms: number;
+    // Filter threshold on npm's popularity score proxy. Default: 1000.
+    // (Not a true weekly-download count today since `npm search --json`
+    // doesn't expose that directly — kept as a field name for future use
+    // when we enrich with `npm view <name>` in a follow-up release.)
+    min_weekly_downloads: number;
+    // How many ranked candidates to return at most. Hard-capped at 10.
+    // Default: 5.
+    max_results: number;
+    // Package registries to search when project files don't imply a narrower
+    // ecosystem. Default: ["npm"]; project inference adds PyPI/Go/Maven for
+    // Python, Go, and JVM repos.
+    ecosystems: OssSearchEcosystem[];
+  };
+  write_intercept: {
+    // When false, the PreToolUse Write nudge never fires even if the
+    // master `enabled` switch is on. Default: true.
+    enabled: boolean;
+    // Gitignore-style globs (reuses src/util/glob.ts semantics). Files
+    // matching any of these AND exceeding `min_size_bytes` get the nudge.
+    paths: string[];
+    // Skip nudge when the about-to-be-written content is smaller than this.
+    // Filters out tiny stubs / types-only files that aren't real reinvention.
+    // Default: 500 bytes.
+    min_size_bytes: number;
+  };
+}
+
 export interface Config {
   aggression: "conservative" | "balanced" | "aggressive";
   gate: GateConfig;
@@ -184,6 +221,10 @@ export interface Config {
   dedup?: DedupConfig;
   // Hook perf budget (ms). Values above this get flagged in `doctor`.
   perf?: PerfConfig;
+  // OSS-alternatives-first nudge — MCP tool + PreToolUse Write intercept.
+  // See NudgeConfig. Optional for backwards-compat: legacy config files
+  // deserialize fine and pick up defaults via DEFAULT_CONFIG merging.
+  nudge?: NudgeConfig;
 }
 
 export interface DedupConfig {

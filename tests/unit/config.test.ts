@@ -29,6 +29,10 @@ test("config: defaults when no files exist (conservative aggression ×2)", () =>
       cfg.graph.query_budget_bytes.get_minimal_context,
       DEFAULT_CONFIG.graph.query_budget_bytes.get_minimal_context * 2,
     );
+    assert.equal(
+      cfg.graph.query_budget_bytes.find_oss_alternatives,
+      DEFAULT_CONFIG.graph.query_budget_bytes.find_oss_alternatives * 2,
+    );
   });
 });
 
@@ -56,6 +60,24 @@ test("config: global file controls aggression; project overrides thresholds; agg
       cfg.graph.query_budget_bytes.get_review_context,
       Math.round(DEFAULT_CONFIG.graph.query_budget_bytes.get_review_context * 0.5),
     );
+    assert.equal(
+      cfg.graph.query_budget_bytes.find_oss_alternatives,
+      Math.round(DEFAULT_CONFIG.graph.query_budget_bytes.find_oss_alternatives * 0.5),
+    );
+  });
+});
+
+test("config: default nudge block enables OSS search and Write intercept", () => {
+  withStubHome((home) => {
+    const cfg = loadConfig(home);
+    assert.equal(cfg.nudge?.enabled, true);
+    assert.equal(cfg.nudge?.oss_search.timeout_ms, 5_000);
+    assert.equal(cfg.nudge?.oss_search.min_weekly_downloads, 1_000);
+    assert.equal(cfg.nudge?.oss_search.max_results, 5);
+    assert.deepEqual(cfg.nudge?.oss_search.ecosystems, ["npm"]);
+    assert.equal(cfg.nudge?.write_intercept.enabled, true);
+    assert.equal(cfg.nudge?.write_intercept.paths.length, 27);
+    assert.equal(cfg.nudge?.write_intercept.min_size_bytes, 500);
   });
 });
 

@@ -203,13 +203,14 @@ const manifestDriftCheck = (settings: SettingsShape | undefined): CheckResult =>
 };
 
 const preMatcherCoverageCheck = (settings: SettingsShape | undefined): CheckResult => {
+  const name = "PreToolUse matcher covers Read + Bash + Write";
   if (!settings) {
-    return { name: "PreToolUse matcher covers Read + Bash", ok: true, detail: "no settings" };
+    return { name, ok: true, detail: "no settings" };
   }
   const matchers = matchersForPath(settings, hookBinaryPath(), "PreToolUse");
   if (matchers.length === 0) {
     return {
-      name: "PreToolUse matcher covers Read + Bash",
+      name,
       ok: false,
       detail: "no PreToolUse entries for tokenomy-hook",
       remediation: "Run `tokenomy init`.",
@@ -218,11 +219,15 @@ const preMatcherCoverageCheck = (settings: SettingsShape | undefined): CheckResu
   const joined = matchers.join(" | ");
   const coversRead = /(^|\W)Read(\W|$)/.test(joined);
   const coversBash = /(^|\W)Bash(\W|$)/.test(joined);
-  const ok = coversRead && coversBash;
+  const coversWrite = /(^|\W)Write(\W|$)/.test(joined);
+  const ok = coversRead && coversBash && coversWrite;
+  const missing = [!coversRead && "Read", !coversBash && "Bash", !coversWrite && "Write"]
+    .filter(Boolean)
+    .join(", ");
   return {
-    name: "PreToolUse matcher covers Read + Bash",
+    name,
     ok,
-    detail: ok ? joined : `missing: ${[!coversRead && "Read", !coversBash && "Bash"].filter(Boolean).join(", ")}`,
+    detail: ok ? joined : `missing: ${missing}`,
     remediation: ok ? undefined : "Run `tokenomy init` to refresh the matcher.",
   };
 };
