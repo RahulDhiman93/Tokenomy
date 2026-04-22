@@ -12,6 +12,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.22] — 2026-04-22
+
+Closes the planning-phase gap in tokenomy's nudge surface: a new
+`UserPromptSubmit` hook classifies every user turn and injects
+`additionalContext` pointing at the right `tokenomy-graph` MCP tool BEFORE
+Claude plans — not just before a Write. So "plan X, no code" prompts and
+refactor/removal questions that never reach a Write finally get nudged.
+
+### Added
+
+- **`UserPromptSubmit` prompt-classifier nudge** (`src/rules/prompt-classifier.ts`).
+  Four intents, each toggleable:
+  - `build` — `build|implement|add|create|make|write` (minus git-workflow
+    nouns like "branch", "commit", "PR", "tag") → nudge toward
+    `find_oss_alternatives`. Works without a graph snapshot.
+  - `change` — `refactor|rename|move|migrate|consolidate|extract|split|replace|
+    rewrite` → nudge toward `find_usages` + `get_impact_radius`.
+  - `remove` — `remove|delete|drop|deprecate|prune|rip out` → nudge toward
+    `get_impact_radius` (so "unreachable code" claims get checked).
+  - `review` — `review|audit|analyze|summarize|blast radius|what changed` →
+    nudge toward `get_review_context`.
+
+  Conservative gates: skips prompts under `min_prompt_chars` (default 20),
+  skips when the prompt already mentions a tokenomy-graph tool, and
+  graph-dependent intents (change / remove / review) skip entirely when no
+  graph snapshot exists for the repo.
+- **`nudge.prompt_classifier` config surface**:
+  - `nudge.prompt_classifier.enabled` (master switch, default true)
+  - `nudge.prompt_classifier.intents.{build,change,remove,review}` (per-intent
+    toggles, all default true)
+  - `nudge.prompt_classifier.min_prompt_chars` (default 20)
+- **Savings-log integration.** Every prompt-classifier nudge appends a
+  `SavingsLogEntry` under `tool: "UserPromptSubmit"` with
+  `reason: "nudge:prompt-classifier:{intent}"`. Conservative per-intent
+  token estimates (build 15 000, change 8 000, remove 5 000, review 6 000)
+  surface in `tokenomy report` alongside Read / Bash / MCP trims.
+
+### Changed
+
+- `tokenomy init` now also registers the `UserPromptSubmit` hook (empty
+  matcher — event isn't tool-scoped). Existing installs pick this up the
+  next time `tokenomy update` runs.
+- `tokenomy doctor` now verifies `UserPromptSubmit` is present alongside
+  `PostToolUse` / `PreToolUse`. Doctor-check count: 13 → **14**.
+- `settings-patch.HookEvent` extends to `"PostToolUse" | "PreToolUse" |
+  "UserPromptSubmit"`.
+
+### Tests
+
+- +15 tests: 13 classifier unit (per-intent triggers, passthroughs, graph-gate,
+  already-mentions short-circuit, git-noun false-positive guards, min-chars
+  gate, per-intent toggle) + 2 hook-spawn integration (live nudge + savings-log
+  entry + short-prompt passthrough). Full suite: **373/373 passing**.
+
 ## [0.1.0-alpha.21] — 2026-04-22
 
 Relevance ranking for `find_oss_alternatives` `repo_results`. Files that match
@@ -509,7 +563,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.21...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.22...HEAD
+[0.1.0-alpha.22]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.22
 [0.1.0-alpha.21]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.21
 [0.1.0-alpha.20]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.20
 [0.1.0-alpha.19]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.19

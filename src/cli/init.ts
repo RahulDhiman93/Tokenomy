@@ -152,6 +152,10 @@ export const runInit = (opts: InitOptions = {}): {
   settings = removeHookByCommandPath(settings, hookPath);
   settings = addHook(settings, "PostToolUse", hookPath, POST_MATCHER, TIMEOUT_SECONDS);
   settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
+  // UserPromptSubmit fires once per user turn, before the model sees the
+  // prompt. Matcher is empty because the event isn't tool-scoped. Powers
+  // the prompt-classifier nudge (alpha.22+).
+  settings = addHook(settings, "UserPromptSubmit", hookPath, "", TIMEOUT_SECONDS);
   const graphServerPath = opts.graphPath ? resolve(opts.graphPath) : null;
 
   atomicWrite(settingsPath, stableStringify(settings) + "\n");
@@ -175,7 +179,7 @@ export const runInit = (opts: InitOptions = {}): {
   manifest = upsertEntry(manifest, {
     command_path: hookPath,
     settings_path: settingsPath,
-    matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}`,
+    matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}|UserPromptSubmit`,
     installed_at: new Date().toISOString(),
   });
   writeManifest(manifest);
