@@ -42,10 +42,62 @@ Tokenomy plugs the holes the agent hook contracts let you close — with zero pr
 | `PreToolUse` on `Read` | Claude Code | `updatedInput` | Unbounded reads on huge source files |
 | `PreToolUse` on `Bash` | Claude Code | rewrites `tool_input.command` | Unbounded verbose shell output — `git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `tree` |
 | `PreToolUse` on `Write` | Claude Code | `additionalContext` | Reinventing existing repo work or mature utility libraries from scratch |
+| `UserPromptSubmit` (alpha.22+) | Claude Code | `additionalContext` on every user turn | Agent planning without first checking graph for existing code, blast radius, or maintained libraries |
 | `tokenomy-graph` MCP server | Claude Code · Codex CLI | 6 tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context from a pre-built graph + repo/branch/package alternatives |
 | `tokenomy analyze` | Claude Code · Codex CLI transcripts | Walks `~/.claude/projects/**/*.jsonl` + `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules with a real tokenizer | Tells you *exactly* how much you've been wasting, by tool, by day, by rule |
 
 Each live trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-in / bytes-out, so you can prove the savings. Run `tokenomy report` for a TUI + HTML digest, or `tokenomy analyze` to benchmark real historical waste from session transcripts.
+
+---
+
+## ✨ Features
+
+Tokenomy is organized around four layers. Install once, and every layer starts working across all your Claude Code sessions — no per-project setup.
+
+### 🔻 Live token trimming
+
+Automatic response shrinking the moment a tool call finishes (or is about to fire). Zero config to get started.
+
+- **MCP response trimming** — schema-aware profiles for Atlassian, Linear, Slack, Gmail, GitHub, Notion; generic redact + stacktrace collapse + byte-trim fallback for the long tail. Unknown top-level keys flow through untouched.
+- **MCP dedup** — identical MCP responses within a 30-minute session window return a pointer stub instead of a full refetch.
+- **Read clamp** — unbounded `Read` on a large source file gets rewritten to an explicit `limit: N` with an `additionalContext` note so the agent can offset-Read further regions on demand. Self-contained docs (`.md`, `.rst`, `.txt`, `.adoc`) below the doc-passthrough threshold skip clamping entirely.
+- **Bash input-bounder** — verbose shell invocations (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `kubectl logs`, `tree`) get rewritten to `set -o pipefail; <cmd> | awk 'NR<=N'`. Exit codes preserved; exit-status-sensitive commands, streaming forms, destructive `find` actions, and user-piped compound commands all pass through.
+
+### 🎯 Agent nudges *(redirect waste before it happens)*
+
+Nudges cost nothing if the agent was going to do the right thing anyway — and save 10–50 k tokens per occurrence when it wasn't.
+
+- **OSS-alternatives Write nudge** *(alpha.18+)* — when Claude creates a new file in a utility-ish path (`src/utils/**`, `src/lib/**`, `pkg/**`, `internal/**`, etc.) above 500 B, Tokenomy recommends `find_oss_alternatives` first. The agent checks this repo + local branches + npm / PyPI / pkg.go.dev / Maven Central before writing anything.
+- **Prompt-classifier nudge** *(alpha.22+)* — fires once per user turn, **before** Claude plans. Classifies intent and points at the right graph tool:
+  - `build | implement | add | create` → `find_oss_alternatives`
+  - `refactor | rename | migrate | extract | replace` → `find_usages` + `get_impact_radius`
+  - `remove | delete | drop | deprecate` → `get_impact_radius`
+  - `review | audit | blast radius | what changed` → `get_review_context`
+
+  Conservative by design: skips confirmations under 20 chars, short-circuits if the prompt already names a graph tool, and graph-dependent intents only fire when a graph snapshot exists for the repo.
+
+### 🧠 Code-graph MCP *(surgical context retrieval)*
+
+`tokenomy-graph` — a stdio MCP server exposing six tools that replace brute-force `Read` sweeps of the codebase. Works with both Claude Code and Codex CLI.
+
+| Tool | What it does | Budget |
+|---|---|---|
+| `build_or_update_graph` | Build or refresh the local code graph for the current repo | 4 KB |
+| `get_minimal_context` | Smallest useful neighborhood around a file or symbol | 8 KB |
+| `get_impact_radius` | Reverse deps + suggested tests for changed files or symbols | 16 KB |
+| `get_review_context` | Ranked hotspots + fanout across changed files | 4 KB |
+| `find_usages` | Direct callers, references, importers of a file or symbol | 16 KB |
+| `find_oss_alternatives` | Repo + branch + package-registry search with distinct-token ranking | 8 KB |
+
+TypeScript / JavaScript AST via the TS compiler (no type checker); `tsconfig.paths` / `jsconfig.paths` resolved *(alpha.17+)* so `@/hooks/foo` and friends link to real source files on Next.js, Vite, Nuxt, monorepos. Read-side auto-refresh *(alpha.15+)* rebuilds on demand when files change between queries. Fail-open everywhere.
+
+### 📊 Observability + retrospection
+
+- **`~/.tokenomy/savings.jsonl`** — every trim and nudge appends a row with measured bytes-in / bytes-out and estimated tokens saved. Tail it: `tail -f ~/.tokenomy/savings.jsonl`.
+- **`tokenomy report`** — TUI + HTML digest of recent trims grouped by tool, by reason, by day. Answers "am I actually saving tokens?"
+- **`tokenomy analyze`** — walks `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules against real historical transcripts with a real tokenizer, surfaces patterns like *Wasted-probe incidents*. Answers "where have I been wasting tokens all along?"
+- **`tokenomy doctor`** — 14 health checks covering hook install, settings.json integrity, manifest drift, MCP registration, hook perf budget. Run anytime; run automatically on every `tokenomy update`.
+- **`tokenomy update`** — single-command self-update: runs `npm install -g tokenomy@latest`, re-stages the hook, re-registers the graph MCP *(alpha.20+)* if one was previously configured. Config and logs preserved.
 
 ---
 
