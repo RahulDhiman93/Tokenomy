@@ -118,6 +118,58 @@ test("repoSearch: returns matches from another local branch", () => {
   });
 });
 
+test("repoSearch: ranks files matching more distinct tokens ahead of common-word-only matches", () => {
+  withGitRepo((repo) => {
+    // File A: matches only the common token (`provider`). Represents the
+    // many React components that hit `provider` incidentally.
+    mkdirSync(join(repo, "src", "components"), { recursive: true });
+    writeFileSync(
+      join(repo, "src", "components", "ThemeWrapper.tsx"),
+      [
+        "import { ThemeProvider } from '@mantine/core';",
+        "export const ThemeWrapper = () => (",
+        "  <ThemeProvider><div /></ThemeProvider>",
+        ");",
+      ].join("\n"),
+    );
+    // File B: matches BOTH tokens (`useRuntimeConfig` + `provider`). This
+    // is the genuinely-relevant file.
+    mkdirSync(join(repo, "src", "hooks"), { recursive: true });
+    writeFileSync(
+      join(repo, "src", "hooks", "useRuntimeConfig.ts"),
+      [
+        "// runtime config provider for feature flags",
+        "export const useRuntimeConfig = () => {",
+        "  return { provider: 'local' };",
+        "};",
+      ].join("\n"),
+    );
+    runGit(repo, ["add", "."]);
+    runGit(repo, [
+      "-c",
+      "user.name=Tokenomy Test",
+      "-c",
+      "user.email=tokenomy@example.test",
+      "commit",
+      "-m",
+      "seed relevance test",
+    ]);
+
+    const result = repoSearch(repo, "useRuntimeConfig provider", {
+      timeoutMs: 10_000,
+      maxResults: 5,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    if (!result.ok) return;
+    const firstFile = result.results[0]?.file;
+    assert.equal(
+      firstFile,
+      "src/hooks/useRuntimeConfig.ts",
+      `expected useRuntimeConfig.ts to outrank ThemeWrapper.tsx, got ${firstFile}`,
+    );
+  });
+});
+
 test("repoSearch: survives >64 KB of git-grep output (large-repo regression)", () => {
   withGitRepo((repo) => {
     // Seed 120 files that each match the search pattern on multiple lines.
