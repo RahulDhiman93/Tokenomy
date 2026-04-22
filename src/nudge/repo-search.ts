@@ -65,6 +65,43 @@ const parseGrepLine = (
   };
 };
 
+// Two-stage `git grep` keeps subprocess output bounded regardless of repo
+// size. A single-stage `git grep -n -E "token1|token2"` on a large codebase
+// (chatbox-js: 2.7 MB of output for `provider|loader|runtime`) blows right
+// through `spawnSync`'s `maxBuffer`, which returns `status: null` and an
+// empty stdout, silently collapsing `repo_results` to `[]`.
+//
+// Stage 1: `git grep -l` → newline-delimited file list. One short line per
+// matching file, bounded in practice by repo file count.
+// Stage 2: `git grep -n -E` against only the first ~50 files. Per-file match
+// count capped at 3 by `--max-count 3`, so output is always small.
+const MAX_FILES_STAGE_TWO = 50;
+const STAGE_ONE_BUFFER = 4_000_000; // ~4 MB of file paths — generous headroom.
+// 50 files × 3 matches is fine for typical source lines, but repos that keep
+// bundled or minified assets in-tree (cdn-src/, dist/) can have lines running
+// tens of thousands of chars. 8 MB leaves enough headroom to avoid ENOBUFS.
+const STAGE_TWO_BUFFER = 8_000_000;
+
+const currentBranchFiles = (
+  cwd: string,
+  pattern: string,
+  opts: RepoSearchOptions,
+): string[] => {
+  const r = spawnSync("git", ["grep", "-l", "-i", "-E", pattern, "--", "."], {
+    cwd,
+    encoding: "utf8",
+    timeout: opts.timeoutMs,
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: STAGE_ONE_BUFFER,
+  });
+  if (r.status !== 0 || !r.stdout) return [];
+  return r.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, MAX_FILES_STAGE_TWO);
+};
+
 const currentBranchMatches = (
   cwd: string,
   pattern: string,
@@ -74,15 +111,17 @@ const currentBranchMatches = (
   // against the working tree, and keeps tooling consistent with the
   // other-branch path below. Avoids a ripgrep dependency + ENOENT on
   // machines where `rg` is a shell alias rather than a real binary.
+  const files = currentBranchFiles(cwd, pattern, opts);
+  if (files.length === 0) return [];
   const r = spawnSync(
     "git",
-    ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, "--", "."],
+    ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, "--", ...files],
     {
       cwd,
       encoding: "utf8",
       timeout: opts.timeoutMs,
       stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 64_000,
+      maxBuffer: STAGE_TWO_BUFFER,
     },
   );
   if (r.status !== 0 || !r.stdout) return [];
@@ -126,6 +165,30 @@ const branchNames = (cwd: string, timeoutMs: number): string[] => {
     .slice(0, 20);
 };
 
+const otherBranchFiles = (
+  cwd: string,
+  pattern: string,
+  branch: string,
+  opts: RepoSearchOptions,
+): string[] => {
+  const r = spawnSync("git", ["grep", "-l", "-i", "-E", pattern, branch], {
+    cwd,
+    encoding: "utf8",
+    timeout: opts.timeoutMs,
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: STAGE_ONE_BUFFER,
+  });
+  if (r.status !== 0 || !r.stdout) return [];
+  // `git grep -l <branch>` prefixes each filename with `<branch>:`; strip.
+  const prefix = `${branch}:`;
+  return r.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => (line.startsWith(prefix) ? line.slice(prefix.length) : line))
+    .slice(0, MAX_FILES_STAGE_TWO);
+};
+
 const otherBranchMatches = (
   cwd: string,
   pattern: string,
@@ -135,13 +198,19 @@ const otherBranchMatches = (
   const out: RepoAlternative[] = [];
   for (const branch of branchNames(cwd, opts.timeoutMs)) {
     if (out.length + already >= opts.maxResults) break;
-    const r = spawnSync("git", ["grep", "-n", "-i", "-E", pattern, branch, "--", "."], {
-      cwd,
-      encoding: "utf8",
-      timeout: opts.timeoutMs,
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 64_000,
-    });
+    const files = otherBranchFiles(cwd, pattern, branch, opts);
+    if (files.length === 0) continue;
+    const r = spawnSync(
+      "git",
+      ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, branch, "--", ...files],
+      {
+        cwd,
+        encoding: "utf8",
+        timeout: opts.timeoutMs,
+        stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: STAGE_TWO_BUFFER,
+      },
+    );
     if (r.status !== 0 || !r.stdout) continue;
     for (const line of r.stdout.split("\n")) {
       const withoutBranch = line.startsWith(`${branch}:`)
