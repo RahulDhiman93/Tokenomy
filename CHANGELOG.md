@@ -12,6 +12,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.18] — 2026-04-22
+
+Adds an OSS-alternatives-first nudge so agents check for existing repo work and maintained packages before writing utility code from scratch. The feature has two parts: a new `find_oss_alternatives` MCP tool on `tokenomy-graph`, and a conservative `PreToolUse` `Write` nudge for new utility-like files.
+
+### Added
+
+- **`find_oss_alternatives` MCP tool** on the existing `tokenomy-graph` server. It searches the current repo, other local branches, npm, PyPI, pkg.go.dev, and Maven Central based on project files or explicit `ecosystems`, ranks candidates, filters junk/deprecated npm packages, and returns `{query, ecosystems, repo_results, results, summary, hint}` under the normal graph query budget. It is intentionally uncached because repo/branch matches depend on live working-tree and ref state.
+- **`src/nudge/repo-search.ts`** — fail-open local search. In a git worktree, current-branch and other-branch matches go through `git grep` (no ripgrep dependency). Outside a git worktree, a pure-Node filesystem walk runs the same regex, skipping vendor/build dirs. Capped by timeout, result budget, and a max-files-scanned ceiling.
+- **`src/nudge/npm-search.ts`** — fail-open subprocess wrapper for `npm search`. Missing npm, non-zero exits, timeouts, malformed JSON, and unexpected shapes all return structured `{ok:false, reason}` results instead of throwing.
+- **`PreToolUse` `Write` nudge** (`src/rules/write-nudge.ts`). When Claude Code creates a new file in common utility paths (`src/utils/**`, `src/lib/**`, `src/parsers/**`, etc.) with content above 500 bytes, Tokenomy appends `additionalContext` recommending `mcp__tokenomy-graph__find_oss_alternatives` before bespoke implementation. The tool now checks local repo/branch matches before package candidates. The Write input is never blocked or mutated.
+- **Nudge config surface**:
+  - `nudge.enabled`
+  - `nudge.oss_search.timeout_ms`
+  - `nudge.oss_search.min_weekly_downloads`
+  - `nudge.oss_search.max_results`
+  - `nudge.oss_search.ecosystems`
+  - `nudge.write_intercept.enabled`
+  - `nudge.write_intercept.paths`
+  - `nudge.write_intercept.min_size_bytes`
+- **Graph query budget** for `find_oss_alternatives` (8 KB base, aggression-scaled).
+
+### Changed
+
+- `tokenomy init` now installs the `PreToolUse` matcher as `Read|Bash|Write`.
+- `tokenomy doctor` now verifies that the PreToolUse matcher covers `Read`, `Bash`, and `Write`.
+
+### Privacy
+
+- `find_oss_alternatives` searches the local repo and local branches on the machine, and sends the provided description/keywords to public package registries (`npm`, PyPI, pkg.go.dev, Maven Central) depending on inferred or requested ecosystems. Tokenomy does not call a Tokenomy service. Disable the proactive Write nudge with `tokenomy config set nudge.write_intercept.enabled false`; avoid calling the MCP tool for sensitive proprietary feature descriptions.
+
+### Tests
+
+- +30 tests covering the npm-search wrapper, standard npm JSON output, repo/branch search (including a non-git-worktree filesystem fallback), Write nudge rule, PreToolUse Write dispatch, Write debug redaction, config defaults/scaling, and `dispatchGraphTool("find_oss_alternatives", ...)` with a fake npm binary. Full suite: **350/350 passing**.
+
 ## [0.1.0-alpha.17] — 2026-04-21
 
 Retires the largest correctness gap in the graph: `tsconfig.json` / `jsconfig.json` `paths` and `baseUrl` are now resolved, so alias-based imports (`@/hooks/foo`, `~/lib/bar`, `@@/services/baz`, `@app/widgets`, etc.) link to real source files instead of silently becoming `external-module` nodes. Surfaces correct results on Next.js, Vite, Nuxt, and monorepo codebases — repos where `find_usages` / `get_impact_radius` previously returned 0 for widely-imported hooks because the graph had no idea what the alias meant.
@@ -365,7 +399,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.17...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.18...HEAD
+[0.1.0-alpha.18]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.18
 [0.1.0-alpha.17]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.17
 [0.1.0-alpha.16]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.16
 [0.1.0-alpha.15]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.15

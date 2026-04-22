@@ -56,6 +56,10 @@ export const DEFAULT_CONFIG: Config = {
       // routinely returns 20-50+ usages in real repos. 16KB fits ~100
       // entries without clipping, matching limitByCount(callSites, 100).
       find_usages: 16_000,
+      // find_oss_alternatives returns repo/branch matches plus up to 10
+      // package candidates (~600-800 bytes each with ranking + fit_reason).
+      // 8KB leaves headroom for the summary + hint fields without clipping.
+      find_oss_alternatives: 8_000,
     },
     exclude: [
       "**/*.min.js",
@@ -90,6 +94,51 @@ export const DEFAULT_CONFIG: Config = {
   perf: {
     p95_budget_ms: 50,
     sample_size: 100,
+  },
+  nudge: {
+    enabled: true,
+    oss_search: {
+      timeout_ms: 5_000,
+      min_weekly_downloads: 1_000,
+      max_results: 5,
+      ecosystems: ["npm"],
+    },
+    write_intercept: {
+      enabled: true,
+      // Common "utility-ish" globs across JS/TS, Python, Go, and Java repos.
+      // Users can override via
+      // `tokenomy config set nudge.write_intercept.paths '[...]'`.
+      paths: [
+        "src/utils/**",
+        "src/util/**",
+        "src/lib/**",
+        "src/hooks/**",
+        "src/helpers/**",
+        "src/services/**",
+        "src/parsers/**",
+        "src/validators/**",
+        "src/formatters/**",
+        "src/middleware/**",
+        "pkg/**",
+        "internal/**",
+        "cmd/**",
+        "**/utils/**",
+        "**/util/**",
+        "**/helpers/**",
+        "**/validators/**",
+        "**/utils.py",
+        "**/util.py",
+        "**/helpers.py",
+        "**/validators.py",
+        "**/parsers.py",
+        "**/formatters.py",
+        "**/middleware.py",
+        "**/services.py",
+        "src/main/java/**",
+        "src/test/java/**",
+      ],
+      min_size_bytes: 500,
+    },
   },
 };
 
@@ -199,6 +248,10 @@ const applyAggression = (cfg: Config): Config => {
         find_usages: Math.max(
           512,
           Math.round(cfg.graph.query_budget_bytes.find_usages * m),
+        ),
+        find_oss_alternatives: Math.max(
+          512,
+          Math.round(cfg.graph.query_budget_bytes.find_oss_alternatives * m),
         ),
       },
     },

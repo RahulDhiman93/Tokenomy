@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { Config, PreHookInput, PreHookOutput, SavingsLogEntry } from "../core/types.js";
 import { readBoundRule } from "../rules/read-bound.js";
 import { bashBoundRule } from "../rules/bash-bound.js";
+import { writeNudgeRule } from "../rules/write-nudge.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -105,6 +106,18 @@ const preDispatchBash = (input: PreHookInput, cfg: Config): PreHookOutput | null
   };
 };
 
+const preDispatchWrite = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
+  const r = writeNudgeRule(input.tool_input ?? {}, cfg, input.cwd);
+  if (r.kind !== "nudge" || !r.updatedInput) return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput: r.updatedInput,
+      ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}),
+    },
+  };
+};
+
 export const preDispatch = (
   input: PreHookInput,
   cfg: Config,
@@ -112,5 +125,6 @@ export const preDispatch = (
   if (cfg.disabled_tools.includes(input.tool_name)) return null;
   if (input.tool_name === "Read") return preDispatchRead(input, cfg);
   if (input.tool_name === "Bash") return preDispatchBash(input, cfg);
+  if (input.tool_name === "Write") return preDispatchWrite(input, cfg);
   return null;
 };
