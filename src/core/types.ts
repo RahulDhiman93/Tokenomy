@@ -205,6 +205,13 @@ export interface GraphQueryBudgetConfig {
   get_review_context: number;
   find_usages: number;
   find_oss_alternatives: number;
+  create_handoff_packet: number;
+  read_handoff_packet: number;
+  record_agent_review: number;
+  list_agent_reviews: number;
+  compare_agent_reviews: number;
+  get_pr_readiness: number;
+  record_decision: number;
 }
 
 export interface GraphConfig {
@@ -327,6 +334,23 @@ export interface GolemConfig {
   safety_gates: boolean;
 }
 
+export interface RavenConfig {
+  enabled: boolean;
+  requires_codex: boolean;
+  auto_brief: boolean;
+  auto_nudge: boolean;
+  auto_pr_check: boolean;
+  artifact_scope: "global" | "project";
+  max_diff_bytes: number;
+  max_file_diff_bytes: number;
+  max_markdown_bytes: number;
+  include_graph_context: boolean;
+  include_session_state: boolean;
+  review_timeout_ms: number;
+  clean_keep: number;
+  clean_older_than_days: number;
+}
+
 export interface Config {
   aggression: "conservative" | "balanced" | "aggressive";
   gate: GateConfig;
@@ -352,6 +376,8 @@ export interface Config {
   nudge?: NudgeConfig;
   // Golem: terse-output-mode plugin (0.1.1-beta.1+). Off by default.
   golem: GolemConfig;
+  // Raven: Claude Code-first cross-agent handoff/review packets.
+  raven: RavenConfig;
 }
 
 export interface DedupConfig {

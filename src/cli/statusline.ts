@@ -14,6 +14,7 @@ export interface StatusLineState {
   tokensToday: number;
   graph?: "fresh" | "stale";
   golem?: string;
+  raven?: boolean;
 }
 
 const localDateKey = (d: Date): string => {
@@ -74,18 +75,19 @@ const VERSION_TAG = `v${TOKENOMY_VERSION}`;
 
 export const renderStatusLine = (state: StatusLineState): string => {
   if (!state.active) return "";
+  const raven = state.raven ? " · Raven" : "";
   if (state.golem) {
     const savings = state.tokensToday > 0 ? ` · ${compact(state.tokensToday)} saved` : "";
-    return `[Tokenomy ${VERSION_TAG} · GOLEM-${state.golem.toUpperCase()}${savings}]`;
+    return `[Tokenomy ${VERSION_TAG} · GOLEM-${state.golem.toUpperCase()}${savings}${raven}]`;
   }
-  if (state.tokensToday <= 0) return `[Tokenomy ${VERSION_TAG} · active]`;
+  if (state.tokensToday <= 0) return `[Tokenomy ${VERSION_TAG} · active${raven}]`;
   const graph =
     state.graph === "fresh"
       ? " · graph fresh"
       : state.graph === "stale"
         ? " · graph stale - rebuild"
         : "";
-  return `[Tokenomy ${VERSION_TAG} · ${compact(state.tokensToday)} saved${graph}]`;
+  return `[Tokenomy ${VERSION_TAG} · ${compact(state.tokensToday)} saved${graph}${raven}]`;
 };
 
 export const runStatusLine = (argv: string[]): number => {
@@ -96,6 +98,7 @@ export const runStatusLine = (argv: string[]): number => {
       tokensToday: sumTodaySavings(cfg.log_path),
       graph: graphState(process.cwd()),
       golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
+      raven: cfg.raven.enabled,
     };
     if (argv.includes("--json")) process.stdout.write(JSON.stringify(state, null, 2) + "\n");
     else process.stdout.write(renderStatusLine(state) + "\n");
@@ -105,4 +108,3 @@ export const runStatusLine = (argv: string[]): number => {
     return 0;
   }
 };
-

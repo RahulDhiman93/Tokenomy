@@ -37,3 +37,10 @@ test("renderStatusLine: golem without savings hides saved segment", () => {
     `[Tokenomy ${V} · GOLEM-GRUNT]`,
   );
 });
+
+test("renderStatusLine: Raven marker appears when enabled", () => {
+  assert.equal(
+    renderStatusLine({ active: true, tokensToday: 0, raven: true }),
+    `[Tokenomy ${V} · active · Raven]`,
+  );
+});

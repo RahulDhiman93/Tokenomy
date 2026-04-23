@@ -149,4 +149,86 @@ export const TOOL_DEFS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "create_handoff_packet",
+    description: "Create a Tokenomy Raven handoff packet for Claude Code review, handoff, or PR readiness.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string" },
+        target_agent: { type: "string", enum: ["claude-code", "codex", "human"] },
+        intent: { type: "string", enum: ["review", "handoff", "pr-check", "second-opinion"] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "read_handoff_packet",
+    description: "Read the latest or named Tokenomy Raven handoff packet.",
+    inputSchema: {
+      type: "object",
+      properties: { packet_id: { type: "string" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "record_agent_review",
+    description: "Persist review findings for the current Raven packet. Refuses stale packet HEADs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        packet_id: { type: "string" },
+        agent: { type: "string", enum: ["claude-code", "codex", "human"] },
+        verdict: { type: "string", enum: ["pass", "needs-work", "risky", "blocked"] },
+        findings: { type: "array", items: { type: "object", additionalProperties: true } },
+        questions: { type: "array", items: { type: "string" } },
+        suggested_tests: { type: "array", items: { type: "string" } },
+      },
+      required: ["agent", "verdict"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_agent_reviews",
+    description: "List Raven reviews for the latest or named packet.",
+    inputSchema: {
+      type: "object",
+      properties: { packet_id: { type: "string" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "compare_agent_reviews",
+    description: "Deterministically compare Raven reviews for the latest or named packet.",
+    inputSchema: {
+      type: "object",
+      properties: { packet_id: { type: "string" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_pr_readiness",
+    description: "Return Raven PR readiness from packet freshness, reviews, graph state, and disagreements.",
+    inputSchema: {
+      type: "object",
+      properties: { packet_id: { type: "string" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "record_decision",
+    description: "Persist a human or agent Raven decision for a fresh packet.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        packet_id: { type: "string" },
+        decision: { type: "string", enum: ["merge", "fix-first", "investigate", "defer", "abandon"] },
+        rationale: { type: "string" },
+        decided_by: { type: "string", enum: ["human", "claude-code", "codex"] },
+        review_ids: { type: "array", items: { type: "string" } },
+      },
+      required: ["decision", "rationale", "decided_by"],
+      additionalProperties: false,
+    },
+  },
 ];

@@ -32,6 +32,8 @@ export const sessionStateSlug = (sessionId: string): string =>
   createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 export const sessionStatePath = (sessionId: string): string =>
   join(sessionStateDir(), `${sessionStateSlug(sessionId)}.ndjson`);
+export const ravenRootDir = (): string => join(tokenomyDir(), "raven");
+export const ravenRepoDir = (repoId: string): string => join(ravenRootDir(), repoId);
 export const graphDir = (repoId: string): string => join(tokenomyGraphRootDir(), repoId);
 export const graphSnapshotPath = (repoId: string): string =>
   join(graphDir(repoId), "snapshot.json");

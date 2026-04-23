@@ -22,6 +22,7 @@ import {
   estimateGolemSavingsTokens,
   resolveGolemMode,
 } from "../rules/golem.js";
+import { buildRavenSessionContext, buildRavenTurnReminder } from "../raven/nudge.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -259,6 +260,7 @@ export const dispatchUserPrompt = (
 ): UserPromptHookOutput | null => {
   const r = classifyPromptRule(input.prompt ?? "", cfg, input.cwd);
   const golemReminder = buildGolemTurnReminder(cfg);
+  const ravenReminder = buildRavenTurnReminder(input.prompt ?? "", cfg);
 
   if (r.kind === "nudge" && r.additionalContext) {
     // Log a savings entry so `tokenomy report` and `tokenomy analyze` surface
@@ -280,9 +282,7 @@ export const dispatchUserPrompt = (
 
     // If Golem is active, append its per-turn reminder so the style rules
     // survive plugin drift even in turns where a classifier intent fires.
-    const additionalContext = golemReminder
-      ? `${r.additionalContext}\n\n${golemReminder}`
-      : r.additionalContext;
+    const additionalContext = [r.additionalContext, golemReminder, ravenReminder].filter(Boolean).join("\n\n");
     return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
@@ -293,7 +293,15 @@ export const dispatchUserPrompt = (
 
   // No classifier intent matched. Golem still needs its per-turn reminder
   // so other plugins can't shadow the style rules over time.
-  if (golemReminder) {
+  if (golemReminder || ravenReminder) {
+    if (!golemReminder && ravenReminder) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: ravenReminder,
+        },
+      };
+    }
     const resolvedMode = resolveGolemMode(cfg);
     const savingsTokens = estimateGolemSavingsTokens(resolvedMode);
     const entry: SavingsLogEntry = {
@@ -309,7 +317,7 @@ export const dispatchUserPrompt = (
     return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: golemReminder,
+        additionalContext: [golemReminder, ravenReminder].filter(Boolean).join("\n\n"),
       },
     };
   }
@@ -322,7 +330,9 @@ export const dispatchSessionStart = (
   cfg: Config,
 ): SessionStartHookOutput | null => {
   const ctx = buildGolemSessionContext(cfg);
-  if (!ctx) return null;
+  const raven = buildRavenSessionContext(cfg);
+  const combined = [ctx, raven].filter(Boolean).join("\n\n");
+  if (!combined) return null;
   // SessionStart fires once per session — log a single "golem:session-start"
   // event so `tokenomy report` can show Golem is active without double-
   // counting the per-turn reminders. Savings value is 0 here; the per-turn
@@ -334,13 +344,13 @@ export const dispatchSessionStart = (
     bytes_in: 0,
     bytes_out: 0,
     tokens_saved_est: 0,
-    reason: `golem:session-start:${resolveGolemMode(cfg)}`,
+    reason: ctx ? `golem:session-start:${resolveGolemMode(cfg)}` : "raven:session-start",
   };
   appendSavingsLog(cfg.log_path, entry);
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: ctx,
+      additionalContext: combined,
     },
   };
 };
