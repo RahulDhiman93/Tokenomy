@@ -130,6 +130,34 @@ Top tools by tokens saved
 
 ---
 
+## 🤖 Zero-touch install via Claude Code
+
+Don't want to read the Quickstart? Paste this into Claude Code and let the agent drive the install end-to-end. It'll install the package, register the graph MCP for this repo, enable Golem in `grunt` mode, and verify with `tokenomy doctor`:
+
+```
+Install tokenomy for me.
+
+1. Run: npm install -g tokenomy
+2. Run: tokenomy init --graph-path "$PWD"
+   (this patches ~/.claude/settings.json, registers the tokenomy-graph
+    MCP server for this repo, and builds the code graph)
+3. Run: tokenomy golem enable --mode=grunt
+   (enables terse assistant-reply mode — fragments over sentences,
+    safety-gated for code and commands)
+4. Run: tokenomy doctor
+   (confirm all checks pass)
+5. Tell me to fully quit Claude Code (Cmd+Q) and reopen so the new
+   hooks + MCP server + SessionStart preamble load cleanly.
+
+After I restart, tokenomy's hooks trim MCP/Bash/Read waste,
+the graph MCP answers find_usages / get_impact_radius queries,
+and Golem keeps your replies terse.
+```
+
+After the agent finishes and you restart Claude Code, run any prompt — you should see `[Tokenomy: …]` in the statusline and terse replies from Golem. To tune Golem down: `tokenomy golem enable --mode=full` (more natural) or `--mode=lite` (subtle). Disable entirely: `tokenomy golem disable`.
+
+---
+
 ## ⚡ Quickstart
 
 **Claude Code** (full integration — live hooks + graph + analyze):
