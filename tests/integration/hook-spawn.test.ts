@@ -276,6 +276,136 @@ test("hook: UserPromptSubmit short / neutral prompt → passthrough (no stdout)"
   }
 });
 
+test("hook: SessionStart with Golem enabled → injects terse-mode rules", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-golem-"));
+  try {
+    // Seed a config with Golem enabled so the hook actually fires.
+    mkdirSync(join(home, ".tokenomy"), { recursive: true });
+    writeFileSync(
+      join(home, ".tokenomy", "config.json"),
+      JSON.stringify({
+        golem: { enabled: true, mode: "full", safety_gates: true },
+      }),
+    );
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "SessionStart",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.ok(stdout.length > 0, "expected Golem session-start injection");
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.hookSpecificOutput.hookEventName, "SessionStart");
+    assert.match(parsed.hookSpecificOutput.additionalContext, /FULL mode/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /Drop hedging/);
+    assert.match(
+      parsed.hookSpecificOutput.additionalContext,
+      /ALWAYS PRESERVE IN FULL/,
+    );
+    // SessionStart writes a savings-log entry so `tokenomy report` can show
+    // Golem is active for this session.
+    const log = readFileSync(join(home, ".tokenomy", "savings.jsonl"), "utf8");
+    assert.match(log, /golem:session-start:full/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: SessionStart with Golem disabled → passthrough (no stdout)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-golem-off-"));
+  try {
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "SessionStart",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout, "", "Golem disabled must not emit injection");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: UserPromptSubmit with Golem enabled + no classifier intent → emits reminder only", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-golem-reminder-"));
+  try {
+    mkdirSync(join(home, ".tokenomy"), { recursive: true });
+    writeFileSync(
+      join(home, ".tokenomy", "config.json"),
+      JSON.stringify({
+        golem: { enabled: true, mode: "ultra", safety_gates: true },
+      }),
+    );
+    const env = { ...process.env, HOME: home };
+    // Prompt that has no classifier-intent verb ("tell", "explain") AND is
+    // long enough to pass the min-chars gate. Should fire only the Golem
+    // per-turn reminder.
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Tell me about the architecture of the TLS handshake protocol.",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    assert.ok(stdout.length > 0, "expected Golem per-turn reminder");
+    const parsed = JSON.parse(stdout);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /ULTRA/);
+    assert.doesNotMatch(
+      parsed.hookSpecificOutput.additionalContext,
+      /tokenomy-nudge \(build\)|find_oss_alternatives/,
+    );
+    const log = readFileSync(join(home, ".tokenomy", "savings.jsonl"), "utf8");
+    assert.match(log, /golem:ultra/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook: UserPromptSubmit with Golem + classifier intent → stacks both context lines", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-golem-stack-"));
+  try {
+    mkdirSync(join(home, ".tokenomy"), { recursive: true });
+    writeFileSync(
+      join(home, ".tokenomy", "config.json"),
+      JSON.stringify({
+        golem: { enabled: true, mode: "full", safety_gates: true },
+      }),
+    );
+    const env = { ...process.env, HOME: home };
+    const { code, stdout } = await runHook(
+      {
+        session_id: "s",
+        transcript_path: "/tmp/t",
+        cwd: "/tmp",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Build a retry-with-backoff wrapper for our fetch calls.",
+      },
+      env,
+    );
+    assert.equal(code, 0);
+    const parsed = JSON.parse(stdout);
+    // Both the build-intent nudge AND the Golem reminder must be present.
+    assert.match(parsed.hookSpecificOutput.additionalContext, /find_oss_alternatives/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /tokenomy-golem: FULL/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("hook: malformed stdin → exit 0 with empty stdout", async () => {
   const child = spawn(process.execPath, [HOOK], { stdio: ["pipe", "pipe", "pipe"] });
   const out: Buffer[] = [];

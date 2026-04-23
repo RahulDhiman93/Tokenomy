@@ -12,7 +12,7 @@ A surgical hook + analysis toolkit for **Claude Code and Codex CLI** that transp
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](#quickstart)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 [![Phase](https://img.shields.io/badge/phase%204-alpha-blue)](#roadmap)
-[![Tests](https://img.shields.io/badge/tests-373%20passing-brightgreen)](#contribute)
+[![Tests](https://img.shields.io/badge/tests-396%20passing-brightgreen)](#contribute)
 
 </div>
 
@@ -43,6 +43,7 @@ Tokenomy plugs the holes the agent hook contracts let you close — with zero pr
 | `PreToolUse` on `Bash` | Claude Code | rewrites `tool_input.command` | Unbounded verbose shell output — `git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, `tree` |
 | `PreToolUse` on `Write` | Claude Code | `additionalContext` | Reinventing existing repo work or mature utility libraries from scratch |
 | `UserPromptSubmit` (alpha.22+) | Claude Code | `additionalContext` on every user turn | Agent planning without first checking graph for existing code, blast radius, or maintained libraries |
+| `SessionStart` (beta.1+, Golem) | Claude Code | `additionalContext` once per session + per-turn reinforcement | Verbose assistant replies — output tokens cost 5× input on Sonnet |
 | `tokenomy-graph` MCP server | Claude Code · Codex CLI | 6 tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context from a pre-built graph + repo/branch/package alternatives |
 | `tokenomy analyze` | Claude Code · Codex CLI transcripts | Walks `~/.claude/projects/**/*.jsonl` + `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules with a real tokenizer | Tells you *exactly* how much you've been wasting, by tool, by day, by rule |
 
@@ -68,6 +69,7 @@ Automatic response shrinking the moment a tool call finishes (or is about to fir
 Nudges cost nothing if the agent was going to do the right thing anyway — and save 10–50 k tokens per occurrence when it wasn't.
 
 - **OSS-alternatives Write nudge** *(alpha.18+)* — when Claude creates a new file in a utility-ish path (`src/utils/**`, `src/lib/**`, `pkg/**`, `internal/**`, etc.) above 500 B, Tokenomy recommends `find_oss_alternatives` first. The agent checks this repo + local branches + npm / PyPI / pkg.go.dev / Maven Central before writing anything.
+- **Golem** *(beta.1+)* — opt-in terse-output-mode plugin. Injects deterministic style rules at `SessionStart` and reinforces per-turn. Four modes: `lite` (drop hedging) → `full` (declarative sentences) → `ultra` (max 3 lines, single-word confirmations) → `grunt` (fragments, dropped articles/pronouns, occasional "ship it." / "nope." / "aye." — caveman-adjacent energy). Safety gates always preserve code, commands, warnings, and numerical results verbatim. Enable: `tokenomy golem enable [--mode=lite|full|ultra|grunt]`. Off by default; attacks the one token surface the other features leave alone — assistant output.
 - **Prompt-classifier nudge** *(alpha.22+)* — fires once per user turn, **before** Claude plans. Classifies intent and points at the right graph tool:
   - `build | implement | add | create` → `find_oss_alternatives`
   - `refactor | rename | migrate | extract | replace` → `find_usages` + `get_impact_radius`
@@ -144,7 +146,7 @@ Since alpha.15, `init --graph-path` builds the graph for you in a single shot; p
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
-> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.0-alpha.22`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.0-alpha.22` or `tokenomy update --version 0.1.0-alpha.22`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-alpha.N`; breaking changes may land on minor bumps (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.1`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.1` or `tokenomy update --version 0.1.1-beta.1`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -473,8 +475,8 @@ Globs are gitignore-style: `**` crosses directory boundaries, `*` stays within a
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.0-alpha.22   # npm-style pin
-tokenomy update --version=0.1.0-alpha.22  # same, explicit flag
+tokenomy update@0.1.1-beta.1   # npm-style pin
+tokenomy update --version=0.1.1-beta.1  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 
@@ -512,7 +514,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 
 ## 🤝 Contribute
 
-Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (373/373 currently green, 96% stmt / 85% branch / 100% func coverage).
+Contributions welcome. Dependency-light (zero runtime deps in the hot hook path; `@modelcontextprotocol/sdk` loaded dynamically for the graph server; `js-tiktoken` optional peer for accurate `analyze`), test-first (396/396 currently green, 96% stmt / 85% branch / 100% func coverage).
 
 **Good first issues:**
 
@@ -552,7 +554,7 @@ Rules are pure: `(toolName, toolInput, toolResponse, config) → { kind: "passth
 ```bash
 git clone https://github.com/RahulDhiman93/Tokenomy && cd Tokenomy
 npm install && npm run build
-npm test             # 373 tests, ~2s
+npm test             # 396 tests, ~2s
 npm run coverage     # c8 → coverage/lcov.info + HTML
 npm run typecheck    # tsc --noEmit
 npm link             # point `tokenomy` at your local build

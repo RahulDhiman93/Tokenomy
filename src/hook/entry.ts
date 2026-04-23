@@ -2,12 +2,17 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { dispatch } from "./dispatch.js";
-import { preDispatch, dispatchUserPrompt } from "./pre-dispatch.js";
+import {
+  preDispatch,
+  dispatchUserPrompt,
+  dispatchSessionStart,
+} from "./pre-dispatch.js";
 import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
 import type {
   HookInput,
   PreHookInput,
+  SessionStartHookInput,
   UserPromptHookInput,
 } from "../core/types.js";
 
@@ -99,12 +104,17 @@ const main = async (): Promise<void> => {
       return;
     }
 
-    let parsed: HookInput | PreHookInput | UserPromptHookInput;
+    let parsed:
+      | HookInput
+      | PreHookInput
+      | UserPromptHookInput
+      | SessionStartHookInput;
     try {
       parsed = JSON.parse(buf.toString("utf8")) as
         | HookInput
         | PreHookInput
-        | UserPromptHookInput;
+        | UserPromptHookInput
+        | SessionStartHookInput;
     } catch {
       debugLog({ phase: "parse-fail", stdin_bytes: buf.length });
       process.exit(0);
@@ -112,6 +122,20 @@ const main = async (): Promise<void> => {
     }
 
     const cfg = loadConfig(parsed?.cwd ?? process.cwd());
+
+    if (parsed?.hook_event_name === "SessionStart") {
+      const sessionInput = parsed as SessionStartHookInput;
+      const out = dispatchSessionStart(sessionInput, cfg);
+      debugLog({
+        phase: out ? "session-start-golem" : "session-start-passthrough",
+        session_id: sessionInput.session_id,
+        event: "SessionStart",
+        elapsed_ms: Date.now() - hookStart,
+      });
+      if (out) process.stdout.write(JSON.stringify(out));
+      process.exit(0);
+      return;
+    }
 
     if (parsed?.hook_event_name === "UserPromptSubmit") {
       const promptInput = parsed as UserPromptHookInput;

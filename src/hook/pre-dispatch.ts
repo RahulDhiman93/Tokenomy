@@ -5,6 +5,8 @@ import type {
   PreHookInput,
   PreHookOutput,
   SavingsLogEntry,
+  SessionStartHookInput,
+  SessionStartHookOutput,
   UserPromptHookInput,
   UserPromptHookOutput,
 } from "../core/types.js";
@@ -12,6 +14,11 @@ import { readBoundRule } from "../rules/read-bound.js";
 import { bashBoundRule } from "../rules/bash-bound.js";
 import { writeNudgeRule } from "../rules/write-nudge.js";
 import { classifyPromptRule } from "../rules/prompt-classifier.js";
+import {
+  buildGolemSessionContext,
+  buildGolemTurnReminder,
+  estimateGolemSavingsTokens,
+} from "../rules/golem.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -155,29 +162,88 @@ export const dispatchUserPrompt = (
   cfg: Config,
 ): UserPromptHookOutput | null => {
   const r = classifyPromptRule(input.prompt ?? "", cfg, input.cwd);
-  if (r.kind !== "nudge" || !r.additionalContext) return null;
+  const golemReminder = buildGolemTurnReminder(cfg);
 
-  // Log a savings entry so `tokenomy report` and `tokenomy analyze` surface
-  // these nudges alongside Read/Bash/MCP trims. Token estimates are
-  // intentionally conservative — this is the value the nudge unlocks IF
-  // the agent follows through on the MCP call, not a guaranteed saving.
-  const tokensSavedEst = INTENT_SAVINGS_TOKENS[r.intent ?? ""] ?? 5_000;
-  const bytesSavedEst = tokensSavedEst * 4;
+  if (r.kind === "nudge" && r.additionalContext) {
+    // Log a savings entry so `tokenomy report` and `tokenomy analyze` surface
+    // these nudges alongside Read/Bash/MCP trims. Token estimates are
+    // intentionally conservative — this is the value the nudge unlocks IF
+    // the agent follows through on the MCP call, not a guaranteed saving.
+    const tokensSavedEst = INTENT_SAVINGS_TOKENS[r.intent ?? ""] ?? 5_000;
+    const bytesSavedEst = tokensSavedEst * 4;
+    const entry: SavingsLogEntry = {
+      ts: new Date().toISOString(),
+      session_id: input.session_id,
+      tool: "UserPromptSubmit",
+      bytes_in: bytesSavedEst,
+      bytes_out: 0,
+      tokens_saved_est: tokensSavedEst,
+      reason: `nudge:prompt-classifier:${r.intent ?? "unknown"}`,
+    };
+    appendSavingsLog(cfg.log_path, entry);
+
+    // If Golem is active, append its per-turn reminder so the style rules
+    // survive plugin drift even in turns where a classifier intent fires.
+    const additionalContext = golemReminder
+      ? `${r.additionalContext}\n\n${golemReminder}`
+      : r.additionalContext;
+    return {
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext,
+      },
+    };
+  }
+
+  // No classifier intent matched. Golem still needs its per-turn reminder
+  // so other plugins can't shadow the style rules over time.
+  if (golemReminder) {
+    const savingsTokens = estimateGolemSavingsTokens(cfg.golem.mode);
+    const entry: SavingsLogEntry = {
+      ts: new Date().toISOString(),
+      session_id: input.session_id,
+      tool: "UserPromptSubmit",
+      bytes_in: savingsTokens * 4,
+      bytes_out: 0,
+      tokens_saved_est: savingsTokens,
+      reason: `golem:${cfg.golem.mode}`,
+    };
+    appendSavingsLog(cfg.log_path, entry);
+    return {
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: golemReminder,
+      },
+    };
+  }
+
+  return null;
+};
+
+export const dispatchSessionStart = (
+  input: SessionStartHookInput,
+  cfg: Config,
+): SessionStartHookOutput | null => {
+  const ctx = buildGolemSessionContext(cfg);
+  if (!ctx) return null;
+  // SessionStart fires once per session — log a single "golem:session-start"
+  // event so `tokenomy report` can show Golem is active without double-
+  // counting the per-turn reminders. Savings value is 0 here; the per-turn
+  // path does the accounting.
   const entry: SavingsLogEntry = {
     ts: new Date().toISOString(),
     session_id: input.session_id,
-    tool: "UserPromptSubmit",
-    bytes_in: bytesSavedEst,
+    tool: "SessionStart",
+    bytes_in: 0,
     bytes_out: 0,
-    tokens_saved_est: tokensSavedEst,
-    reason: `nudge:prompt-classifier:${r.intent ?? "unknown"}`,
+    tokens_saved_est: 0,
+    reason: `golem:session-start:${cfg.golem.mode}`,
   };
   appendSavingsLog(cfg.log_path, entry);
-
   return {
     hookSpecificOutput: {
-      hookEventName: "UserPromptSubmit",
-      additionalContext: r.additionalContext,
+      hookEventName: "SessionStart",
+      additionalContext: ctx,
     },
   };
 };

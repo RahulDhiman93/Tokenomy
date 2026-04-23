@@ -65,6 +65,24 @@ export interface UserPromptHookOutput {
   };
 }
 
+// Claude Code fires SessionStart once when a new coding session begins.
+// Golem uses this to inject its output-style rules so the whole session
+// (not just one turn) runs terse-mode.
+export interface SessionStartHookInput {
+  session_id: string;
+  transcript_path: string;
+  cwd: string;
+  hook_event_name: "SessionStart";
+  source?: string;
+}
+
+export interface SessionStartHookOutput {
+  hookSpecificOutput: {
+    hookEventName: "SessionStart";
+    additionalContext: string;
+  };
+}
+
 export type RuleResult =
   | { kind: "passthrough" }
   | {
@@ -242,6 +260,32 @@ export interface NudgeConfig {
   };
 }
 
+// Golem: terse-output-mode plugin. Injects assistant-reply style rules at
+// SessionStart and reinforces per-turn via UserPromptSubmit. Three modes
+// (lite / full / ultra) with a safety gate that NEVER compresses fenced
+// code, shell commands, security/auth warnings, or destructive-action
+// language. Off by default — opt in via `tokenomy golem enable`.
+export interface GolemConfig {
+  // Master switch. When false, no SessionStart injection, no per-turn
+  // reminder, no output-mode rules. Default: false (opt-in).
+  enabled: boolean;
+  // Terseness level:
+  // - "lite":  drop hedging ("I think", "perhaps"), pleasantries, repeat caveats
+  // - "full":  + declarative sentences only, no narration of upcoming steps,
+  //            one-sentence conclusions (Hemingway-adjacent)
+  // - "ultra": + max 3 non-code lines per reply, single-word confirmations
+  //            where possible
+  // - "grunt": + drop articles / subject pronouns where meaning survives,
+  //            fragments over sentences, occasional playful terseness
+  //            ("ship it.", "nope.", "aye."). Tightest mode — caveman-
+  //            adjacent energy, still safety-gated.
+  mode: "lite" | "full" | "ultra" | "grunt";
+  // Always-preserved content carve-outs. Fenced code / shell / security /
+  // destructive-action / error-message text is never subject to the style
+  // rules. Off this only if you understand the risk.
+  safety_gates: boolean;
+}
+
 export interface Config {
   aggression: "conservative" | "balanced" | "aggressive";
   gate: GateConfig;
@@ -263,6 +307,8 @@ export interface Config {
   // See NudgeConfig. Optional for backwards-compat: legacy config files
   // deserialize fine and pick up defaults via DEFAULT_CONFIG merging.
   nudge?: NudgeConfig;
+  // Golem: terse-output-mode plugin (0.1.1-beta.1+). Off by default.
+  golem: GolemConfig;
 }
 
 export interface DedupConfig {
