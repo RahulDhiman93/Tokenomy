@@ -12,6 +12,13 @@ import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
 import { npmSearch, registrySearch } from "../nudge/npm-search.js";
 import { repoSearch } from "../nudge/repo-search.js";
+import { createAndSaveRavenPacket } from "../raven/brief.js";
+import { compareReviews } from "../raven/compare.js";
+import { collectGitState } from "../raven/git.js";
+import { getPrReadiness } from "../raven/pr-check.js";
+import { recordDecision, recordReview } from "../raven/review.js";
+import type { RavenAgent, RavenDecisionValue, RavenFinding, RavenVerdict } from "../raven/schema.js";
+import { listReviews, readPacket, ravenStoreForRepo } from "../raven/store.js";
 import type {
   BuildGraphResult,
   FailOpen,
@@ -36,6 +43,16 @@ const CACHEABLE_TOOLS = new Set([
   "get_impact_radius",
   "get_review_context",
   "find_usages",
+]);
+
+const RAVEN_TOOLS = new Set([
+  "create_handoff_packet",
+  "read_handoff_packet",
+  "record_agent_review",
+  "list_agent_reviews",
+  "compare_agent_reviews",
+  "get_pr_readiness",
+  "record_decision",
 ]);
 
 const asObject = (value: unknown): Record<string, unknown> =>
@@ -282,6 +299,10 @@ export const dispatchGraphTool = async (
   cwd: string,
 ): Promise<QueryResult<unknown>> => {
   const args = asObject(rawArgs);
+
+  if (RAVEN_TOOLS.has(name)) {
+    return dispatchRavenTool(name, args, cwd);
+  }
 
   if (name === "build_or_update_graph") {
     const target = typeof args["path"] === "string" ? args["path"] : cwd;
@@ -541,6 +562,126 @@ const dispatchGraphToolUncached = async (
       } as QueryResult<unknown>,
       config.graph.query_budget_bytes.find_oss_alternatives,
     );
+  }
+
+  return fail("unsupported-tool");
+};
+
+const parseStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
+
+const parseRavenAgent = (value: unknown): RavenAgent | undefined =>
+  value === "claude-code" || value === "codex" || value === "human" ? value : undefined;
+
+const parseRavenVerdict = (value: unknown): RavenVerdict | undefined =>
+  value === "pass" || value === "needs-work" || value === "risky" || value === "blocked" ? value : undefined;
+
+const parseRavenDecision = (value: unknown): RavenDecisionValue | undefined =>
+  value === "merge" || value === "fix-first" || value === "investigate" || value === "defer" || value === "abandon"
+    ? value
+    : undefined;
+
+const parseRavenIntent = (value: unknown): "review" | "handoff" | "pr-check" | "second-opinion" | undefined =>
+  value === "review" || value === "handoff" || value === "pr-check" || value === "second-opinion" ? value : undefined;
+
+const parseFindings = (value: unknown): RavenFinding[] =>
+  Array.isArray(value)
+    ? value
+        .map((raw) => asObject(raw))
+        .filter((f) => typeof f["title"] === "string" && typeof f["detail"] === "string")
+        .map((f) => ({
+          severity:
+            f["severity"] === "critical" || f["severity"] === "high" || f["severity"] === "medium" || f["severity"] === "low"
+              ? f["severity"]
+              : "medium",
+          ...(typeof f["file"] === "string" ? { file: f["file"] } : {}),
+          ...(typeof f["line"] === "number" ? { line: f["line"] } : {}),
+          title: f["title"] as string,
+          detail: f["detail"] as string,
+          ...(typeof f["suggested_fix"] === "string" ? { suggested_fix: f["suggested_fix"] as string } : {}),
+          ...(typeof f["resolved"] === "boolean" ? { resolved: f["resolved"] as boolean } : {}),
+        }))
+    : [];
+
+const ravenContext = (cwd: string): QueryResult<{ root: string; store: ReturnType<typeof ravenStoreForRepo>; cfg: Config }> => {
+  const git = collectGitState(cwd);
+  if (!git.ok) return git;
+  const cfg = loadConfig(git.data.root);
+  if (!cfg.raven.enabled) return fail("raven-disabled", "Run `tokenomy raven enable` first.");
+  return { ok: true, data: { root: git.data.root, store: ravenStoreForRepo(git.data.repo_id), cfg } };
+};
+
+const ravenBudget = (cfg: Config, name: string): number =>
+  cfg.graph.query_budget_bytes[name as keyof GraphQueryBudgetConfig] ?? 8_000;
+
+const dispatchRavenTool = async (
+  name: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<QueryResult<unknown>> => {
+  if (name === "create_handoff_packet") {
+    const result = createAndSaveRavenPacket({
+      cwd,
+      goal: typeof args["goal"] === "string" ? args["goal"] : undefined,
+      targetAgent: parseRavenAgent(args["target_agent"]),
+      intent: parseRavenIntent(args["intent"]) ?? "review",
+      sourceAgent: "claude-code",
+    });
+    const cfg = loadConfig(cwd);
+    return withBudget(result.ok ? { ok: true, data: result.data } : result, ravenBudget(cfg, name));
+  }
+
+  const ctx = ravenContext(cwd);
+  if (!ctx.ok) return ctx;
+  const packetId = typeof args["packet_id"] === "string" ? args["packet_id"] : undefined;
+  const packet = readPacket(ctx.data.store, packetId);
+  if (!packet) return fail("packet-not-found", "Run `create_handoff_packet` first.");
+
+  if (name === "read_handoff_packet") {
+    return withBudget({ ok: true, data: packet }, ravenBudget(ctx.data.cfg, name));
+  }
+  if (name === "record_agent_review") {
+    const agent = parseRavenAgent(args["agent"]);
+    const verdict = parseRavenVerdict(args["verdict"]);
+    if (!agent || !verdict) return fail("invalid-input", "Expected { agent, verdict, findings?, questions?, suggested_tests? }.");
+    const review = recordReview({
+      packet,
+      cwd: ctx.data.root,
+      store: ctx.data.store,
+      agent,
+      verdict,
+      findings: parseFindings(args["findings"]),
+      questions: parseStringArray(args["questions"]),
+      suggested_tests: parseStringArray(args["suggested_tests"]),
+    });
+    return withBudget(review.ok ? { ok: true, data: review.data } : review, ravenBudget(ctx.data.cfg, name));
+  }
+  if (name === "list_agent_reviews") {
+    return withBudget({ ok: true, data: listReviews(ctx.data.store, packet.packet_id) }, ravenBudget(ctx.data.cfg, name));
+  }
+  if (name === "compare_agent_reviews") {
+    const result = compareReviews(packet, ctx.data.root, ctx.data.store, listReviews(ctx.data.store, packet.packet_id));
+    return withBudget(result.ok ? { ok: true, data: result.data } : result, ravenBudget(ctx.data.cfg, name));
+  }
+  if (name === "get_pr_readiness") {
+    const result = getPrReadiness(packet, ctx.data.root, ctx.data.store, listReviews(ctx.data.store, packet.packet_id));
+    return withBudget(result.ok ? { ok: true, data: result.data } : result, ravenBudget(ctx.data.cfg, name));
+  }
+  if (name === "record_decision") {
+    const decision = parseRavenDecision(args["decision"]);
+    const rationale = typeof args["rationale"] === "string" ? args["rationale"] : undefined;
+    const decidedBy = parseRavenAgent(args["decided_by"]);
+    if (!decision || !rationale || !decidedBy) return fail("invalid-input", "Expected { decision, rationale, decided_by, review_ids? }.");
+    const result = recordDecision({
+      packet,
+      cwd: ctx.data.root,
+      store: ctx.data.store,
+      decision,
+      rationale,
+      decided_by: decidedBy,
+      review_ids: parseStringArray(args["review_ids"]),
+    });
+    return withBudget(result.ok ? { ok: true, data: result.data } : result, ravenBudget(ctx.data.cfg, name));
   }
 
   return fail("unsupported-tool");

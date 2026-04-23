@@ -9,6 +9,7 @@ import { runAnalyze } from "./analyze.js";
 import { runDiff } from "./diff.js";
 import { runLearn } from "./learn.js";
 import { runCi } from "./ci.js";
+import { runRaven } from "./raven.js";
 import { runUpdate } from "./update.js";
 import { runGolem } from "./golem-cmd.js";
 import { runCompress } from "./compress.js";
@@ -41,6 +42,7 @@ Usage:
                 [--since=<Nd|Nw|ISO>] [--tokenizer=heuristic|tiktoken|auto]
   tokenomy learn [--since=<Nd|Nw|ISO>] [--apply]
   tokenomy ci format --input=<analyze.json>
+  tokenomy raven enable|disable|status|brief|compare|pr-check|clean|install-commands
   tokenomy graph build [--force] [--path=<dir>] [--exclude=<glob>...]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
@@ -318,6 +320,7 @@ const main = async (): Promise<number> => {
   if (cmd === "diff") return runDiff(process.argv.slice(3));
   if (cmd === "learn") return runLearn(process.argv.slice(3));
   if (cmd === "ci") return runCi(process.argv.slice(3));
+  if (cmd === "raven") return runRaven(process.argv.slice(3));
   if (cmd === "golem") return runGolem(process.argv.slice(3));
   if (cmd === "compress") return runCompress(process.argv.slice(3));
   if (cmd === "status-line") return runStatusLine(process.argv.slice(3));

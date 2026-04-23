@@ -12,6 +12,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1-beta.4] — 2026-04-23
+
+### Added
+
+- **Raven bridge.** New Claude-first `tokenomy raven` workflow for users who
+  also have Codex CLI: `enable`, `disable`, `status`, `brief`, `compare`,
+  `pr-check`, `clean`, and explicit `install-commands`. `enable` gates on
+  `codex` being present on `PATH` by default (`cfg.raven.requires_codex`);
+  every downstream check verifies `packet.head_sha` against the current
+  HEAD and refuses stale packets.
+- **Raven MCP tools on `tokenomy-graph`.** Added
+  `create_handoff_packet`, `read_handoff_packet`, `record_agent_review`,
+  `list_agent_reviews`, `compare_agent_reviews`, `get_pr_readiness`, and
+  `record_decision` for compact handoff packets, review persistence,
+  deterministic comparison (bigram-Dice ≥ 0.85 on finding titles, exact on
+  file/line/severity), PR readiness checks, and human decisions. All
+  outputs are budget-clipped per tool.
+- **Raven Claude Code nudges.** When Raven is enabled, SessionStart and
+  review/handoff/readiness prompts remind Claude to use Raven packets
+  instead of broad transcript reads.
+
+### Changed
+
+- `graph-serve` returns `0` on success instead of hanging on an unresolved
+  `Promise<number>`.
+
+### Out of scope (deferred)
+
+- `review --agent` auto-subprocessing (use human-in-the-loop: run Codex in
+  a second terminal, let it call `record_agent_review`).
+- `dispatch --worktree`.
+
+### Tests
+
+- New: `raven-compare`, `raven-pr-check`, `raven-nudge`, `raven-cli`.
+- Total: 471/471 passing.
+
 ## [0.1.1-beta.3] — 2026-04-22
 
 ### Added
@@ -726,7 +763,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.3...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.4...HEAD
+[0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4
 [0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3
 [0.1.1-beta.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.2
 [0.1.1-beta.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.1

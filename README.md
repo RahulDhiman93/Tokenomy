@@ -46,7 +46,8 @@ Tokenomy plugs the holes the agent hook contracts let you close — with zero pr
 | `UserPromptSubmit` (alpha.22+) | Claude Code | `additionalContext` on every user turn | Agent planning without first checking graph for existing code, blast radius, or maintained libraries |
 | `SessionStart` (beta.1+, Golem) | Claude Code | `additionalContext` once per session + per-turn reinforcement | Verbose assistant replies — output tokens cost 5× input on Sonnet |
 | `SessionStart` + `UserPromptSubmit` hooks | Codex CLI *(experimental)* | user-scoped `~/.codex/hooks.json` + `features.codex_hooks` | Golem output rules + prompt-classifier nudges in Codex sessions |
-| `tokenomy-graph` MCP server | Claude Code · Codex CLI | 6 tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context from a pre-built graph + repo/branch/package alternatives |
+| `tokenomy-graph` MCP server | Claude Code · Codex CLI | graph + Raven tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context from a pre-built graph + repo/branch/package alternatives |
+| `tokenomy raven` (beta.4+) | Claude Code primary + Codex CLI reviewer | opt-in handoff packets, review recording, deterministic compare, PR readiness | Manual copy/paste between agents — Claude briefs Codex with a compact packet; Codex records review; compare + `pr-check` gate merge without full transcript reads |
 | `tokenomy compress` (beta.2+) | Any repo | deterministic agent-rule file cleanup + optional local Claude rewrite | Bloated `CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.windsurf/rules` loaded every session |
 | `tokenomy status-line` (beta.2+) | Claude Code | `settings.json.statusLine` command | Invisible installs — shows active state, Golem mode, graph freshness, and today's savings |
 | `tokenomy bench` (beta.2+) | CLI | deterministic scenario runner | Reproducible savings tables for README/release notes |
@@ -90,9 +91,11 @@ Nudges cost nothing if the agent was going to do the right thing anyway — and 
 
   Conservative by design: skips confirmations under 20 chars, short-circuits if the prompt already names a graph tool, and graph-dependent intents only fire when a graph snapshot exists for the repo.
 
+- **Raven bridge** *(unreleased)* — opt-in Claude-first bridge for teams that also have Codex CLI. Enable with `tokenomy raven enable`; Tokenomy refuses to enable it when `codex` is missing on `PATH`, so the feature cannot half-turn-on unless `raven.requires_codex` is explicitly set false. Once enabled, Claude Code gets session and per-turn guidance for review/handoff/readiness prompts, while the MCP tools create compact handoff packets, record agent reviews, compare findings, and report PR readiness. The prompt matcher is intentionally broad, so occasional false-positive review reminders cost one line and do not block tool use. No automatic agent subprocesses and no worktree dispatch in v1.
+
 ### 🧠 Code-graph MCP *(surgical context retrieval)*
 
-`tokenomy-graph` — a stdio MCP server exposing six tools that replace brute-force `Read` sweeps of the codebase. Works with both Claude Code and Codex CLI.
+`tokenomy-graph` — a stdio MCP server exposing graph tools that replace brute-force `Read` sweeps of the codebase, plus Raven handoff/review tools when Raven is enabled. Works with both Claude Code and Codex CLI.
 
 | Tool | What it does | Budget |
 |---|---|---|
@@ -102,6 +105,13 @@ Nudges cost nothing if the agent was going to do the right thing anyway — and 
 | `get_review_context` | Ranked hotspots + fanout across changed files | 4 KB |
 | `find_usages` | Direct callers, references, importers of a file or symbol | 16 KB |
 | `find_oss_alternatives` | Repo + branch + package-registry search with distinct-token ranking | 8 KB |
+| `create_handoff_packet` | Create a compact Raven packet with git diff, graph context, and session hints | 8 KB |
+| `read_handoff_packet` | Read the latest or named Raven packet | 8 KB |
+| `record_agent_review` | Persist Claude/Codex/human review findings for a packet | 4 KB |
+| `list_agent_reviews` | List reviews recorded against a packet | 8 KB |
+| `compare_agent_reviews` | Deterministically match findings and surface disagreements | 8 KB |
+| `get_pr_readiness` | Apply Raven's merge verdict rules: no, risky, or yes | 8 KB |
+| `record_decision` | Persist the human merge/fix/investigate decision with rationale | 4 KB |
 
 TypeScript / JavaScript AST via the TS compiler (no type checker); `tsconfig.paths` / `jsconfig.paths` resolved *(alpha.17+)* so `@/hooks/foo` and friends link to real source files on Next.js, Vite, Nuxt, monorepos. Read-side auto-refresh *(alpha.15+)* rebuilds on demand when files change between queries. Fail-open everywhere.
 
@@ -124,8 +134,22 @@ TypeScript / JavaScript AST via the TS compiler (no type checker); `tsconfig.pat
 - **Incremental graph updates** *(beta.3+)* — `cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or >40% of files changed. Opt-in.
 - **`tokenomy budget` pre-flight gate** *(beta.3+)* — advisory `PreToolUse` rule that estimates incoming-call response size from analyze cache and warns via `additionalContext` when the call would push the session past `cfg.budget.session_cap_tokens`. Never rejects. Default off.
 - **`tokenomy ci` + GitHub Action** *(beta.3+)* — `action.yml` at repo root plus a `tokenomy ci format --input=<analyze.json>` CLI that converts analyze JSON into a PR-ready markdown comment. Inputs validated + HTML-escaped.
-- **Statusline version** *(beta.3+)* — `tokenomy statusline` now shows the version tag inline, e.g. `[Tokenomy v0.1.1-beta.3 · GOLEM-GRUNT · 15.0k saved]`.
+- **Statusline version** *(beta.3+)* — `tokenomy status-line` now shows the version tag inline, e.g. `[Tokenomy v0.1.1-beta.4 · GOLEM-GRUNT · 15.0k saved]`.
 - **Per-tool p95 latency** *(beta.3+)* — `analyze` + `report` show p50/p95 wall-clock latency per tool (from paired `tool_use`/`tool_result` timestamps).
+
+### 🪶 Raven — cross-agent handoff + review *(beta.4+)*
+
+Raven turns Claude Code and Codex CLI into a primary/reviewer pair. Claude works; Codex independently reviews; Raven compares findings and gates merge readiness. No subprocess voodoo — packets and reviews are plain JSON/markdown under `~/.tokenomy/raven/<repo>/`, and every downstream check verifies `packet.head_sha` against the current HEAD.
+
+- **`tokenomy raven enable`** — opt-in; refuses unless `codex` CLI is on PATH (override via `cfg.raven.requires_codex = false`). Installs hooks, ensures the Raven store, and registers the Raven MCP tools.
+- **`tokenomy raven brief [--goal=<text>]`** — snapshots git state + graph review context + impact radius into a compact packet. Diffs ranked by hotspot score, per-file + total byte budgets enforced, hot-path files win.
+- **`tokenomy raven status`** / **`clean [--keep=<N>] [--older-than=<days>] [--dry-run]`** — read-only status; TTL + count prune for old artifacts.
+- **`tokenomy raven compare`** — deterministic matcher (file + line + severity exact, title bigram-Dice ≥ 0.85). No LLM in the loop. Outputs agreements, disagreements (risky-unique high/critical only), `recommended_action: merge | fix-first | investigate`.
+- **`tokenomy raven pr-check`** — verdict rules: `no` on any unresolved `critical` finding / stale HEAD / zero reviews. `risky` on graph stale / dirty tree / high-severity disagreement. Exit code 2 when blocking.
+- **`tokenomy raven install-commands`** — writes `.claude/commands/raven-brief.md` + `raven-pr-check.md`. Never clobbers.
+- **Agent-facing MCP tools** (all budget-clipped, all refuse stale packets): `create_handoff_packet`, `read_handoff_packet`, `record_agent_review`, `list_agent_reviews`, `compare_agent_reviews`, `get_pr_readiness`, `record_decision`.
+
+Out-of-scope for beta.4: `review --agent` auto-subprocessing (human-in-the-loop flow instead — print the packet path, run Codex in a second terminal, it calls `record_agent_review`) and `dispatch --worktree` (follow-up PR).
 
 ---
 
@@ -202,6 +226,16 @@ Since alpha.15, `init --graph-path` builds the graph for you in a single shot; p
 
 Codex-only / manual registration: `codex mcp add tokenomy-graph -- tokenomy graph serve --path "$PWD"`.
 
+**Raven bridge** (Claude Code primary, Codex CLI reviewer):
+
+```bash
+tokenomy raven enable       # requires `codex` on PATH unless raven.requires_codex=false
+tokenomy raven brief        # writes the compact packet Claude/Codex can review
+tokenomy raven pr-check     # no / risky / yes merge readiness verdict
+```
+
+Raven is off by default. Enabling it registers the existing Tokenomy hook/MCP surface and adds Claude Code nudges for review/handoff/readiness turns. It does not auto-run Codex, create worktrees, or install `.claude/commands` unless you explicitly run `tokenomy raven install-commands`.
+
 ### Cross-agent graph install
 
 `tokenomy init --graph-path "$PWD"` auto-detects graph-capable agents and
@@ -233,7 +267,7 @@ tokenomy compress /path/to/CLAUDE.md --in-place --force  # explicit outside-cwd 
 tokenomy compress restore CLAUDE.md
 ```
 
-> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.3`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.3` or `tokenomy update --version 0.1.1-beta.3`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.4`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.4` or `tokenomy update --version 0.1.1-beta.4`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -515,8 +549,8 @@ Duplicate hotspots (same args)
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.1-beta.3   # npm-style pin
-tokenomy update --version=0.1.1-beta.3  # same, explicit flag
+tokenomy update@0.1.1-beta.4   # npm-style pin
+tokenomy update --version=0.1.1-beta.4  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 

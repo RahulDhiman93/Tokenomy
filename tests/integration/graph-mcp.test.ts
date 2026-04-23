@@ -17,12 +17,13 @@ const FIXTURE = join(
 test("graph mcp server: exposes tools and returns focused context", async () => {
   const home = mkdtempSync(join(tmpdir(), "tokenomy-graph-home-"));
   const repo = mkdtempSync(join(tmpdir(), "tokenomy-graph-repo-"));
+  let transport: StdioClientTransport | null = null;
   try {
     cpSync(FIXTURE, repo, { recursive: true });
     execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
     execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
 
-    const transport = new StdioClientTransport({
+    transport = new StdioClientTransport({
       command: process.execPath,
       args: [CLI, "graph", "serve", "--path", repo],
       env: { ...process.env, HOME: home } as Record<string, string>,
@@ -35,11 +36,18 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
       tools.tools.map((tool) => tool.name).sort(),
       [
         "build_or_update_graph",
+        "compare_agent_reviews",
+        "create_handoff_packet",
         "find_oss_alternatives",
         "find_usages",
         "get_impact_radius",
         "get_minimal_context",
+        "get_pr_readiness",
         "get_review_context",
+        "list_agent_reviews",
+        "read_handoff_packet",
+        "record_agent_review",
+        "record_decision",
       ],
     );
 
@@ -73,9 +81,8 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
     assert.equal(usagesPayload.ok, true);
     assert.equal(usagesPayload.data.focal.id, "file:src/foo.ts");
     assert.ok(Array.isArray(usagesPayload.data.call_sites));
-
-    await transport.close();
   } finally {
+    await transport?.close().catch(() => {});
     rmSync(home, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   }

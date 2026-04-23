@@ -1,1 +1,1 @@
-export const TOKENOMY_VERSION = "0.1.1-beta.3";
+export const TOKENOMY_VERSION = "0.1.1-beta.4";
