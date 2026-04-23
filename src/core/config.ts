@@ -82,12 +82,20 @@ export const DEFAULT_CONFIG: Config = {
       "**/*-bundle.mjs",
     ],
     auto_refresh_on_read: true,
+    incremental: false,
     tsconfig: {
       enabled: true,
     },
   },
   redact: {
     enabled: true,
+    pre_tool_use: false,
+  },
+  budget: {
+    enabled: false,
+    warn_threshold_tokens: 5_000,
+    session_cap_tokens: 150_000,
+    exclude_tools: ["Read", "Write", "Edit"],
   },
   log_path: defaultLogPath(),
   disabled_tools: [],

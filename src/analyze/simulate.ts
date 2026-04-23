@@ -42,6 +42,9 @@ export interface SimEvent {
   duplicate_of_index?: number;
   // canonicalized key for cross-session hotspot aggregation.
   call_key: string;
+  // Tool-call wall-clock latency (ms), threaded through from parse.ts.
+  // Null when pairing yields no usable delta — treated as missing in p95 math.
+  latency_ms?: number | null;
 }
 
 const canonicalize = (value: unknown): unknown => {
@@ -244,6 +247,7 @@ export class Simulator {
         savings_tokens: 0,
         per_rule: perRule,
         call_key: key,
+        latency_ms: call.latency_ms ?? null,
       };
     }
     const toolCfg = configForTool(projectCfg, call.tool_name);
@@ -406,6 +410,7 @@ export class Simulator {
       per_rule: perRule,
       ...(duplicate_of_index !== undefined ? { duplicate_of_index } : {}),
       call_key: key,
+      latency_ms: call.latency_ms ?? null,
     };
   }
 }

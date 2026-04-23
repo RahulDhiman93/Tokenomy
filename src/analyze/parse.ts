@@ -42,7 +42,21 @@ export interface ToolCall {
   // the simulator uses it directly instead of re-tokenizing — crucial for
   // correct observed-token / USD numbers on exec-heavy sessions.
   observed_tokens_override?: number;
+  // Wall-clock latency between tool_use and its paired tool_result (ms).
+  // Null when either timestamp is missing or unparseable. Used by `report`
+  // to surface per-tool p50/p95 so "slow tool" correlates with "bloated tool".
+  latency_ms?: number | null;
 }
+
+const pairLatencyMs = (useTs: string, resultTs: string): number | null => {
+  if (!useTs || !resultTs) return null;
+  const u = Date.parse(useTs);
+  const r = Date.parse(resultTs);
+  if (!Number.isFinite(u) || !Number.isFinite(r)) return null;
+  const delta = r - u;
+  if (delta < 0) return null;
+  return delta;
+};
 
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -215,6 +229,7 @@ const extractClaudeToolResults = (
       tool_response: response,
       is_error,
       response_bytes: bytes,
+      latency_ms: pairLatencyMs(use.ts, ts),
     });
   }
 };
@@ -302,6 +317,7 @@ const extractCodex = (
       tool_response: output,
       is_error: false,
       response_bytes: bytes,
+      latency_ms: pairLatencyMs(use.ts, ts),
       ...(observed_tokens_override !== undefined ? { observed_tokens_override } : {}),
     });
     return true;

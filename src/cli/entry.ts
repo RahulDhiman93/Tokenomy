@@ -6,6 +6,9 @@ import { configGet, configSet } from "./config-cmd.js";
 import { runGraph } from "./graph.js";
 import { runReport } from "./report.js";
 import { runAnalyze } from "./analyze.js";
+import { runDiff } from "./diff.js";
+import { runLearn } from "./learn.js";
+import { runCi } from "./ci.js";
 import { runUpdate } from "./update.js";
 import { runGolem } from "./golem-cmd.js";
 import { runCompress } from "./compress.js";
@@ -34,6 +37,10 @@ Usage:
   tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
   tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
                    [--top=<N>] [--tokenizer=heuristic|tiktoken|auto] [--json] [--no-color] [--verbose]
+  tokenomy diff --call-key <sha256> | --tool <name> [--grep <str>] | --session <id> [--index <N>]
+                [--since=<Nd|Nw|ISO>] [--tokenizer=heuristic|tiktoken|auto]
+  tokenomy learn [--since=<Nd|Nw|ISO>] [--apply]
+  tokenomy ci format --input=<analyze.json>
   tokenomy graph build [--force] [--path=<dir>] [--exclude=<glob>...]
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
@@ -284,6 +291,8 @@ const main = async (): Promise<number> => {
       json: args.flags["json"] === true,
       color: args.flags["no-color"] !== true,
       verbose: args.flags["verbose"] === true,
+      tune: args.flags["tune"] === true,
+      cache: args.flags["no-cache"] !== true,
     });
   }
 
@@ -306,6 +315,9 @@ const main = async (): Promise<number> => {
     return 0;
   }
 
+  if (cmd === "diff") return runDiff(process.argv.slice(3));
+  if (cmd === "learn") return runLearn(process.argv.slice(3));
+  if (cmd === "ci") return runCi(process.argv.slice(3));
   if (cmd === "golem") return runGolem(process.argv.slice(3));
   if (cmd === "compress") return runCompress(process.argv.slice(3));
   if (cmd === "status-line") return runStatusLine(process.argv.slice(3));

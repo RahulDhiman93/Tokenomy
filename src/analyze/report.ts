@@ -21,6 +21,11 @@ export interface AggregateReport {
     observed_tokens: number;
     savings_tokens: number;
     waste_pct: number; // savings / observed
+    // Latency percentiles (ms) from paired tool_use→tool_result timestamps.
+    // Null when no latency samples were available for the tool.
+    p50_latency_ms: number | null;
+    p95_latency_ms: number | null;
+    latency_samples: number;
   }>;
   by_rule: Array<{ rule: string; savings_tokens: number; events: number }>;
   by_day: Array<{ day: string; observed_tokens: number; savings_tokens: number }>;
@@ -63,7 +68,21 @@ interface ToolBucket {
   calls: number;
   observed_tokens: number;
   savings_tokens: number;
+  // Bounded sample buffer for p50/p95 latency. 200 samples per tool keeps
+  // memory flat even on hot tools while still giving a stable p95.
+  latencies: number[];
 }
+
+// Cap per-tool latency sample buffer; older samples are dropped FIFO once
+// the cap is hit. 200 is enough for a stable p95 and keeps memory bounded.
+const LATENCY_SAMPLE_CAP = 200;
+
+const percentile = (sorted: number[], p: number): number | null => {
+  if (sorted.length === 0) return null;
+  // Nearest-rank method: rank = ceil(p/100 * n). Clamp to [1, n].
+  const idx = Math.min(sorted.length, Math.max(1, Math.ceil((p / 100) * sorted.length))) - 1;
+  return sorted[idx] ?? null;
+};
 
 interface KeyBucket {
   tool: string;
@@ -141,10 +160,19 @@ export class Aggregator {
     }
 
     // By tool.
-    const bt = this.byTool.get(e.tool_name) ?? { calls: 0, observed_tokens: 0, savings_tokens: 0 };
+    const bt = this.byTool.get(e.tool_name) ?? {
+      calls: 0,
+      observed_tokens: 0,
+      savings_tokens: 0,
+      latencies: [],
+    };
     bt.calls++;
     bt.observed_tokens += e.observed_tokens;
     bt.savings_tokens += e.savings_tokens;
+    if (typeof e.latency_ms === "number" && Number.isFinite(e.latency_ms) && e.latency_ms >= 0) {
+      bt.latencies.push(e.latency_ms);
+      if (bt.latencies.length > LATENCY_SAMPLE_CAP) bt.latencies.shift();
+    }
     this.byTool.set(e.tool_name, bt);
 
     // By rule.
@@ -282,13 +310,19 @@ export class Aggregator {
   build(): AggregateReport {
     const top = this.opts.top_n;
     const byTool = [...this.byTool.entries()]
-      .map(([tool, v]) => ({
-        tool,
-        calls: v.calls,
-        observed_tokens: v.observed_tokens,
-        savings_tokens: v.savings_tokens,
-        waste_pct: v.observed_tokens > 0 ? v.savings_tokens / v.observed_tokens : 0,
-      }))
+      .map(([tool, v]) => {
+        const sorted = [...v.latencies].sort((a, b) => a - b);
+        return {
+          tool,
+          calls: v.calls,
+          observed_tokens: v.observed_tokens,
+          savings_tokens: v.savings_tokens,
+          waste_pct: v.observed_tokens > 0 ? v.savings_tokens / v.observed_tokens : 0,
+          p50_latency_ms: percentile(sorted, 50),
+          p95_latency_ms: percentile(sorted, 95),
+          latency_samples: sorted.length,
+        };
+      })
       .sort((a, b) => b.savings_tokens - a.savings_tokens || b.observed_tokens - a.observed_tokens)
       .slice(0, top);
 

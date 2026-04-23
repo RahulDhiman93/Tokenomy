@@ -139,10 +139,32 @@ export interface ShapeTrimConfig {
   max_string_bytes: number;
 }
 
+// Pre-flight cost gate. When enabled, PreToolUse estimates the response
+// size of incoming tool calls from analyze-cache history and appends a
+// warning to `additionalContext` if the call would push the session over
+// `session_cap_tokens`. Never refuses — PreHookOutput has no reject field.
+export interface BudgetConfig {
+  enabled: boolean;
+  // Per-call warn threshold (tokens). Below this, never warns regardless of
+  // session state.
+  warn_threshold_tokens: number;
+  // Session-wide cumulative cap (tokens). Warn only when running total +
+  // estimated > this number.
+  session_cap_tokens: number;
+  // Tools for which the budget gate always no-ops. Defaults to Read/Write/
+  // Edit because those are already clamped/bounded and routinely small.
+  exclude_tools: string[];
+}
+
 export interface RedactConfig {
   enabled: boolean;
   // Disabled pattern names (e.g. ["jwt"] if users carry many non-secret JWTs).
   disabled_patterns?: string[];
+  // PreToolUse redaction for user-initiated tool calls (Bash/Write/Edit).
+  // Defaults to false so the first beta-3 tag ships the feature without
+  // surprising users; flip to true after one release cycle of real-world
+  // validation that redaction doesn't mangle legitimate scripts.
+  pre_tool_use?: boolean;
 }
 
 export interface ReadRuleConfig {
@@ -195,6 +217,11 @@ export interface GraphConfig {
   query_budget_bytes: GraphQueryBudgetConfig;
   exclude: string[];
   auto_refresh_on_read: boolean;
+  // Beta-3: delta graph builds. When true, the builder compares file
+  // content hashes against the prior snapshot and re-parses only changed
+  // files. Falls back to a full build when tsconfig/package.json change or
+  // when >40% of files differ. Default: false during first beta-3 tag.
+  incremental?: boolean;
   tsconfig: {
     // When true, the graph builder resolves import specifiers through the
     // nearest tsconfig.json / jsconfig.json `paths` + `baseUrl` (honors
@@ -290,7 +317,10 @@ export interface GolemConfig {
   //            fragments over sentences, occasional playful terseness
   //            ("ship it.", "nope.", "aye."). Tightest mode — caveman-
   //            adjacent energy, still safety-gated.
-  mode: "lite" | "full" | "ultra" | "grunt";
+  // "auto" resolves at SessionStart from ~/.tokenomy/golem-tune.json
+  // (written by `tokenomy analyze --tune`). Falls back to "full" if the
+  // tune file doesn't exist yet.
+  mode: "lite" | "full" | "ultra" | "grunt" | "auto";
   // Always-preserved content carve-outs. Fenced code / shell / security /
   // destructive-action / error-message text is never subject to the style
   // rules. Off this only if you understand the risk.
@@ -305,6 +335,8 @@ export interface Config {
   bash: BashRuleConfig;
   graph: GraphConfig;
   redact: RedactConfig;
+  // PreToolUse pre-flight cost gate (beta-3+). Defaults to disabled.
+  budget?: BudgetConfig;
   log_path: string;
   disabled_tools: string[];
   // Glob-keyed per-tool overrides. E.g.

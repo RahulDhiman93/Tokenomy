@@ -14,10 +14,13 @@ import { readBoundRule } from "../rules/read-bound.js";
 import { bashBoundRule } from "../rules/bash-bound.js";
 import { writeNudgeRule } from "../rules/write-nudge.js";
 import { classifyPromptRule } from "../rules/prompt-classifier.js";
+import { redactPreRule } from "../rules/redact-pre.js";
+import { budgetRule } from "../rules/budget.js";
 import {
   buildGolemSessionContext,
   buildGolemTurnReminder,
   estimateGolemSavingsTokens,
+  resolveGolemMode,
 } from "../rules/golem.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
@@ -90,9 +93,65 @@ const preDispatchRead = (input: PreHookInput, cfg: Config): PreHookOutput | null
   };
 };
 
+const logRedactPre = (
+  tool: string,
+  sessionId: string,
+  total: number,
+  counts: Record<string, number>,
+  cfg: Config,
+): void => {
+  const entry: SavingsLogEntry = {
+    ts: new Date().toISOString(),
+    session_id: sessionId,
+    tool,
+    bytes_in: 0,
+    bytes_out: 0,
+    // Security-first rule: tokens_saved_est intentionally 0 — redact is
+    // about preventing leaks, not about compression. The counts ride in
+    // via `reason` so `tokenomy report` can surface pattern hits.
+    tokens_saved_est: 0,
+    reason: `redact-pre:${Object.keys(counts).join("+") || "detected"}:${total}`,
+  };
+  appendSavingsLog(cfg.log_path, entry);
+};
+
 const preDispatchBash = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
-  const r = bashBoundRule(input.tool_input ?? {}, cfg);
-  if (r.kind !== "bound" || !r.updatedInput) return null;
+  // Stage 0: pre-flight budget gate. Always advisory — never rewrites input,
+  // only emits a warning in additionalContext so the agent sees the cost
+  // before committing to the call. Runs first so its running-total update
+  // happens exactly once per PreToolUse event even when later stages
+  // passthrough.
+  const budget = budgetRule(input.session_id, "Bash", cfg);
+  let extraContext = budget.kind === "warn" && budget.additionalContext ? budget.additionalContext : "";
+
+  // Stage 1: pre-call redact (no-op unless cfg.redact.pre_tool_use === true).
+  let toolInput = input.tool_input ?? {};
+  const rp = redactPreRule("Bash", toolInput, cfg);
+  if (rp.kind === "redacted" && rp.updatedInput) {
+    toolInput = { ...toolInput, ...rp.updatedInput };
+    if (rp.additionalContext) extraContext = [extraContext, rp.additionalContext].filter(Boolean).join(" ");
+    if (rp.total && rp.counts) logRedactPre("Bash", input.session_id, rp.total, rp.counts, cfg);
+  } else if (rp.kind === "warned") {
+    if (rp.additionalContext) extraContext = [extraContext, rp.additionalContext].filter(Boolean).join(" ");
+    if (rp.total && rp.counts) logRedactPre("Bash", input.session_id, rp.total, rp.counts, cfg);
+  }
+
+  // Stage 2: bash-bound against the (possibly redacted) command.
+  const r = bashBoundRule(toolInput, cfg);
+  if (r.kind !== "bound" || !r.updatedInput) {
+    // If any earlier stage produced a message (budget warning, redact
+    // rewrite, or bare-arg warn) we still need to surface it.
+    if ((rp.kind === "redacted" && rp.updatedInput) || rp.kind === "warned" || extraContext) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          updatedInput: toolInput,
+          ...(extraContext ? { additionalContext: extraContext } : {}),
+        },
+      };
+    }
+    return null;
+  }
 
   // Pure heuristic: unbounded verbose shell commands average ~100 KB of
   // output in long sessions; the bounded variant returns head_limit * ~50 B.
@@ -112,23 +171,59 @@ const preDispatchBash = (input: PreHookInput, cfg: Config): PreHookOutput | null
   };
   appendSavingsLog(cfg.log_path, entry);
 
+  const combined = [extraContext, r.additionalContext].filter(Boolean).join(" ");
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       updatedInput: r.updatedInput,
-      ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}),
+      ...(combined ? { additionalContext: combined } : {}),
     },
   };
 };
 
 const preDispatchWrite = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
-  const r = writeNudgeRule(input.tool_input ?? {}, cfg, input.cwd);
-  if (r.kind !== "nudge" || !r.updatedInput) return null;
+  let toolInput = input.tool_input ?? {};
+  let extraContext = "";
+  const rp = redactPreRule("Write", toolInput, cfg);
+  if (rp.kind === "redacted" && rp.updatedInput) {
+    toolInput = { ...toolInput, ...rp.updatedInput };
+    if (rp.additionalContext) extraContext = rp.additionalContext;
+    if (rp.total && rp.counts) logRedactPre("Write", input.session_id, rp.total, rp.counts, cfg);
+  }
+
+  const r = writeNudgeRule(toolInput, cfg, input.cwd);
+  if (r.kind !== "nudge" || !r.updatedInput) {
+    if (rp.kind === "redacted" && rp.updatedInput) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          updatedInput: toolInput,
+          ...(extraContext ? { additionalContext: extraContext } : {}),
+        },
+      };
+    }
+    return null;
+  }
+  const combined = [extraContext, r.additionalContext].filter(Boolean).join(" ");
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       updatedInput: r.updatedInput,
-      ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}),
+      ...(combined ? { additionalContext: combined } : {}),
+    },
+  };
+};
+
+const preDispatchEdit = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
+  const toolInput = input.tool_input ?? {};
+  const rp = redactPreRule("Edit", toolInput, cfg);
+  if (rp.kind !== "redacted" || !rp.updatedInput) return null;
+  if (rp.total && rp.counts) logRedactPre("Edit", input.session_id, rp.total, rp.counts, cfg);
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput: rp.updatedInput,
+      ...(rp.additionalContext ? { additionalContext: rp.additionalContext } : {}),
     },
   };
 };
@@ -141,6 +236,7 @@ export const preDispatch = (
   if (input.tool_name === "Read") return preDispatchRead(input, cfg);
   if (input.tool_name === "Bash") return preDispatchBash(input, cfg);
   if (input.tool_name === "Write") return preDispatchWrite(input, cfg);
+  if (input.tool_name === "Edit") return preDispatchEdit(input, cfg);
   return null;
 };
 
@@ -198,7 +294,8 @@ export const dispatchUserPrompt = (
   // No classifier intent matched. Golem still needs its per-turn reminder
   // so other plugins can't shadow the style rules over time.
   if (golemReminder) {
-    const savingsTokens = estimateGolemSavingsTokens(cfg.golem.mode);
+    const resolvedMode = resolveGolemMode(cfg);
+    const savingsTokens = estimateGolemSavingsTokens(resolvedMode);
     const entry: SavingsLogEntry = {
       ts: new Date().toISOString(),
       session_id: input.session_id,
@@ -206,7 +303,7 @@ export const dispatchUserPrompt = (
       bytes_in: savingsTokens * 4,
       bytes_out: 0,
       tokens_saved_est: savingsTokens,
-      reason: `golem:${cfg.golem.mode}`,
+      reason: `golem:${resolvedMode}`,
     };
     appendSavingsLog(cfg.log_path, entry);
     return {
@@ -237,7 +334,7 @@ export const dispatchSessionStart = (
     bytes_in: 0,
     bytes_out: 0,
     tokens_saved_est: 0,
-    reason: `golem:session-start:${cfg.golem.mode}`,
+    reason: `golem:session-start:${resolveGolemMode(cfg)}`,
   };
   appendSavingsLog(cfg.log_path, entry);
   return {

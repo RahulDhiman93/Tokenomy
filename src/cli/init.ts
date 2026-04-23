@@ -44,7 +44,7 @@ const POST_MATCHER = "mcp__.*";
 // PreToolUse fires for Read (file clamp), Bash (input bounder), and Write
 // (OSS-alternatives nudge, alpha.18+). Claude Code matchers accept regex-style
 // alternation, so one entry covers all three.
-const PRE_MATCHER = "Read|Bash|Write";
+const PRE_MATCHER = "Read|Bash|Write|Edit";
 const TIMEOUT_SECONDS = 10;
 const GRAPH_SERVER_NAME = "tokenomy-graph";
 

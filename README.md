@@ -51,6 +51,12 @@ Tokenomy plugs the holes the agent hook contracts let you close — with zero pr
 | `tokenomy status-line` (beta.2+) | Claude Code | `settings.json.statusLine` command | Invisible installs — shows active state, Golem mode, graph freshness, and today's savings |
 | `tokenomy bench` (beta.2+) | CLI | deterministic scenario runner | Reproducible savings tables for README/release notes |
 | `tokenomy analyze` | Claude Code · Codex CLI transcripts | Walks `~/.claude/projects/**/*.jsonl` + `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules with a real tokenizer | Tells you *exactly* how much you've been wasting, by tool, by day, by rule |
+| `tokenomy diff` (beta.3+) | CLI | replay one historical call through the rule stack with per-rule attribution | Debug *why* a tool call saved (or didn't save) what you expected |
+| `tokenomy learn` (beta.3+) | CLI | mines `savings.jsonl` → proposes config patches | Project-specific tuning without hand-writing config |
+| `tokenomy budget` (beta.3+) | Claude Code `PreToolUse` | advisory `additionalContext` when a call would push session past a token cap | Runaway session cost — warns *before* the bloated call, not after |
+| Pre-call redact (beta.3+) | Claude Code `PreToolUse` on `Bash`/`Write`/`Edit` | redacts secrets in Bash headers/URLs and `Write`/`Edit` content; warns on bare-arg credentials | Closes the symmetric leak — secrets in *inputs* no longer reach the assistant |
+| Golem auto-tune (beta.3+) | Claude Code | `tokenomy analyze --tune` picks a Golem mode from your real reply-size p95 | Right-sized terseness without tuning by hand |
+| `tokenomy ci` (beta.3+) | GitHub Actions | `action.yml` + `tokenomy ci format` | Per-PR token-waste summary comment straight from CI |
 
 Each live trim appends a row to `~/.tokenomy/savings.jsonl` with measured bytes-in / bytes-out, so you can prove the savings. Run `tokenomy report` for a TUI + HTML digest, or `tokenomy analyze` to benchmark real historical waste from session transcripts.
 
@@ -103,11 +109,23 @@ TypeScript / JavaScript AST via the TS compiler (no type checker); `tsconfig.pat
 
 - **`~/.tokenomy/savings.jsonl`** — every trim and nudge appends a row with measured bytes-in / bytes-out and estimated tokens saved. Tail it: `tail -f ~/.tokenomy/savings.jsonl`.
 - **`tokenomy report`** — TUI + HTML digest of recent trims grouped by tool, by reason, by day. Answers "am I actually saving tokens?"
-- **`tokenomy analyze`** — walks `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules against real historical transcripts with a real tokenizer, surfaces patterns like *Wasted-probe incidents*. Answers "where have I been wasting tokens all along?"
+- **`tokenomy analyze`** — walks `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`, replays Tokenomy rules against real historical transcripts with a real tokenizer, surfaces patterns like *Wasted-probe incidents*. Beta.3+: adds per-tool p50/p95 latency columns and writes `~/.tokenomy/analyze-cache.json` for the budget rule. Pass `--tune` to write `golem-tune.json` too. Answers "where have I been wasting tokens all along?"
 - **`tokenomy compress`** — deterministic cleanup for agent instruction files. Preserves frontmatter, fenced/indented code, URLs, and command examples; `--in-place` writes a mandatory `.original.md` backup, and `restore` swaps it back.
 - **`tokenomy bench`** — deterministic benchmark runner with JSON and markdown output for reproducible release/README tables.
 - **`tokenomy doctor`** — health checks covering hook install, settings.json integrity, statusline registration, manifest drift, MCP registration, hook perf budget, and agent detection. Run anytime; run automatically on every `tokenomy update`.
 - **`tokenomy update`** — single-command self-update: runs `npm install -g tokenomy@latest`, re-stages the hook, re-registers the graph MCP *(alpha.20+)* if one was previously configured. Config and logs preserved.
+
+### 🆕 Beta.3 additions
+
+- **`tokenomy diff`** *(beta.3+)* — replay one historical tool call through the current rule stack and show the per-rule savings breakdown. Selectors: `--call-key <sha>` / `--tool <name> [--grep <str>]` / `--session <id> --index <N>`. Output includes a capped response preview so you can see exactly what the rule saw.
+- **`tokenomy learn`** *(beta.3+)* — mines `~/.tokenomy/savings.jsonl` and proposes config patches (new `bash.custom_verbose` entries, raise `read.injected_limit`, enable `redact.pre_tool_use`). Read-only by default; `--apply` writes `~/.tokenomy/config.json` with a timestamped backup.
+- **Pre-call redact** *(beta.3+)* — extends secret redaction to `PreToolUse` on `Bash`/`Write`/`Edit`. Bash header/URL secrets are redacted and warned; bare-arg secrets are warn-only so we don't mangle intentional keys in scripts. Multi-line headers (`\`-continued) are handled. Opt-in via `cfg.redact.pre_tool_use: true`.
+- **Golem auto-tune** *(beta.3+)* — `cfg.golem.mode = "auto"` reads `~/.tokenomy/golem-tune.json` (written by `tokenomy analyze --tune`) and picks a mode from your actual p95 reply size. Thresholds: `<800 B → lite`, `<2 KB → full`, `<5 KB → ultra`, `≥ 5 KB → grunt`.
+- **Incremental graph updates** *(beta.3+)* — `cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or >40% of files changed. Opt-in.
+- **`tokenomy budget` pre-flight gate** *(beta.3+)* — advisory `PreToolUse` rule that estimates incoming-call response size from analyze cache and warns via `additionalContext` when the call would push the session past `cfg.budget.session_cap_tokens`. Never rejects. Default off.
+- **`tokenomy ci` + GitHub Action** *(beta.3+)* — `action.yml` at repo root plus a `tokenomy ci format --input=<analyze.json>` CLI that converts analyze JSON into a PR-ready markdown comment. Inputs validated + HTML-escaped.
+- **Statusline version** *(beta.3+)* — `tokenomy statusline` now shows the version tag inline, e.g. `[Tokenomy v0.1.1-beta.3 · GOLEM-GRUNT · 15.0k saved]`.
+- **Per-tool p95 latency** *(beta.3+)* — `analyze` + `report` show p50/p95 wall-clock latency per tool (from paired `tool_use`/`tool_result` timestamps).
 
 ---
 
@@ -215,7 +233,7 @@ tokenomy compress /path/to/CLAUDE.md --in-place --force  # explicit outside-cwd 
 tokenomy compress restore CLAUDE.md
 ```
 
-> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.2`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.2` or `tokenomy update --version 0.1.1-beta.2`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.3`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.3` or `tokenomy update --version 0.1.1-beta.3`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -497,8 +515,8 @@ Duplicate hotspots (same args)
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.1-beta.2   # npm-style pin
-tokenomy update --version=0.1.1-beta.2  # same, explicit flag
+tokenomy update@0.1.1-beta.3   # npm-style pin
+tokenomy update --version=0.1.1-beta.3  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 

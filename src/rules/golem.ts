@@ -1,4 +1,7 @@
+import { existsSync, readFileSync } from "node:fs";
+import { golemTunePath } from "../core/paths.js";
 import type { Config } from "../core/types.js";
+import { safeParse } from "../util/json.js";
 
 // Golem — the tireless-clay-worker output-mode plugin for tokenomy.
 //
@@ -22,6 +25,38 @@ import type { Config } from "../core/types.js";
 // disable via `nudge.golem.safety_gates = false` but that's rarely wise.
 
 export type GolemMode = "lite" | "full" | "ultra" | "grunt";
+export type GolemConfigMode = GolemMode | "auto";
+
+// Shape written by `tokenomy analyze --tune` into ~/.tokenomy/golem-tune.json.
+// `mode` must be one of the concrete modes (never "auto") — the resolver
+// would otherwise infinite-loop on itself.
+export interface GolemTuneState {
+  mode: GolemMode;
+  confidence: "low" | "medium" | "high";
+  window_sessions: number;
+  last_updated_ts: string;
+  reasoning: string;
+}
+
+// Resolve cfg.golem.mode to a concrete mode. "auto" reads the tune file and
+// falls back to "full" if the file is missing or unreadable — never throws.
+export const resolveGolemMode = (cfg: Config): GolemMode => {
+  const raw = cfg.golem?.mode;
+  if (raw === "auto") {
+    try {
+      const path = golemTunePath();
+      if (!existsSync(path)) return "full";
+      const parsed = safeParse<GolemTuneState>(readFileSync(path, "utf8"));
+      const m = parsed?.mode;
+      if (m === "lite" || m === "full" || m === "ultra" || m === "grunt") return m;
+      return "full";
+    } catch {
+      return "full";
+    }
+  }
+  if (raw === "lite" || raw === "full" || raw === "ultra" || raw === "grunt") return raw;
+  return "full";
+};
 
 // The canonical rule blocks. Kept as plain text so users who run
 // `tokenomy golem status` can see exactly what's being injected — no
@@ -87,14 +122,16 @@ const modeLabel = (mode: GolemMode): string => mode.toUpperCase();
 export const buildGolemSessionContext = (cfg: Config): string | null => {
   const g = cfg.golem;
   if (!g || !g.enabled) return null;
-  const rules = rulesFor(g.mode);
+  const mode = resolveGolemMode(cfg);
+  const rules = rulesFor(mode);
   const gates = g.safety_gates ? `\n\n${SAFETY_GATES}` : "";
+  const autoTag = g.mode === "auto" ? " (auto)" : "";
   return (
-    `[tokenomy-golem: ${modeLabel(g.mode)} mode — terse assistant replies, deterministic rules]\n\n` +
+    `[tokenomy-golem: ${modeLabel(mode)}${autoTag} mode — terse assistant replies, deterministic rules]\n\n` +
     `Apply these output-style rules to every assistant reply in this session:\n` +
     `  - ${rules}${gates}\n\n` +
     `Turn Golem off: \`tokenomy golem disable\`. Change mode: ` +
-    `\`tokenomy golem enable --mode lite|full|ultra\`.`
+    `\`tokenomy golem enable --mode lite|full|ultra|grunt|auto\`.`
   );
 };
 
@@ -106,7 +143,8 @@ export const buildGolemSessionContext = (cfg: Config): string | null => {
 export const buildGolemTurnReminder = (cfg: Config): string | null => {
   const g = cfg.golem;
   if (!g || !g.enabled) return null;
-  return `[tokenomy-golem: ${modeLabel(g.mode)} — terse replies, preserve code/commands/warnings verbatim]`;
+  const mode = resolveGolemMode(cfg);
+  return `[tokenomy-golem: ${modeLabel(mode)} — terse replies, preserve code/commands/warnings verbatim]`;
 };
 
 // Rough per-turn output-token savings estimate, used for savings.jsonl and

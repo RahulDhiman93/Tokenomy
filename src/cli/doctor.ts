@@ -206,7 +206,7 @@ const manifestDriftCheck = (settings: SettingsShape | undefined): CheckResult =>
 };
 
 const preMatcherCoverageCheck = (settings: SettingsShape | undefined): CheckResult => {
-  const name = "PreToolUse matcher covers Read + Bash + Write";
+  const name = "PreToolUse matcher covers Read + Bash + Write + Edit";
   if (!settings) {
     return { name, ok: true, detail: "no settings" };
   }
@@ -223,8 +223,14 @@ const preMatcherCoverageCheck = (settings: SettingsShape | undefined): CheckResu
   const coversRead = /(^|\W)Read(\W|$)/.test(joined);
   const coversBash = /(^|\W)Bash(\W|$)/.test(joined);
   const coversWrite = /(^|\W)Write(\W|$)/.test(joined);
-  const ok = coversRead && coversBash && coversWrite;
-  const missing = [!coversRead && "Read", !coversBash && "Bash", !coversWrite && "Write"]
+  const coversEdit = /(^|\W)Edit(\W|$)/.test(joined);
+  const ok = coversRead && coversBash && coversWrite && coversEdit;
+  const missing = [
+    !coversRead && "Read",
+    !coversBash && "Bash",
+    !coversWrite && "Write",
+    !coversEdit && "Edit",
+  ]
     .filter(Boolean)
     .join(", ");
   return {
