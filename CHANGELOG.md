@@ -12,6 +12,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- Codex CLI hook foothold: `tokenomy init --graph-path` now installs
+  user-scoped `~/.codex/hooks.json` entries for `SessionStart` and
+  `UserPromptSubmit`, and enables `features.codex_hooks` in
+  `~/.codex/config.toml`. This brings Golem and prompt-classifier nudges
+  to Codex sessions while leaving unsupported MCP/Bash output mutation
+  out of the Codex path.
+- `docs/NEXT_FEATURES.md` with a prioritized roadmap for making Tokenomy
+  the agent efficiency layer for Claude Code and Codex CLI.
+
 ## [0.1.1-beta.2] — 2026-04-23
 
 ### Added

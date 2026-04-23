@@ -2,8 +2,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { AgentAdapter, AgentInstallResult, AgentName } from "./common.js";
 import { commandExists, homePath, patchMcpJson, removeMcpJson } from "./common.js";
+import { hookBinaryPath } from "../../core/paths.js";
+import {
+  removeCodexTokenomyHooks,
+  upsertCodexTokenomyHooks,
+} from "../../util/codex-config.js";
 
-const codexInstall = (graphPath: string): AgentInstallResult => {
+const codexInstall = (graphPath: string, backup: boolean): AgentInstallResult => {
   if (!commandExists("codex")) {
     return { agent: "codex", installed: false, detail: "codex not on PATH" };
   }
@@ -13,20 +18,39 @@ const codexInstall = (graphPath: string): AgentInstallResult => {
     ["mcp", "add", "tokenomy-graph", "--", "tokenomy", "graph", "serve", "--path", graphPath],
     { stdio: "ignore" },
   );
+  let hookDetail = "hooks skipped";
+  try {
+    const hooks = upsertCodexTokenomyHooks(hookBinaryPath(), backup);
+    hookDetail = `hooks ${hooks.hooksPath}`;
+  } catch {
+    hookDetail = "hooks failed";
+  }
   return {
     agent: "codex",
-    installed: add.status === 0,
-    detail: add.status === 0 ? "codex mcp add tokenomy-graph" : "codex mcp add failed",
+    installed: add.status === 0 && hookDetail !== "hooks failed",
+    detail:
+      add.status === 0
+        ? `codex mcp add tokenomy-graph; ${hookDetail}`
+        : `codex mcp add failed; ${hookDetail}`,
   };
 };
 
-const codexUninstall = (): AgentInstallResult => {
+const codexUninstall = (backup: boolean): AgentInstallResult => {
   if (!commandExists("codex")) return { agent: "codex", installed: false, detail: "codex not on PATH" };
   const rm = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+  let hookDetail = "hooks removed";
+  try {
+    removeCodexTokenomyHooks(hookBinaryPath(), backup);
+  } catch {
+    hookDetail = "hooks remove failed";
+  }
   return {
     agent: "codex",
-    installed: rm.status === 0,
-    detail: rm.status === 0 ? "codex mcp remove tokenomy-graph" : "codex mcp remove failed",
+    installed: rm.status === 0 && hookDetail !== "hooks remove failed",
+    detail:
+      rm.status === 0
+        ? `codex mcp remove tokenomy-graph; ${hookDetail}`
+        : `codex mcp remove failed; ${hookDetail}`,
   };
 };
 
@@ -40,8 +64,8 @@ export const AGENT_ADAPTERS: AgentAdapter[] = [
   {
     name: "codex",
     detect: () => existsSync(homePath(".codex")) || commandExists("codex"),
-    install: (graphPath) => codexInstall(graphPath),
-    uninstall: () => codexUninstall(),
+    install: (graphPath, backup) => codexInstall(graphPath, backup),
+    uninstall: (backup) => codexUninstall(backup),
   },
   {
     name: "cursor",
