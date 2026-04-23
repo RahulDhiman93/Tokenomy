@@ -22,6 +22,7 @@ import { DEFAULT_CONFIG } from "../core/config.js";
 // `join` used in perf-stats path resolution (see readPerfStats).
 import { readManifest } from "../util/manifest.js";
 import type { Config } from "../core/types.js";
+import { listAgentDetection } from "./agents/index.js";
 
 export interface CheckResult {
   name: string;
@@ -275,6 +276,26 @@ const graphRegistrationCheck = (settings: SettingsShape | undefined): CheckResul
   };
 };
 
+const statusLineCheck = (settings: SettingsShape | undefined): CheckResult => {
+  const entry = settings?.statusLine as { type?: unknown; command?: unknown } | undefined;
+  const ok = entry?.type === "command" && entry.command === "tokenomy status-line";
+  return {
+    name: "Statusline registered",
+    ok,
+    detail: ok ? "tokenomy status-line" : "missing",
+    remediation: ok ? undefined : "Run `tokenomy init` to register the Claude Code statusline.",
+  };
+};
+
+const agentDetectionCheck = (): CheckResult => {
+  const detected = listAgentDetection().filter((row) => row.detected).map((row) => row.agent);
+  return {
+    name: "Agent detection",
+    ok: true,
+    detail: detected.length ? detected.join(", ") : "Claude Code only / no extra agents detected",
+  };
+};
+
 export interface PerfStats {
   samples: number;
   p50_ms: number;
@@ -369,6 +390,8 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   out.push(manifestDriftCheck(s.settings));
   out.push(overlapWarnCheck(s.settings));
   out.push(graphRegistrationCheck(s.settings));
+  out.push(statusLineCheck(s.settings));
+  out.push(agentDetectionCheck());
   out.push(await mcpSdkCheck());
   out.push(hookPerfCheck(cfgRaw));
   return out;
@@ -420,7 +443,8 @@ export const runDoctorFix = async (): Promise<CheckResult[]> => {
     // Hook entries missing / manifest drift → re-run init.
     if (
       c.name === "Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit + SessionStart)" ||
-      c.name === "Manifest drift"
+      c.name === "Manifest drift" ||
+      c.name === "Statusline registered"
     ) {
       try {
         const { runInit } = await import("./init.js");

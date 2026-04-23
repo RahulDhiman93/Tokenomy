@@ -28,6 +28,11 @@ interface SettingsShape {
     [event: string]: HookMatcherEntry[] | undefined;
   };
   mcpServers?: Record<string, McpServerEntry>;
+  statusLine?: {
+    type?: string;
+    command?: string;
+    [k: string]: unknown;
+  };
   [k: string]: unknown;
 }
 
@@ -195,5 +200,14 @@ export const getMcpServer = (
   settings: SettingsShape,
   name: string,
 ): McpServerEntry | undefined => settings.mcpServers?.[name];
+
+export const upsertStatusLine = (settings: SettingsShape, command: string): SettingsShape => ({
+  ...settings,
+  statusLine: {
+    ...(settings.statusLine ?? {}),
+    type: "command",
+    command,
+  },
+});
 
 export type { SettingsShape, HookMatcherEntry, HookCommandEntry, McpServerEntry };

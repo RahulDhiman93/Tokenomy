@@ -8,6 +8,7 @@ import {
   removeMcpServerByName,
   removeHookByCommandPath,
   upsertMcpServer,
+  upsertStatusLine,
 } from "../../src/util/settings-patch.js";
 
 const HOOK = "/Users/me/.tokenomy/bin/tokenomy-hook";
@@ -101,4 +102,10 @@ test("mcp server helpers: upsert and remove tokenomy-graph entry", () => {
   const removed = removeMcpServerByName(withServer, "tokenomy-graph");
   assert.equal(getMcpServer(removed, "tokenomy-graph"), undefined);
   assert.equal(removed.mcpServers, undefined);
+});
+
+test("upsertStatusLine: installs command statusline without dropping settings", () => {
+  const out = upsertStatusLine({ model: "opus" }, "tokenomy status-line");
+  assert.deepEqual(out.statusLine, { type: "command", command: "tokenomy status-line" });
+  assert.equal((out as { model: string }).model, "opus");
 });

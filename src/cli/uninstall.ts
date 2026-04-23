@@ -8,17 +8,26 @@ import { removeHookByCommandPath, removeMcpServerByName } from "../util/settings
 import type { SettingsShape } from "../util/settings-patch.js";
 import { removeClaudeMcpServer } from "../util/claude-user-config.js";
 import { deleteManifestFile, readManifest, writeManifest, removeEntryByCommand } from "../util/manifest.js";
+import { uninstallAgent } from "./agents/index.js";
+import type { AgentInstallResult, AgentName } from "./agents/common.js";
 
 export interface UninstallOptions {
   purge?: boolean;
   backup?: boolean;
+  agent?: AgentName;
 }
 
 export const runUninstall = (opts: UninstallOptions = {}): {
   backupPath: string | null;
   hooksRemoved: boolean;
   purged: boolean;
+  agentResult?: AgentInstallResult;
 } => {
+  if (opts.agent && opts.agent !== "claude-code") {
+    const agentResult = uninstallAgent(opts.agent, opts.backup !== false);
+    return { backupPath: agentResult.backupPath ?? null, hooksRemoved: agentResult.installed, purged: false, agentResult };
+  }
+
   const hookPath = hookBinaryPath();
   const settingsPath = claudeSettingsPath();
   let backupPath: string | null = null;

@@ -8,6 +8,11 @@ import { runReport } from "./report.js";
 import { runAnalyze } from "./analyze.js";
 import { runUpdate } from "./update.js";
 import { runGolem } from "./golem-cmd.js";
+import { runCompress } from "./compress.js";
+import { runStatusLine } from "./statusline.js";
+import { runBenchCli } from "./bench.js";
+import { agentNames, listAgentDetection } from "./agents/index.js";
+import type { AgentName } from "./agents/common.js";
 import { buildGraph } from "../graph/build.js";
 import { loadConfig } from "../core/config.js";
 import type { TokenizerChoice } from "../analyze/tokens.js";
@@ -18,7 +23,14 @@ const HELP = `tokenomy — transparent MCP tool-output trimmer for Claude Code
 
 Usage:
   tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>] [--no-build]
+                [--agent=claude-code|codex|cursor|windsurf|cline|gemini] [--list-agents]
   tokenomy doctor [--fix]
+  tokenomy status-line [--json]
+  tokenomy compress <file> [--llm] [--dry-run] [--diff] [--in-place] [--force]
+  tokenomy compress status | restore <file>
+  tokenomy bench run [scenario] [--json]
+  tokenomy bench compare <a.json> <b.json>
+  tokenomy bench report --md
   tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
   tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
                    [--top=<N>] [--tokenizer=heuristic|tiktoken|auto] [--json] [--no-color] [--verbose]
@@ -27,7 +39,7 @@ Usage:
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
   tokenomy graph query <minimal|impact|review|usages> ...
-  tokenomy uninstall [--purge] [--no-backup]
+  tokenomy uninstall [--purge] [--no-backup] [--agent=<name>]
   tokenomy update [--tag=alpha|latest|beta|rc] [--version=<v>] [--check] [--force]
   tokenomy config get <key>
   tokenomy config set <key> <value>
@@ -70,6 +82,8 @@ const parseArgs = (argv: string[]): ArgMap => {
 const isAggression = (v: string): v is Config["aggression"] =>
   v === "conservative" || v === "balanced" || v === "aggressive";
 
+const isAgentName = (v: string): v is AgentName => (agentNames() as string[]).includes(v);
+
 const printDoctor = async (): Promise<number> => {
   const results = await runDoctor();
   let failed = 0;
@@ -109,6 +123,12 @@ const main = async (): Promise<number> => {
   }
 
   if (cmd === "init") {
+    if (args.flags["list-agents"] === true) {
+      for (const row of listAgentDetection()) {
+        process.stdout.write(`${row.detected ? "✓" : "•"} ${row.agent}\t${row.detail}\n`);
+      }
+      return 0;
+    }
     const aggRaw = args.flags["aggression"];
     const aggression =
       typeof aggRaw === "string" && isAggression(aggRaw) ? aggRaw : undefined;
@@ -116,7 +136,13 @@ const main = async (): Promise<number> => {
     const noBuild = args.flags["no-build"] === true;
     const graphPath =
       typeof args.flags["graph-path"] === "string" ? args.flags["graph-path"] : undefined;
-    const result = runInit({ aggression, backup, graphPath });
+    const agentRaw = typeof args.flags["agent"] === "string" ? args.flags["agent"] : undefined;
+    if (agentRaw && !isAgentName(agentRaw)) {
+      process.stderr.write(`tokenomy init: unknown --agent ${agentRaw}\n`);
+      return 1;
+    }
+    const agent = agentRaw as AgentName | undefined;
+    const result = runInit({ aggression, backup, graphPath, agent });
 
     // Auto-build the graph when --graph-path is set, unless --no-build opted out.
     // Runs after runInit so the config file (aggression, excludes, etc.) is
@@ -146,13 +172,16 @@ const main = async (): Promise<number> => {
     process.stdout.write(
       [
         `✓ Tokenomy installed`,
-        `  hook:     ${result.hookPath}`,
-        `  settings: ${result.settingsPath}`,
+        `  hook:     ${result.hookPath ?? "(not installed for selected agent)"}`,
+        `  settings: ${result.settingsPath ?? "(not patched for selected agent)"}`,
         `  backup:   ${result.backupPath ?? "(none)"}`,
         `  config:   ${result.configPath}`,
         ...(result.graphServerPath
           ? [`  graph:    tokenomy-graph -> ${result.graphServerPath}`]
           : []),
+        ...result.agentResults.map((r) =>
+          `  agent:    ${r.agent} ${r.installed ? "✓" : "skipped"} ${r.detail}`,
+        ),
         ...(buildLine ? [buildLine] : []),
         `  manifest: ${result.manifestPath}`,
         `  Run: tokenomy doctor`,
@@ -196,10 +225,19 @@ const main = async (): Promise<number> => {
   if (cmd === "uninstall") {
     const purge = args.flags["purge"] === true;
     const backup = args.flags["no-backup"] !== true;
-    const result = runUninstall({ purge, backup });
+    const agentRaw = typeof args.flags["agent"] === "string" ? args.flags["agent"] : undefined;
+    if (agentRaw && !isAgentName(agentRaw)) {
+      process.stderr.write(`tokenomy uninstall: unknown --agent ${agentRaw}\n`);
+      return 1;
+    }
+    const agent = agentRaw as AgentName | undefined;
+    const result = runUninstall({ purge, backup, agent });
     process.stdout.write(
       [
         result.hooksRemoved ? `✓ Hook entries removed` : `• No hook entries found`,
+        ...(result.agentResult
+          ? [`  agent:    ${result.agentResult.agent} ${result.agentResult.detail}`]
+          : []),
         `  backup:   ${result.backupPath ?? "(none)"}`,
         result.purged ? `✓ ~/.tokenomy/ purged` : `• ~/.tokenomy/ kept (use --purge to remove)`,
         ``,
@@ -269,6 +307,9 @@ const main = async (): Promise<number> => {
   }
 
   if (cmd === "golem") return runGolem(process.argv.slice(3));
+  if (cmd === "compress") return runCompress(process.argv.slice(3));
+  if (cmd === "status-line") return runStatusLine(process.argv.slice(3));
+  if (cmd === "bench") return runBenchCli(process.argv.slice(3));
 
   if (cmd === "config") {
     const sub = args._[1];

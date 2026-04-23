@@ -121,6 +121,16 @@ export interface McpRuleConfig {
   // records or {transitions|issues|values|results: [...]}) where head+tail
   // byte trimming would destroy row structure.
   shape_trim?: ShapeTrimConfig;
+  // Bash PostToolUse stack trace compressor. This lives under `mcp` because
+  // it shares the post-tool trim gate and savings accounting.
+  shell_trace_trim?: ShellTraceTrimConfig;
+}
+
+export interface ShellTraceTrimConfig {
+  enabled: boolean;
+  max_preserved_frames_head: number;
+  max_preserved_frames_tail: number;
+  min_frames_to_trigger: number;
 }
 
 export interface ShapeTrimConfig {
@@ -202,6 +212,7 @@ export interface PerToolOverride {
   disable_redact?: boolean;
   disable_profiles?: boolean;
   disable_stacktrace?: boolean;
+  disable_trace_trim?: boolean;
 }
 
 export type OssSearchEcosystem = "npm" | "pypi" | "go" | "maven";
