@@ -7,6 +7,7 @@ import { runGraph } from "./graph.js";
 import { runReport } from "./report.js";
 import { runAnalyze } from "./analyze.js";
 import { runUpdate } from "./update.js";
+import { runGolem } from "./golem-cmd.js";
 import { buildGraph } from "../graph/build.js";
 import { loadConfig } from "../core/config.js";
 import type { TokenizerChoice } from "../analyze/tokens.js";
@@ -30,6 +31,9 @@ Usage:
   tokenomy update [--tag=alpha|latest|beta|rc] [--version=<v>] [--check] [--force]
   tokenomy config get <key>
   tokenomy config set <key> <value>
+  tokenomy golem enable [--mode=lite|full|ultra|grunt]
+  tokenomy golem disable
+  tokenomy golem status
   tokenomy --version | --help
 `;
 
@@ -263,6 +267,8 @@ const main = async (): Promise<number> => {
     }
     return 0;
   }
+
+  if (cmd === "golem") return runGolem(process.argv.slice(3));
 
   if (cmd === "config") {
     const sub = args._[1];

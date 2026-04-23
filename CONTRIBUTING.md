@@ -225,7 +225,7 @@ The publish flow is fully automated via `.github/workflows/publish.yml` using **
 
 ### Every release
 
-1. Branch off `main`, bump `package.json` version (e.g. `0.1.0-alpha.N` → `0.1.0-alpha.(N+1)`).
+1. Branch off `main`, bump `package.json` + `src/core/version.ts` (e.g. `0.1.1-beta.N` → `0.1.1-beta.(N+1)`, or graduate to `0.1.1` → `0.1.2-beta.1` for a new minor). Both files MUST match — prior releases have shipped with drift between them and the CLI reported stale versions.
 2. Add a CHANGELOG section for the new version, listing Added / Changed / Fixed items.
 3. `npm run prepublishOnly` — clean + build + test + typecheck must be green.
 4. Commit with `chore(release): X.Y.Z — <one-line summary>`.

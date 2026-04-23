@@ -24,13 +24,18 @@ interface SettingsShape {
     PostToolUse?: HookMatcherEntry[];
     PreToolUse?: HookMatcherEntry[];
     UserPromptSubmit?: HookMatcherEntry[];
+    SessionStart?: HookMatcherEntry[];
     [event: string]: HookMatcherEntry[] | undefined;
   };
   mcpServers?: Record<string, McpServerEntry>;
   [k: string]: unknown;
 }
 
-export type HookEvent = "PostToolUse" | "PreToolUse" | "UserPromptSubmit";
+export type HookEvent =
+  | "PostToolUse"
+  | "PreToolUse"
+  | "UserPromptSubmit"
+  | "SessionStart";
 
 const stripQuotes = (s: string): string => {
   const t = s.trim();
@@ -110,7 +115,7 @@ export const countHooksForPath = (
 ): number => {
   const events = event
     ? [event]
-    : (["PostToolUse", "PreToolUse", "UserPromptSubmit"] as HookEvent[]);
+    : (["PostToolUse", "PreToolUse", "UserPromptSubmit", "SessionStart"] as HookEvent[]);
   let n = 0;
   for (const e of events) {
     const entries = settings.hooks?.[e];

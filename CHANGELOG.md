@@ -12,6 +12,66 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1-beta.1] — 2026-04-23
+
+First beta release. The alpha.0–alpha.22 arc shipped deterministic
+byte-trimming (MCP / Read / Bash), the tokenomy-graph MCP server (6
+tools), repo/branch/package search, and the UserPromptSubmit prompt-
+classifier nudge. Beta.1 crosses the final gap: assistant **output**
+tokens, via a new opt-in plugin called Golem.
+
+### Added
+
+- **Golem** — a terse-output-mode plugin for the assistant's own replies.
+  Injects deterministic style rules via a new `SessionStart` hook and
+  reinforces per-turn via the existing `UserPromptSubmit` path so other
+  plugins can't drift the rules away over long sessions. Four modes:
+  - `lite`: drop hedging, pleasantries, and repeat caveats.
+  - `full`: + declarative sentences only, no narration of upcoming steps,
+    one-sentence conclusions (Hemingway-adjacent).
+  - `ultra`: + max 3 non-code lines per reply, single-word confirmations
+    where accurate.
+  - `grunt`: + drop articles (a/an/the) and subject pronouns, fragments
+    over sentences, occasional playful terseness ("ship it.", "nope.",
+    "aye."). Tightest mode — caveman-adjacent energy, zero emoji, still
+    safety-gated. A Golem that literally grunts.
+  Safety gates are on by default and preserve fenced code, shell
+  commands, security/auth warnings, destructive-action language, error
+  messages, URLs/paths, and numerical results verbatim — in ALL modes,
+  grunt included.
+- **`tokenomy golem` CLI** — `enable [--mode=lite|full|ultra|grunt]`,
+  `disable`, `status`. The `status` command prints the exact text that
+  gets injected at SessionStart and per-turn, so users can see what Golem
+  is doing with zero surprise.
+- **New `SessionStart` hook registration** in `tokenomy init`. Fires
+  once per Claude Code session. Passthrough (nothing injected) when
+  Golem is disabled. Powers the Golem preamble when enabled.
+- **Golem savings tracking.** Every SessionStart injection logs a
+  `golem:session-start:<mode>` row; every per-turn reminder logs
+  `golem:<mode>` with a conservative token estimate (lite 150, full 300,
+  ultra 500 per turn). `tokenomy report` aggregates these alongside
+  the existing trim categories.
+
+### Changed
+
+- `tokenomy init` now also registers the `SessionStart` hook. Existing
+  installs pick this up on next `tokenomy update`.
+- `tokenomy doctor` hook-entries check now verifies all four events
+  (`PostToolUse`, `PreToolUse`, `UserPromptSubmit`, `SessionStart`).
+- `settings-patch.HookEvent` extends to include `"SessionStart"`.
+- Version channel graduates from `-alpha.*` to `-beta.*`. Config-file
+  schema is considered stable for the beta line; features are additive
+  and won't break existing configs.
+
+### Tests
+
+- +23 tests: 12 Golem unit (mode rules including grunt, safety gates,
+  savings estimate monotonicity, session-context / turn-reminder
+  generation) + 4 hook-spawn integration (SessionStart with/without
+  Golem, UserPromptSubmit reinforcement with and without a classifier
+  intent) + 7 CLI integration (enable/disable/status round-trips,
+  invalid-mode rejection). Full suite: **396/396 passing**.
+
 ## [0.1.0-alpha.22] — 2026-04-22
 
 Closes the planning-phase gap in tokenomy's nudge surface: a new

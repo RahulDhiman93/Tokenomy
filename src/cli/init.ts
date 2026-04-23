@@ -154,8 +154,13 @@ export const runInit = (opts: InitOptions = {}): {
   settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
   // UserPromptSubmit fires once per user turn, before the model sees the
   // prompt. Matcher is empty because the event isn't tool-scoped. Powers
-  // the prompt-classifier nudge (alpha.22+).
+  // the prompt-classifier nudge (alpha.22+) and the Golem per-turn
+  // reinforcement (0.1.1-beta.1+).
   settings = addHook(settings, "UserPromptSubmit", hookPath, "", TIMEOUT_SECONDS);
+  // SessionStart fires once when a new coding session begins. Powers the
+  // Golem output-mode preamble (0.1.1-beta.1+). Passthrough when Golem
+  // is disabled — the hook returns null and nothing is injected.
+  settings = addHook(settings, "SessionStart", hookPath, "", TIMEOUT_SECONDS);
   const graphServerPath = opts.graphPath ? resolve(opts.graphPath) : null;
 
   atomicWrite(settingsPath, stableStringify(settings) + "\n");
@@ -179,7 +184,7 @@ export const runInit = (opts: InitOptions = {}): {
   manifest = upsertEntry(manifest, {
     command_path: hookPath,
     settings_path: settingsPath,
-    matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}|UserPromptSubmit`,
+    matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}|UserPromptSubmit|SessionStart`,
     installed_at: new Date().toISOString(),
   });
   writeManifest(manifest);

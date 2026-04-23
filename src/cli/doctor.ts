@@ -73,11 +73,12 @@ const hookEntryCheck = (settings: SettingsShape | undefined): CheckResult => {
   const post = countHooksForPath(settings, hook, "PostToolUse");
   const pre = countHooksForPath(settings, hook, "PreToolUse");
   const prompt = countHooksForPath(settings, hook, "UserPromptSubmit");
-  const ok = post === 1 && pre === 1 && prompt === 1;
+  const session = countHooksForPath(settings, hook, "SessionStart");
+  const ok = post === 1 && pre === 1 && prompt === 1 && session === 1;
   return {
-    name: "Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit)",
+    name: "Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit + SessionStart)",
     ok,
-    detail: `post=${post} pre=${pre} prompt=${prompt}`,
+    detail: `post=${post} pre=${pre} prompt=${prompt} session=${session}`,
     remediation: ok ? undefined : "Run `tokenomy init` to install/repair.",
   };
 };
@@ -418,7 +419,7 @@ export const runDoctorFix = async (): Promise<CheckResult[]> => {
 
     // Hook entries missing / manifest drift → re-run init.
     if (
-      c.name === "Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit)" ||
+      c.name === "Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit + SessionStart)" ||
       c.name === "Manifest drift"
     ) {
       try {

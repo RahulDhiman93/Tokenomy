@@ -95,6 +95,11 @@ export const DEFAULT_CONFIG: Config = {
     p95_budget_ms: 50,
     sample_size: 100,
   },
+  golem: {
+    enabled: false,
+    mode: "full",
+    safety_gates: true,
+  },
   nudge: {
     enabled: true,
     oss_search: {
