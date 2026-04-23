@@ -12,7 +12,7 @@ import {
 // registrations land during `tokenomy init`. This command only toggles the
 // config flags that the live hooks read every invocation.
 
-const MODES = new Set(["lite", "full", "ultra", "grunt"]);
+const MODES = new Set(["lite", "full", "ultra", "grunt", "auto"]);
 
 const parseModeFlag = (argv: string[]): string | null => {
   for (const arg of argv) {
@@ -71,7 +71,7 @@ export const runGolem = (argv: string[]): number => {
     if (mode !== null) {
       if (!MODES.has(mode)) {
         process.stderr.write(
-          `tokenomy golem: invalid mode "${mode}". Expected one of: lite, full, ultra, grunt.\n`,
+          `tokenomy golem: invalid mode "${mode}". Expected one of: lite, full, ultra, grunt, auto.\n`,
         );
         return 1;
       }
@@ -108,7 +108,7 @@ export const runGolem = (argv: string[]): number => {
 
   process.stderr.write(
     "Usage:\n" +
-      "  tokenomy golem enable [--mode=lite|full|ultra|grunt]\n" +
+      "  tokenomy golem enable [--mode=lite|full|ultra|grunt|auto]\n" +
       "  tokenomy golem disable\n" +
       "  tokenomy golem status\n",
   );

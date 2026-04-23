@@ -19,8 +19,8 @@ const stub: AggregateReport = {
     estimated_usd_observed: 0.075,
   },
   by_tool: [
-    { tool: "mcp__Atlassian__getJiraIssue", calls: 3, observed_tokens: 10_000, savings_tokens: 8_000, waste_pct: 0.8 },
-    { tool: "Read", calls: 5, observed_tokens: 9_000, savings_tokens: 5_000, waste_pct: 0.55 },
+    { tool: "mcp__Atlassian__getJiraIssue", calls: 3, observed_tokens: 10_000, savings_tokens: 8_000, waste_pct: 0.8, p50_latency_ms: 410, p95_latency_ms: 1200, latency_samples: 3 },
+    { tool: "Read", calls: 5, observed_tokens: 9_000, savings_tokens: 5_000, waste_pct: 0.55, p50_latency_ms: null, p95_latency_ms: null, latency_samples: 0 },
   ],
   by_rule: [
     { rule: "profile", savings_tokens: 8_000, events: 3 },

@@ -2,7 +2,9 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { loadConfig } from "../core/config.js";
 import { graphMetaPath, graphSnapshotPath, tokenomyGraphRootDir } from "../core/paths.js";
 import type { SavingsLogEntry } from "../core/types.js";
+import { TOKENOMY_VERSION } from "../core/version.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import { resolveGolemMode } from "../rules/golem.js";
 import { safeParse } from "../util/json.js";
 
 const MAX_TAIL_BYTES = 256 * 1024;
@@ -68,20 +70,22 @@ const graphState = (cwd: string): "fresh" | "stale" | undefined => {
   }
 };
 
+const VERSION_TAG = `v${TOKENOMY_VERSION}`;
+
 export const renderStatusLine = (state: StatusLineState): string => {
   if (!state.active) return "";
   if (state.golem) {
     const savings = state.tokensToday > 0 ? ` · ${compact(state.tokensToday)} saved` : "";
-    return `[Tokenomy: GOLEM-${state.golem.toUpperCase()}${savings}]`;
+    return `[Tokenomy ${VERSION_TAG} · GOLEM-${state.golem.toUpperCase()}${savings}]`;
   }
-  if (state.tokensToday <= 0) return "[Tokenomy: active]";
+  if (state.tokensToday <= 0) return `[Tokenomy ${VERSION_TAG} · active]`;
   const graph =
     state.graph === "fresh"
       ? " · graph fresh"
       : state.graph === "stale"
         ? " · graph stale - rebuild"
         : "";
-  return `[Tokenomy: ${compact(state.tokensToday)} saved${graph}]`;
+  return `[Tokenomy ${VERSION_TAG} · ${compact(state.tokensToday)} saved${graph}]`;
 };
 
 export const runStatusLine = (argv: string[]): number => {
@@ -91,7 +95,7 @@ export const runStatusLine = (argv: string[]): number => {
       active: true,
       tokensToday: sumTodaySavings(cfg.log_path),
       graph: graphState(process.cwd()),
-      golem: cfg.golem.enabled ? cfg.golem.mode : undefined,
+      golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
     };
     if (argv.includes("--json")) process.stdout.write(JSON.stringify(state, null, 2) + "\n");
     else process.stdout.write(renderStatusLine(state) + "\n");

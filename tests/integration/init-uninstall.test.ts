@@ -55,12 +55,14 @@ test("init → idempotent → uninstall leaves unrelated settings untouched", ()
     assert.equal(after1.effortLevel, "xhigh");
     assert.equal(after1.hooks.PostToolUse.length, 1);
     assert.equal(after1.hooks.PreToolUse.length, 1);
-    // PreToolUse matcher must cover both Read (file clamp) and Bash
-    // (input bounder) for Phase 4. Uses regex alternation so one entry
-    // serves both tool names.
+    // PreToolUse matcher must cover Read (file clamp) + Bash (input
+    // bounder) + Write / Edit (OSS-nudge and redact-pre). Uses regex
+    // alternation so one entry serves all four tool names.
     const preMatcher = after1.hooks.PreToolUse[0].matcher as string;
     assert.match(preMatcher, /Read/);
     assert.match(preMatcher, /Bash/);
+    assert.match(preMatcher, /Write/);
+    assert.match(preMatcher, /Edit/);
 
     // idempotent
     runInit({});

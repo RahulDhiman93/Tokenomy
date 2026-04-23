@@ -12,6 +12,72 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1-beta.3] — 2026-04-22
+
+### Added
+
+- **Statusline version.** `tokenomy statusline` now prefixes the bracket
+  with `v<VERSION>` (e.g. `[Tokenomy v0.1.1-beta.3 · GOLEM-GRUNT · 15.0k
+  saved]`), and uses a consistent middle-dot separator across all sections.
+- **Per-tool p95 latency in `report`.** `tokenomy analyze` + `tokenomy
+  report` now surface p50/p95 wall-clock latency per tool (from paired
+  `tool_use`/`tool_result` timestamps). New `p50ms` / `p95ms` columns in
+  the `by_tool` table correlate "slow tool" with "bloated tool".
+- **`tokenomy diff` CLI.** Replay one historical tool call through the
+  live rule stack and print a per-rule savings breakdown plus a preview
+  of the raw response. Selectors: `--call-key`, `--tool` (optional
+  `--grep`), or `--session` + `--index`.
+- **`tokenomy learn`.** Mines `~/.tokenomy/savings.jsonl` for recurring
+  patterns and proposes a config diff (custom verbose bash entries,
+  raising Read injected limit, enabling pre-call redact). Read-only by
+  default; `--apply` writes the patch with a timestamped backup.
+- **Pre-call redact.** Extends secret redaction to PreToolUse on
+  `Bash` / `Write` / `Edit`. Bash header/URL secrets are redacted AND
+  warned; bare positional args are warn-only to preserve user intent.
+  Opt-in via `cfg.redact.pre_tool_use: true`; defaults to false for
+  first beta-3 tag.
+- **Golem auto-tune.** New `mode: "auto"` reads a per-install
+  `~/.tokenomy/golem-tune.json` (written by `tokenomy analyze --tune`)
+  and resolves at SessionStart. Falls back to `full` if no tune file
+  exists. Thresholds: <800B p95 reply → lite, <2KB → full, <5KB → ultra,
+  ≥5KB → grunt.
+- **Incremental graph updates.** `cfg.graph.incremental: true` enables
+  delta rebuilds that re-parse only stale files + their direct importers.
+  Falls back to full rebuild when tsconfig/exclude fingerprints shift or
+  when >40% of files changed. Default off; opt-in for beta-3.
+- **`tokenomy budget` pre-flight gate.** PreToolUse rule that estimates
+  incoming tool call response size from `~/.tokenomy/analyze-cache.json`
+  (emitted by every `tokenomy analyze` run) and warns via
+  `additionalContext` when the call would push the session over
+  `session_cap_tokens`. Advisory only — never rejects.
+  `cfg.budget.enabled: false` by default.
+- **`tokenomy ci` GitHub Action.** New `action.yml` at repo root + a
+  `tokenomy ci format --input=<analyze.json>` CLI that produces a
+  PR-ready markdown summary. Drop into any workflow that uploads Claude
+  Code / Codex transcripts as artifacts.
+- PreToolUse matcher extended to `Read|Bash|Write|Edit` so the new
+  pre-call redact can fire on `Edit` too.
+
+### Changed
+
+- `cfg.golem.mode` accepts `"auto"` in addition to `lite|full|ultra|grunt`.
+- `tokenomy analyze` now writes `~/.tokenomy/analyze-cache.json` as a
+  side effect (disable with `--no-cache`). Used by the budget rule.
+- `SimEvent` carries an optional `latency_ms` threaded from the parser.
+- `Aggregator.byTool` retains a bounded (last-200) rolling latency
+  sample buffer per tool.
+- `doctor` PreToolUse-coverage check now verifies `Edit` too.
+
+### Tests
+
+- New suites: redact-pre, budget, miner, golem-tune, diff-replay,
+  ci-format.
+- Updated: analyze-report (latency + cap tests), analyze-render stub,
+  init-uninstall (matcher regex includes Write + Edit),
+  statusline-render.
+
+## [Unreleased-pre-beta.3]
+
 ### Added
 
 - Codex CLI hook foothold: `tokenomy init --graph-path` now installs
@@ -660,7 +726,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.2...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.3...HEAD
+[0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3
 [0.1.1-beta.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.2
 [0.1.1-beta.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.1
 [0.1.0-alpha.22]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.22

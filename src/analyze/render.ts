@@ -173,8 +173,8 @@ export const render = (report: AggregateReport, opts: RenderOptions): string => 
   } else {
     const maxT = Math.max(...report.by_tool.map((t2) => t2.observed_tokens), 1);
     const header =
-      `  ${pad("Tool", 40)}  ${pad("Calls", 7, "r")}  ${pad("Observed", 12, "r")}  ` +
-      `${pad("Saveable", 12, "r")}  ${pad("%", 5, "r")}  ${pad("Bar", 20)}`;
+      `  ${pad("Tool", 36)}  ${pad("Calls", 6, "r")}  ${pad("Observed", 11, "r")}  ` +
+      `${pad("Saveable", 11, "r")}  ${pad("%", 4, "r")}  ${pad("p50ms", 7, "r")}  ${pad("p95ms", 7, "r")}  ${pad("Bar", 16)}`;
     out.push(c.dim + header + c.reset);
     for (const row of report.by_tool) {
       const frac = row.observed_tokens / maxT;
@@ -185,13 +185,17 @@ export const render = (report: AggregateReport, opts: RenderOptions): string => 
           : waste >= 20
           ? c.yellow + row.tool + c.reset
           : row.tool;
+      const p50 = row.p50_latency_ms === null ? "—" : n(Math.round(row.p50_latency_ms));
+      const p95 = row.p95_latency_ms === null ? "—" : n(Math.round(row.p95_latency_ms));
       out.push(
-        `  ${pad(colourLabel, 40)}  ` +
-          `${pad(n(row.calls), 7, "r")}  ` +
-          `${pad(n(row.observed_tokens), 12, "r")}  ` +
-          `${c.green}${pad(n(row.savings_tokens), 12, "r")}${c.reset}  ` +
-          `${pad(waste.toFixed(0) + "%", 5, "r")}  ` +
-          `${c.cyan}${bar(frac, 20)}${c.reset}`,
+        `  ${pad(colourLabel, 36)}  ` +
+          `${pad(n(row.calls), 6, "r")}  ` +
+          `${pad(n(row.observed_tokens), 11, "r")}  ` +
+          `${c.green}${pad(n(row.savings_tokens), 11, "r")}${c.reset}  ` +
+          `${pad(waste.toFixed(0) + "%", 4, "r")}  ` +
+          `${pad(p50, 7, "r")}  ` +
+          `${pad(p95, 7, "r")}  ` +
+          `${c.cyan}${bar(frac, 16)}${c.reset}`,
       );
     }
   }

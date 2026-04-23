@@ -1,0 +1,80 @@
+name: "Tokenomy — token-waste PR comment"
+description: "Run `tokenomy analyze` on a transcript artifact and post a summary comment on the current PR."
+branding:
+  icon: "dollar-sign"
+  color: "green"
+inputs:
+  transcript-dir:
+    description: "Directory containing Claude Code / Codex JSONL transcripts to analyze."
+    required: true
+  since:
+    description: "Scan window (e.g. 7d, 30d, 2w, all). Default: 7d."
+    required: false
+    default: "7d"
+  github-token:
+    description: "GitHub token used to post the PR comment. Typically ${{ secrets.GITHUB_TOKEN }}."
+    required: true
+  tokenomy-version:
+    description: "Tokenomy version to install. Default: latest published."
+    required: false
+    default: "latest"
+runs:
+  using: "composite"
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        TOKENOMY_VERSION: ${{ inputs.tokenomy-version }}
+        SINCE: ${{ inputs.since }}
+        TRANSCRIPT_DIR: ${{ inputs.transcript-dir }}
+      run: |
+        set -euo pipefail
+        # tokenomy-version: dist-tag word OR semver (with optional prerelease/build).
+        if ! [[ "$TOKENOMY_VERSION" =~ ^[A-Za-z][A-Za-z0-9._-]*$ || "$TOKENOMY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]]; then
+          echo "tokenomy action: invalid tokenomy-version '$TOKENOMY_VERSION'" >&2
+          exit 1
+        fi
+        # since: Nd/Nw/Nh, "all", or ISO-ish yyyy-mm-dd[Thh:mm...].
+        if ! [[ "$SINCE" =~ ^([0-9]+[hdw]|all|0d|[0-9]{4}-[0-9]{2}-[0-9]{2}([T0-9:.Z-]+)?)$ ]]; then
+          echo "tokenomy action: invalid since '$SINCE'" >&2
+          exit 1
+        fi
+        # transcript-dir must be an existing directory inside the workspace; no
+        # shell metacharacters allowed.
+        if [[ "$TRANSCRIPT_DIR" == *[\$\`\\\"\']* || "$TRANSCRIPT_DIR" == *$'\n'* ]]; then
+          echo "tokenomy action: transcript-dir contains unsafe characters" >&2
+          exit 1
+        fi
+        if [[ ! -d "$TRANSCRIPT_DIR" ]]; then
+          echo "tokenomy action: transcript-dir '$TRANSCRIPT_DIR' does not exist" >&2
+          exit 1
+        fi
+    - name: Install tokenomy
+      shell: bash
+      env:
+        TOKENOMY_VERSION: ${{ inputs.tokenomy-version }}
+      run: |
+        set -euo pipefail
+        npm install -g "tokenomy@${TOKENOMY_VERSION}"
+    - name: Run analyze
+      shell: bash
+      env:
+        TRANSCRIPT_DIR: ${{ inputs.transcript-dir }}
+        SINCE: ${{ inputs.since }}
+      run: |
+        set -euo pipefail
+        tokenomy analyze --path="${TRANSCRIPT_DIR}" --since="${SINCE}" --json --no-color > analyze.json
+    - name: Format markdown
+      shell: bash
+      run: |
+        set -euo pipefail
+        tokenomy ci format --input=analyze.json > comment.md
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        gh pr comment "${GITHUB_REF_NAME}" --body-file comment.md

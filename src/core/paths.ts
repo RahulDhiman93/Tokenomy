@@ -11,6 +11,27 @@ export const hookBinaryPath = (): string => join(tokenomyBinDir(), "tokenomy-hoo
 export const globalConfigPath = (): string => join(tokenomyDir(), "config.json");
 export const manifestPath = (): string => join(tokenomyDir(), "installed.json");
 export const defaultLogPath = (): string => join(tokenomyDir(), "savings.jsonl");
+// Written by `tokenomy analyze --tune`; read when cfg.golem.mode === "auto".
+export const golemTunePath = (): string => join(tokenomyDir(), "golem-tune.json");
+// Written by `tokenomy analyze` as a side effect; read by the budget
+// PreToolUse rule for p95-response-size lookups.
+export const analyzeCachePath = (): string => join(tokenomyDir(), "analyze-cache.json");
+// Per-session running totals for the budget rule. Cleared on SessionStart
+// of a new session. Session-state files are append-only JSONL ledgers keyed
+// by a sanitized hash of the session_id (to prevent path traversal when a
+// hostile session_id contains "../" or other separators).
+export const sessionStateDir = (): string => join(tokenomyDir(), "session");
+
+// Deterministic, filesystem-safe filename derived from the raw session_id.
+// Uses sha256 truncated to 16 hex chars + ".ndjson" extension so two
+// co-running hooks for the same session land on the same file, but a
+// session_id with path separators or control chars can never escape the
+// session directory.
+import { createHash } from "node:crypto";
+export const sessionStateSlug = (sessionId: string): string =>
+  createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
+export const sessionStatePath = (sessionId: string): string =>
+  join(sessionStateDir(), `${sessionStateSlug(sessionId)}.ndjson`);
 export const graphDir = (repoId: string): string => join(tokenomyGraphRootDir(), repoId);
 export const graphSnapshotPath = (repoId: string): string =>
   join(graphDir(repoId), "snapshot.json");

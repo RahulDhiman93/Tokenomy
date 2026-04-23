@@ -154,6 +154,40 @@ test("aggregator: wasted_probes splits runs when gap exceeds 60s", () => {
   assert.equal(r.wasted_probes.length, 2);
 });
 
+test("aggregator: per-tool latency percentiles computed from paired samples", () => {
+  const a = agg();
+  // Feed 20 latency samples on one tool, 0 on another.
+  for (let i = 1; i <= 20; i++) {
+    a.feed(mk({ tool_name: "t-lat", call_key: `k-${i}`, latency_ms: i * 10 }));
+  }
+  // Null + missing latency on second tool.
+  a.feed(mk({ tool_name: "t-nolat", call_key: "k-n", latency_ms: null }));
+  const r = a.build();
+  const lat = r.by_tool.find((t) => t.tool === "t-lat");
+  const nolat = r.by_tool.find((t) => t.tool === "t-nolat");
+  assert.ok(lat);
+  // p50 ≈ sample 10 (nearest-rank of 20 at 50% → idx 9 → value 100).
+  assert.equal(lat!.p50_latency_ms, 100);
+  // p95 = nearest-rank at 95% → idx 18 → value 190.
+  assert.equal(lat!.p95_latency_ms, 190);
+  assert.equal(lat!.latency_samples, 20);
+  assert.ok(nolat);
+  assert.equal(nolat!.p50_latency_ms, null);
+  assert.equal(nolat!.latency_samples, 0);
+});
+
+test("aggregator: latency sample buffer is bounded to cap", () => {
+  const a = agg();
+  // Feed 500 samples — cap is 200.
+  for (let i = 1; i <= 500; i++) {
+    a.feed(mk({ tool_name: "t-cap", call_key: `k-${i}`, latency_ms: i }));
+  }
+  const r = a.build();
+  const row = r.by_tool.find((t) => t.tool === "t-cap");
+  assert.ok(row);
+  assert.equal(row!.latency_samples, 200);
+});
+
 test("aggregator: wasted_probes is per-session", () => {
   const a = agg();
   const tool = "mcp__x__y";

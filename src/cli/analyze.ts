@@ -8,6 +8,10 @@ import {
 } from "../analyze/scan.js";
 import { Simulator } from "../analyze/simulate.js";
 import { loadTokenizer, type TokenizerChoice } from "../analyze/tokens.js";
+import { computeGolemTune, writeGolemTune } from "../analyze/tune.js";
+import { analyzeCachePath } from "../core/paths.js";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Config } from "../core/types.js";
 
 export interface AnalyzeOptions {
@@ -23,6 +27,11 @@ export interface AnalyzeOptions {
   // Per-million token price in USD for the $ estimate; falls back to
   // cfg.report.price_per_million or $3 default.
   pricePerMillion?: number;
+  // Side-effect flags: when true, analyze writes its findings to
+  // ~/.tokenomy/{golem-tune,analyze-cache}.json so other Tokenomy components
+  // (SessionStart resolver, budget PreToolUse rule) can pick them up.
+  tune?: boolean;
+  cache?: boolean;
 }
 
 const parseSince = (input: string | undefined): Date | undefined => {
@@ -155,6 +164,52 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
     }
 
     const report = agg.build();
+
+    // Side-effect: analyze-cache for the budget PreToolUse rule. Writes
+    // per-tool p95 bytes/tokens so budget lookups don't require replaying
+    // transcripts on the hot hook path. Always emitted unless --cache=false
+    // is explicit, so tune runs alone still populate the cache cheaply.
+    if (opts.cache !== false) {
+      try {
+        const cache = {
+          generated_ts: new Date().toISOString(),
+          byTool: Object.fromEntries(
+            report.by_tool.map((t) => [
+              t.tool,
+              {
+                calls: t.calls,
+                observed_tokens: t.observed_tokens,
+                savings_tokens: t.savings_tokens,
+                p50_latency_ms: t.p50_latency_ms,
+                p95_latency_ms: t.p95_latency_ms,
+                latency_samples: t.latency_samples,
+                // Per-call p95 bytes/tokens for budget gate; derived from
+                // observed totals + call count under the assumption that
+                // the distribution is approximately log-normal.
+                mean_tokens_per_call: t.calls > 0 ? Math.round(t.observed_tokens / t.calls) : 0,
+              },
+            ]),
+          ),
+        };
+        const path = analyzeCachePath();
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, JSON.stringify(cache, null, 2) + "\n", "utf8");
+      } catch {
+        // Fail-open: analyze never refuses to render because of a cache write.
+      }
+    }
+
+    if (opts.tune) {
+      try {
+        const tune = computeGolemTune({ since });
+        const path = writeGolemTune(tune.state);
+        process.stderr.write(
+          `\n✓ Golem tune written to ${path}\n  ${tune.state.reasoning}\n`,
+        );
+      } catch (e) {
+        process.stderr.write(`tokenomy analyze --tune: ${(e as Error).message}\n`);
+      }
+    }
 
     if (opts.json) {
       process.stdout.write(JSON.stringify(report, null, 2) + "\n");
