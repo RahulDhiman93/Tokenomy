@@ -113,7 +113,8 @@ export const runInit = (opts: InitOptions = {}): {
   agentResults: AgentInstallResult[];
 } => {
   const installClaude = !opts.agent || opts.agent === "claude-code";
-  const hookPath = installClaude ? stageHookBinary() : null;
+  const needsHookBinary = installClaude || opts.agent === "codex";
+  const hookPath = needsHookBinary ? stageHookBinary() : null;
   const settingsPath = claudeSettingsPath();
 
   let backupPath: string | null = null;
@@ -173,7 +174,7 @@ export const runInit = (opts: InitOptions = {}): {
     ? installDetectedAgents(graphServerPath, opts.backup !== false, opts.agent)
     : [];
 
-  if (hookPath) {
+  if (hookPath && installClaude) {
     let manifest = readManifest();
     manifest = upsertEntry(manifest, {
       command_path: hookPath,

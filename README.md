@@ -45,6 +45,7 @@ Tokenomy plugs the holes the agent hook contracts let you close — with zero pr
 | `PreToolUse` on `Write` | Claude Code | `additionalContext` | Reinventing existing repo work or mature utility libraries from scratch |
 | `UserPromptSubmit` (alpha.22+) | Claude Code | `additionalContext` on every user turn | Agent planning without first checking graph for existing code, blast radius, or maintained libraries |
 | `SessionStart` (beta.1+, Golem) | Claude Code | `additionalContext` once per session + per-turn reinforcement | Verbose assistant replies — output tokens cost 5× input on Sonnet |
+| `SessionStart` + `UserPromptSubmit` hooks | Codex CLI *(experimental)* | user-scoped `~/.codex/hooks.json` + `features.codex_hooks` | Golem output rules + prompt-classifier nudges in Codex sessions |
 | `tokenomy-graph` MCP server | Claude Code · Codex CLI | 6 tools over stdio | Brute-force `Read` sweeps of the codebase — agent gets focused context from a pre-built graph + repo/branch/package alternatives |
 | `tokenomy compress` (beta.2+) | Any repo | deterministic agent-rule file cleanup + optional local Claude rewrite | Bloated `CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.windsurf/rules` loaded every session |
 | `tokenomy status-line` (beta.2+) | Claude Code | `settings.json.statusLine` command | Invisible installs — shows active state, Golem mode, graph freshness, and today's savings |
@@ -169,13 +170,15 @@ tokenomy doctor        # all checks passing
 # restart Claude Code — then use it normally
 ```
 
-**Codex CLI** (graph MCP + transcript analysis; no live hooks yet — Codex doesn't expose the PreToolUse/PostToolUse contract). `tokenomy init --graph-path` auto-registers the graph MCP server with **both** agents when each CLI is on your PATH:
+**Codex CLI** (graph MCP + transcript analysis + experimental prompt/session hooks). `tokenomy init --graph-path` auto-registers the graph MCP server with **both** agents when each CLI is on your PATH. For Codex, Tokenomy also writes user-scoped `~/.codex/hooks.json` for `SessionStart` and `UserPromptSubmit` and enables `features.codex_hooks`:
 
 ```bash
 npm install -g tokenomy
 tokenomy init --graph-path "$PWD"    # registers tokenomy-graph in both agents AND builds the graph
 tokenomy analyze                     # benchmarks ~/.claude + ~/.codex transcripts
 ```
+
+Codex hook support is intentionally partial: current Codex hooks can inject session/prompt context, so Golem and prompt-classifier nudges work. Claude-style MCP output mutation, Read input mutation, and Bash input rewriting remain Claude Code only until Codex exposes compatible hook contracts.
 
 Since alpha.15, `init --graph-path` builds the graph for you in a single shot; pass `--no-build` to skip (CI, monorepos with pre-built graphs).
 
@@ -196,7 +199,7 @@ tokenomy uninstall --agent cursor
 | Agent | Hooks | Graph MCP | Install target |
 |---|---:|---:|---|
 | Claude Code | ✓ | ✓ | `~/.claude/settings.json` + `~/.claude.json` |
-| Codex CLI | — | ✓ | `codex mcp add tokenomy-graph ...` |
+| Codex CLI | partial | ✓ | `codex mcp add tokenomy-graph ...` + `~/.codex/hooks.json` |
 | Cursor | — | ✓ | `~/.cursor/mcp.json` |
 | Windsurf | — | ✓ | `~/.codeium/windsurf/mcp_config.json` |
 | Cline | — | ✓ | `~/.cline/mcp_settings.json` |
@@ -525,10 +528,12 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 2.** `tokenomy analyze` — walks Claude Code + Codex CLI transcripts, replays rules with a real tokenizer, surfaces waste patterns in a fancy CLI dashboard.
 - [x] **Phase 3.** Local code-graph MCP server: `tokenomy-graph` stdio server + `graph build|status|serve|query|purge` CLI + doctor check. Works with both Claude Code and Codex CLI. TypeScript AST, 5 tools, hard budget caps, fail-open everywhere.
 - [x] **Phase 3.5.** Multi-stage PostToolUse pipeline: duplicate-response dedup, secret redaction, stacktrace collapse, schema-aware trim profiles (Atlassian/Linear/Slack/Gmail/GitHub), per-tool config overrides, `find_usages` graph tool, MCP query LRU cache, `tokenomy report` (TUI + HTML), hook perf telemetry, `doctor --fix`.
-- [x] **Phase 4.** `PreToolUse` Bash input-bounder — rewrites verbose unbounded shell commands (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, …) to cap their output via `set -o pipefail; <cmd> | awk 'NR<=N'`. Exit-status preserved, no command injection (head_limit validated), no rewrites for compound / subshell / heredoc / redirected / user-piped / streaming commands. Codex live-hook support deferred until the CLI exposes a hook contract.
+- [x] **Phase 4.** `PreToolUse` Bash input-bounder — rewrites verbose unbounded shell commands (`git log`, `find`, `ls -R`, `ps aux`, `docker logs`, `journalctl`, …) to cap their output via `set -o pipefail; <cmd> | awk 'NR<=N'`. Exit-status preserved, no command injection (head_limit validated), no rewrites for compound / subshell / heredoc / redirected / user-piped / streaming commands. Claude Code only until Codex supports input mutation.
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool with repo/branch/package search plus conservative `PreToolUse` Write context for new utility-like files.
 - [x] **Phase 5.** Polish — Golem output mode, statusline with live savings counter, `UserPromptSubmit` prompt-classifier, `tokenomy compress`, deterministic `tokenomy bench`, and cross-agent graph MCP installers.
+- [x] **Phase 5.5.** Codex hook foothold — user-scoped Codex `SessionStart` + `UserPromptSubmit` hook installation for Golem and prompt-classifier nudges, with MCP/PostToolUse mutation explicitly deferred until Codex supports it.
 - [ ] **Phase 6.** Language breadth — Python parser plugin for the graph, richer benchmark fixtures, and npm publish at 1.0.
+- [ ] **Phase 7.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, and team-ready reports. See [Tokenomy Next Features](./docs/NEXT_FEATURES.md).
 
 ---
 
