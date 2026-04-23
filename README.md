@@ -130,7 +130,7 @@ Top tools by tokens saved
 
 ---
 
-## 🤖 Zero-touch install via Claude Code
+## <img src="https://claude.ai/apple-touch-icon.png" alt="Claude" width="22" style="vertical-align: middle;"> Zero-touch install via Claude Code
 
 Don't want to read the Quickstart? Paste this into Claude Code and let the agent drive the install end-to-end. It'll install the package, register the graph MCP for this repo, enable Golem in `grunt` mode, and verify with `tokenomy doctor`:
 
