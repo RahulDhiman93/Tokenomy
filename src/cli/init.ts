@@ -25,41 +25,20 @@ import { safeParse, stableStringify } from "../util/json.js";
 import {
   addHook,
   removeHookByCommandPath,
+  upsertStatusLine,
 } from "../util/settings-patch.js";
 import { upsertClaudeMcpServer } from "../util/claude-user-config.js";
 import type { SettingsShape } from "../util/settings-patch.js";
 import { readManifest, upsertEntry, writeManifest } from "../util/manifest.js";
+import { installDetectedAgents } from "./agents/index.js";
+import type { AgentInstallResult, AgentName } from "./agents/common.js";
 
 export interface InitOptions {
   aggression?: Config["aggression"];
   backup?: boolean;
   graphPath?: string;
+  agent?: AgentName;
 }
-
-import { spawnSync } from "node:child_process";
-
-// Shell out to `codex mcp add` when Codex CLI is present. Idempotent:
-// re-registers with the same name if one already exists. Best-effort —
-// swallows all errors so Claude-Code-only installs never break.
-const tryRegisterCodex = (graphServerPath: string): boolean => {
-  const which = spawnSync("which", ["codex"], { encoding: "utf8" });
-  if (which.status !== 0) return false;
-  // Remove first (idempotent), then add. Both may fail silently.
-  spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
-  const add = spawnSync(
-    "codex",
-    ["mcp", "add", "tokenomy-graph", "--", "tokenomy", "graph", "serve", "--path", graphServerPath],
-    { stdio: "ignore" },
-  );
-  return add.status === 0;
-};
-
-const tryRemoveCodex = (): boolean => {
-  const which = spawnSync("which", ["codex"], { encoding: "utf8" });
-  if (which.status !== 0) return false;
-  const rm = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
-  return rm.status === 0;
-};
 
 const POST_MATCHER = "mcp__.*";
 // PreToolUse fires for Read (file clamp), Bash (input bounder), and Write
@@ -126,77 +105,94 @@ const writeDefaultConfigIfMissing = (opts: InitOptions): string => {
 
 export const runInit = (opts: InitOptions = {}): {
   backupPath: string | null;
-  hookPath: string;
-  settingsPath: string;
+  hookPath: string | null;
+  settingsPath: string | null;
   configPath: string;
   manifestPath: string;
   graphServerPath: string | null;
+  agentResults: AgentInstallResult[];
 } => {
-  const hookPath = stageHookBinary();
+  const installClaude = !opts.agent || opts.agent === "claude-code";
+  const hookPath = installClaude ? stageHookBinary() : null;
   const settingsPath = claudeSettingsPath();
 
-  const backupPath = opts.backup === false ? null : backupFile(settingsPath);
+  let backupPath: string | null = null;
 
-  let settings: SettingsShape = {};
-  if (existsSync(settingsPath)) {
-    const raw = readFileSync(settingsPath, "utf8");
-    const parsed = safeParse<SettingsShape>(raw);
-    if (!parsed) {
-      throw new Error(
-        `Could not parse ${settingsPath}. Restore from backup at ${backupPath ?? "<none>"} and try again.`,
-      );
+  if (installClaude && hookPath) {
+    backupPath = opts.backup === false ? null : backupFile(settingsPath);
+
+    let settings: SettingsShape = {};
+    if (existsSync(settingsPath)) {
+      const raw = readFileSync(settingsPath, "utf8");
+      const parsed = safeParse<SettingsShape>(raw);
+      if (!parsed) {
+        throw new Error(
+          `Could not parse ${settingsPath}. Restore from backup at ${backupPath ?? "<none>"} and try again.`,
+        );
+      }
+      settings = parsed;
     }
-    settings = parsed;
+
+    settings = removeHookByCommandPath(settings, hookPath);
+    settings = addHook(settings, "PostToolUse", hookPath, POST_MATCHER, TIMEOUT_SECONDS);
+    settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
+    // UserPromptSubmit fires once per user turn, before the model sees the
+    // prompt. Matcher is empty because the event isn't tool-scoped. Powers
+    // the prompt-classifier nudge (alpha.22+) and the Golem per-turn
+    // reinforcement (0.1.1-beta.1+).
+    settings = addHook(settings, "UserPromptSubmit", hookPath, "", TIMEOUT_SECONDS);
+    // SessionStart fires once when a new coding session begins. Powers the
+    // Golem output-mode preamble (0.1.1-beta.1+). Passthrough when Golem
+    // is disabled — the hook returns null and nothing is injected.
+    settings = addHook(settings, "SessionStart", hookPath, "", TIMEOUT_SECONDS);
+    settings = upsertStatusLine(settings, "tokenomy status-line");
+
+    atomicWrite(settingsPath, stableStringify(settings) + "\n");
   }
 
-  settings = removeHookByCommandPath(settings, hookPath);
-  settings = addHook(settings, "PostToolUse", hookPath, POST_MATCHER, TIMEOUT_SECONDS);
-  settings = addHook(settings, "PreToolUse", hookPath, PRE_MATCHER, TIMEOUT_SECONDS);
-  // UserPromptSubmit fires once per user turn, before the model sees the
-  // prompt. Matcher is empty because the event isn't tool-scoped. Powers
-  // the prompt-classifier nudge (alpha.22+) and the Golem per-turn
-  // reinforcement (0.1.1-beta.1+).
-  settings = addHook(settings, "UserPromptSubmit", hookPath, "", TIMEOUT_SECONDS);
-  // SessionStart fires once when a new coding session begins. Powers the
-  // Golem output-mode preamble (0.1.1-beta.1+). Passthrough when Golem
-  // is disabled — the hook returns null and nothing is injected.
-  settings = addHook(settings, "SessionStart", hookPath, "", TIMEOUT_SECONDS);
-  const graphServerPath = opts.graphPath ? resolve(opts.graphPath) : null;
-
-  atomicWrite(settingsPath, stableStringify(settings) + "\n");
+  const graphServerPath = opts.graphPath
+    ? resolve(opts.graphPath)
+    : opts.agent && opts.agent !== "claude-code"
+      ? resolve(process.cwd())
+      : null;
 
   // Claude Code 2.1+ reads MCP registrations from ~/.claude.json (not
   // ~/.claude/settings.json). Writing to the settings file we just patched
   // wouldn't take effect. Route the MCP upsert through the separate
   // ~/.claude.json surgical patcher.
   if (graphServerPath) {
-    upsertClaudeMcpServer(GRAPH_SERVER_NAME, {
-      command: "tokenomy",
-      args: ["graph", "serve", "--path", graphServerPath],
-    });
-    // Best-effort Codex registration: Codex CLI writes to its own
-    // ~/.codex/config.toml. Shell out to `codex mcp add` if the binary is
-    // on PATH. Non-fatal: init succeeds for Claude-Code-only installs.
-    tryRegisterCodex(graphServerPath);
+    if (installClaude) {
+      upsertClaudeMcpServer(GRAPH_SERVER_NAME, {
+        command: "tokenomy",
+        args: ["graph", "serve", "--path", graphServerPath],
+      });
+    }
   }
 
-  let manifest = readManifest();
-  manifest = upsertEntry(manifest, {
-    command_path: hookPath,
-    settings_path: settingsPath,
-    matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}|UserPromptSubmit|SessionStart`,
-    installed_at: new Date().toISOString(),
-  });
-  writeManifest(manifest);
+  const agentResults = graphServerPath
+    ? installDetectedAgents(graphServerPath, opts.backup !== false, opts.agent)
+    : [];
+
+  if (hookPath) {
+    let manifest = readManifest();
+    manifest = upsertEntry(manifest, {
+      command_path: hookPath,
+      settings_path: settingsPath,
+      matcher: `PostToolUse:${POST_MATCHER}|PreToolUse:${PRE_MATCHER}|UserPromptSubmit|SessionStart`,
+      installed_at: new Date().toISOString(),
+    });
+    writeManifest(manifest);
+  }
 
   const configPath = writeDefaultConfigIfMissing(opts);
 
   return {
     backupPath,
     hookPath,
-    settingsPath,
+    settingsPath: installClaude ? settingsPath : null,
     configPath,
     manifestPath: manifestPath(),
     graphServerPath,
+    agentResults,
   };
 };

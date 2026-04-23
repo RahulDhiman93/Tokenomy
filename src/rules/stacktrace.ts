@@ -4,9 +4,9 @@ import { utf8Bytes } from "./text-trim.js";
 // languages: Node ("at foo (file:line:col)"), Python ("File \"...\", line N"),
 // Java/Kotlin ("at com.x.Y.z(Y.java:42)"), Ruby ("from file:line:in `sym'").
 const FRAME_RE =
-  /^(\s*)(?:at\s+|File\s+"|from\s+)[^\n]*$|^(\s*)\S+\.\S+\([^)]+:\d+(:\d+)?\)\s*$/;
+  /^(\s*)(?:at\s+|File\s+"|from\s+)[^\n]*$|^(\s*)\S+\.\S+\([^)]+:\d+(:\d+)?\)\s*$|^\s*\d+:\s+\S+.*$|^\s*\S+(?:\.\S+)+\(.*\)\s*$|^\s+at\s+\S+:\d+(:\d+)?\s*$/;
 
-const looksLikeFrame = (line: string): boolean => FRAME_RE.test(line);
+export const looksLikeFrame = (line: string): boolean => FRAME_RE.test(line);
 
 // Heuristic: a text block "looks like an error" if:
 //   - it contains at least 6 consecutive stack frames, OR

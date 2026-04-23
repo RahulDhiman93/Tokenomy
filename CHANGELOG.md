@@ -8,9 +8,35 @@
 
 All notable changes to **Tokenomy** are documented here.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting at `1.0.0`. Pre-`1.0.0` releases are alpha and may break on minor bumps.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting at `1.0.0`. Pre-`1.0.0` releases are beta and may break before the stable line.
 
 ## [Unreleased]
+
+## [0.1.1-beta.2] — 2026-04-23
+
+### Added
+
+- `tokenomy compress` for deterministic agent-instruction file cleanup,
+  with `status`, `restore`, `--dry-run`, `--diff`, `--in-place`, and
+  optional local Claude CLI rewriting via `--llm`.
+- `tokenomy status-line` plus Claude Code `settings.json.statusLine`
+  registration from `tokenomy init`.
+- Bash PostToolUse stacktrace compression for noisy test failures while
+  preserving assertion messages, diffs, test names, and summaries.
+- `tokenomy bench` deterministic benchmark harness with markdown output.
+- Cross-agent graph MCP registration for Codex, Cursor, Windsurf, Cline,
+  and Gemini via `tokenomy init --agent ...` and auto-detected installs
+  when `--graph-path` is provided.
+
+### Changed
+
+- `tokenomy init --list-agents` reports local agent detection.
+- `tokenomy uninstall --agent <name>` removes non-Claude graph MCP
+  registrations where Tokenomy manages the config file.
+
+### Tests
+
+- Full suite: **409/409 passing**.
 
 ## [0.1.1-beta.1] — 2026-04-23
 
@@ -623,7 +649,9 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.0-alpha.22...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.2...HEAD
+[0.1.1-beta.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.2
+[0.1.1-beta.1]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.1
 [0.1.0-alpha.22]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.22
 [0.1.0-alpha.21]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.21
 [0.1.0-alpha.20]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.0-alpha.20

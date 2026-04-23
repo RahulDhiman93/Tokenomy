@@ -18,6 +18,12 @@ export const DEFAULT_CONFIG: Config = {
       max_items: 50,
       max_string_bytes: 200,
     },
+    shell_trace_trim: {
+      enabled: true,
+      max_preserved_frames_head: 3,
+      max_preserved_frames_tail: 2,
+      min_frames_to_trigger: 6,
+    },
   },
   read: {
     enabled: true,
@@ -225,6 +231,7 @@ const applyAggression = (cfg: Config): Config => {
             ),
           }
         : undefined,
+      shell_trace_trim: cfg.mcp.shell_trace_trim,
     },
     read: {
       enabled: cfg.read.enabled,
@@ -318,7 +325,13 @@ export const configForTool = (cfg: Config, toolName: string): Config => {
   const undone: Config = {
     ...base,
     gate: { ...DEFAULT_CONFIG.gate },
-    mcp: { ...DEFAULT_CONFIG.mcp, profiles: cfg.mcp.profiles, disabled_profiles: cfg.mcp.disabled_profiles },
+    mcp: {
+      ...DEFAULT_CONFIG.mcp,
+      profiles: cfg.mcp.profiles,
+      disabled_profiles: cfg.mcp.disabled_profiles,
+      shape_trim: cfg.mcp.shape_trim,
+      shell_trace_trim: cfg.mcp.shell_trace_trim,
+    },
     read: { ...DEFAULT_CONFIG.read },
   };
   return applyAggression(undone);
