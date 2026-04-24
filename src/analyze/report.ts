@@ -1,4 +1,5 @@
 import type { SimEvent } from "./simulate.js";
+import { collectRavenStats, type RavenStats } from "../raven/stats.js";
 
 export interface AggregateReport {
   window: { first_ts: string | null; last_ts: string | null };
@@ -55,6 +56,7 @@ export interface AggregateReport {
     session_id: string;
   }>;
   tokenizer: { name: string; approximate: boolean };
+  raven: RavenStats;
 }
 
 export interface AggregatorOptions {
@@ -62,6 +64,10 @@ export interface AggregatorOptions {
   price_per_million: number;
   tokenizer_name: string;
   tokenizer_approximate: boolean;
+  // Config-driven hint so the `raven` block in the rendered report knows
+  // whether the bridge is currently turned on. Stats are collected
+  // unconditionally; this only colours the "status" line.
+  raven_enabled?: boolean;
 }
 
 interface ToolBucket {
@@ -385,6 +391,7 @@ export class Aggregator {
         name: this.opts.tokenizer_name,
         approximate: this.opts.tokenizer_approximate,
       },
+      raven: collectRavenStats(undefined, this.opts.raven_enabled === true),
     };
   }
 }

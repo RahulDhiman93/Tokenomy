@@ -1,9 +1,30 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { sep } from "node:path";
+import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOKENOMY_VERSION } from "../core/version.js";
+import { updateCachePath } from "../core/paths.js";
+import { atomicWrite } from "../util/atomic.js";
+import { stableStringify } from "../util/json.js";
 import { getClaudeMcpServer } from "../util/claude-user-config.js";
+
+// Cache the most recent registry lookup so the statusline can render an
+// update-available marker without making a blocking network call on every
+// render. Only written for dist-tag lookups (not pinned versions), since a
+// pinned `--version=X` isn't meaningful as "latest on npm".
+export const writeUpdateCache = (remote: string, tag: string): void => {
+  try {
+    const path = updateCachePath();
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWrite(
+      path,
+      stableStringify({ installed: TOKENOMY_VERSION, remote, tag, fetched_at: new Date().toISOString() }) + "\n",
+      false,
+    );
+  } catch {
+    // Cache write failures must never break `update --check`.
+  }
+};
 
 // Read the previously-registered graph path so `tokenomy update` can restage
 // the graph MCP server for the user without making them remember their path.
@@ -189,6 +210,9 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
     process.stdout.write(`  installed:       ${installed}\n`);
     process.stdout.write(`  ${label.padEnd(16)}: ${resolved}\n`);
     const cmp = compareVersions(resolved, installed);
+    // Cache the registry reply so the statusline can render an ↑ marker.
+    // Skip pinned-version checks — those aren't meaningful as "latest".
+    if (!isPinnedVersion) writeUpdateCache(resolved, target);
     if (cmp === 0) {
       process.stdout.write(`  ✓ Up to date\n`);
       return 0;

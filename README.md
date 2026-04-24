@@ -134,7 +134,7 @@ TypeScript / JavaScript AST via the TS compiler (no type checker); `tsconfig.pat
 - **Incremental graph updates** *(beta.3+)* — `cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or >40% of files changed. Opt-in.
 - **`tokenomy budget` pre-flight gate** *(beta.3+)* — advisory `PreToolUse` rule that estimates incoming-call response size from analyze cache and warns via `additionalContext` when the call would push the session past `cfg.budget.session_cap_tokens`. Never rejects. Default off.
 - **`tokenomy ci` + GitHub Action** *(beta.3+)* — `action.yml` at repo root plus a `tokenomy ci format --input=<analyze.json>` CLI that converts analyze JSON into a PR-ready markdown comment. Inputs validated + HTML-escaped.
-- **Statusline version** *(beta.3+)* — `tokenomy status-line` now shows the version tag inline, e.g. `[Tokenomy v0.1.1-beta.4 · GOLEM-GRUNT · 15.0k saved]`.
+- **Statusline version + update marker** *(beta.3+, marker beta.5+)* — `tokenomy status-line` shows the version tag inline, e.g. `[Tokenomy v0.1.1-beta.5 · GOLEM-GRUNT · 15.0k saved]`. After a `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.1-beta.5↑`). The cache at `~/.tokenomy/update-cache.json` is ignored past 14 days.
 - **Per-tool p95 latency** *(beta.3+)* — `analyze` + `report` show p50/p95 wall-clock latency per tool (from paired `tool_use`/`tool_result` timestamps).
 
 ### 🪶 Raven — cross-agent handoff + review *(beta.4+)*
@@ -148,6 +148,8 @@ Raven turns Claude Code and Codex CLI into a primary/reviewer pair. Claude works
 - **`tokenomy raven pr-check`** — verdict rules: `no` on any unresolved `critical` finding / stale HEAD / zero reviews. `risky` on graph stale / dirty tree / high-severity disagreement. Exit code 2 when blocking.
 - **`tokenomy raven install-commands`** — writes `.claude/commands/raven-brief.md` + `raven-pr-check.md`. Never clobbers.
 - **Agent-facing MCP tools** (all budget-clipped, all refuse stale packets): `create_handoff_packet`, `read_handoff_packet`, `record_agent_review`, `list_agent_reviews`, `compare_agent_reviews`, `get_pr_readiness`, `record_decision`.
+
+- **Raven in report + analyze** *(beta.5+)* — Raven activity (packets, reviews, comparisons, decisions, last activity, repo count) now surfaces in both `tokenomy report` (TUI + HTML) and `tokenomy analyze`, so the bridge is visible alongside token savings.
 
 Out-of-scope for beta.4: `review --agent` auto-subprocessing (human-in-the-loop flow instead — print the packet path, run Codex in a second terminal, it calls `record_agent_review`) and `dispatch --worktree` (follow-up PR).
 
@@ -267,7 +269,7 @@ tokenomy compress /path/to/CLAUDE.md --in-place --force  # explicit outside-cwd 
 tokenomy compress restore CLAUDE.md
 ```
 
-> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.4`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.4` or `tokenomy update --version 0.1.1-beta.4`. Bleeding edge: see [Development](#development).
+> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin for stability: `npm install -g tokenomy@0.1.1-beta.5`. Upgrade with one command — `tokenomy update` (runs `npm install -g` + re-stages the hook + is idempotent; config + logs preserved). Check without installing: `tokenomy update --check`. Pin an exact release: `tokenomy update@0.1.1-beta.5` or `tokenomy update --version 0.1.1-beta.5`. Bleeding edge: see [Development](#development).
 
 Watch trims live — `tail -f ~/.tokenomy/savings.jsonl`:
 
@@ -549,8 +551,8 @@ Duplicate hotspots (same args)
 ```bash
 tokenomy update            # install latest + re-stage hook in one shot
 tokenomy update --check    # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.1-beta.4   # npm-style pin
-tokenomy update --version=0.1.1-beta.4  # same, explicit flag
+tokenomy update@0.1.1-beta.5   # npm-style pin
+tokenomy update --version=0.1.1-beta.5  # same, explicit flag
 tokenomy update --tag=beta # opt into a non-default dist-tag
 ```
 

@@ -1,8 +1,9 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { loadConfig } from "../core/config.js";
-import { graphMetaPath, graphSnapshotPath, tokenomyGraphRootDir } from "../core/paths.js";
+import { graphMetaPath, graphSnapshotPath, tokenomyGraphRootDir, updateCachePath } from "../core/paths.js";
 import type { SavingsLogEntry } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
+import { compareVersions } from "./update.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { resolveGolemMode } from "../rules/golem.js";
 import { safeParse } from "../util/json.js";
@@ -15,7 +16,34 @@ export interface StatusLineState {
   graph?: "fresh" | "stale";
   golem?: string;
   raven?: boolean;
+  // Populated when a cached `tokenomy update --check` reply indicates a
+  // newer version is available on npm. Renders as `↑` after the version.
+  updateAvailable?: string;
 }
+
+// Staleness window for the update cache. Past this, treat the cache as
+// unknown rather than a stale hit (registry state drifts; a 2-week-old
+// "update available" isn't signal worth rendering).
+const UPDATE_CACHE_TTL_MS = 14 * 86_400_000;
+
+export const readUpdateCache = (
+  path = updateCachePath(),
+  now = Date.now(),
+): string | undefined => {
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = safeParse<{ remote?: string; fetched_at?: string }>(
+      readFileSync(path, "utf8"),
+    );
+    if (!parsed?.remote || !parsed.fetched_at) return undefined;
+    const fetchedAt = Date.parse(parsed.fetched_at);
+    if (!Number.isFinite(fetchedAt)) return undefined;
+    if (now - fetchedAt > UPDATE_CACHE_TTL_MS) return undefined;
+    return compareVersions(parsed.remote, TOKENOMY_VERSION) > 0 ? parsed.remote : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const localDateKey = (d: Date): string => {
   const month = `${d.getMonth() + 1}`.padStart(2, "0");
@@ -71,23 +99,22 @@ const graphState = (cwd: string): "fresh" | "stale" | undefined => {
   }
 };
 
-const VERSION_TAG = `v${TOKENOMY_VERSION}`;
-
 export const renderStatusLine = (state: StatusLineState): string => {
   if (!state.active) return "";
+  const versionTag = `v${TOKENOMY_VERSION}${state.updateAvailable ? "↑" : ""}`;
   const raven = state.raven ? " · Raven" : "";
   if (state.golem) {
     const savings = state.tokensToday > 0 ? ` · ${compact(state.tokensToday)} saved` : "";
-    return `[Tokenomy ${VERSION_TAG} · GOLEM-${state.golem.toUpperCase()}${savings}${raven}]`;
+    return `[Tokenomy ${versionTag} · GOLEM-${state.golem.toUpperCase()}${savings}${raven}]`;
   }
-  if (state.tokensToday <= 0) return `[Tokenomy ${VERSION_TAG} · active${raven}]`;
+  if (state.tokensToday <= 0) return `[Tokenomy ${versionTag} · active${raven}]`;
   const graph =
     state.graph === "fresh"
       ? " · graph fresh"
       : state.graph === "stale"
         ? " · graph stale - rebuild"
         : "";
-  return `[Tokenomy ${VERSION_TAG} · ${compact(state.tokensToday)} saved${graph}${raven}]`;
+  return `[Tokenomy ${versionTag} · ${compact(state.tokensToday)} saved${graph}${raven}]`;
 };
 
 export const runStatusLine = (argv: string[]): number => {
@@ -99,6 +126,7 @@ export const runStatusLine = (argv: string[]): number => {
       graph: graphState(process.cwd()),
       golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
       raven: cfg.raven.enabled,
+      updateAvailable: readUpdateCache(),
     };
     if (argv.includes("--json")) process.stdout.write(JSON.stringify(state, null, 2) + "\n");
     else process.stdout.write(renderStatusLine(state) + "\n");

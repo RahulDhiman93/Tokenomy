@@ -6,6 +6,8 @@ import { defaultLogPath, tokenomyDir } from "../core/paths.js";
 import { safeParse } from "../util/json.js";
 import type { Config, SavingsLogEntry } from "../core/types.js";
 import { globalConfigPath } from "../core/paths.js";
+import { collectRavenStats, type RavenStats } from "../raven/stats.js";
+import { loadConfig } from "../core/config.js";
 
 // Per-1M-token pricing (USD). Used purely to estimate $ saved for the
 // "tokens saved" column. Users can override via `tokenomy config set
@@ -29,6 +31,7 @@ export interface ReportSummary {
   by_reason: { reason: string; calls: number; tokens_saved: number }[];
   by_day: { day: string; calls: number; tokens_saved: number }[];
   window: { first_ts: string | null; last_ts: string | null };
+  raven: RavenStats;
 }
 
 const readEntries = (logPath: string, since?: Date): SavingsLogEntry[] => {
@@ -47,7 +50,7 @@ const readEntries = (logPath: string, since?: Date): SavingsLogEntry[] => {
 
 export const summarize = (
   entries: SavingsLogEntry[],
-  opts: { top: number; pricePerMillion: number },
+  opts: { top: number; pricePerMillion: number; raven?: RavenStats },
 ): ReportSummary => {
   const byTool = new Map<string, { calls: number; tokens: number }>();
   const byReason = new Map<string, { calls: number; tokens: number }>();
@@ -108,6 +111,7 @@ export const summarize = (
     by_reason: reasonRanking,
     by_day: dayRanking,
     window: { first_ts: first, last_ts: last },
+    raven: opts.raven ?? collectRavenStats(undefined, false),
   };
 };
 
@@ -124,6 +128,12 @@ const renderTui = (s: ReportSummary): string => {
     `(−${fmtNum(s.total_bytes_in - s.total_bytes_out)})`);
   lines.push(`Tokens saved (est): ${fmtNum(s.total_tokens_saved)}`);
   lines.push(`~USD saved:        $${s.estimated_usd_saved.toFixed(4)}`);
+  lines.push("");
+  lines.push("Raven bridge");
+  lines.push(`  status:            ${s.raven.enabled ? "enabled" : "disabled"}`);
+  lines.push(`  packets:           ${fmtNum(s.raven.packets)}   repos: ${fmtNum(s.raven.repos)}`);
+  lines.push(`  reviews:           ${fmtNum(s.raven.reviews)}   comparisons: ${fmtNum(s.raven.comparisons)}   decisions: ${fmtNum(s.raven.decisions)}`);
+  lines.push(`  last activity:     ${s.raven.last_activity ?? "—"}`);
   lines.push("");
   lines.push("Top tools by tokens saved");
   for (const t of s.by_tool) {
@@ -186,6 +196,17 @@ const renderHtml = (s: ReportSummary): string => {
   <strong>${fmtNum(s.total_tokens_saved)}</strong> tokens saved &nbsp;·&nbsp;
   ~$${s.estimated_usd_saved.toFixed(4)} USD</div>
 
+<h2>Raven bridge</h2>
+<div class="card">
+  <strong>${s.raven.enabled ? "enabled" : "disabled"}</strong> &nbsp;·&nbsp;
+  ${fmtNum(s.raven.packets)} packets &nbsp;·&nbsp;
+  ${fmtNum(s.raven.reviews)} reviews &nbsp;·&nbsp;
+  ${fmtNum(s.raven.comparisons)} comparisons &nbsp;·&nbsp;
+  ${fmtNum(s.raven.decisions)} decisions &nbsp;·&nbsp;
+  ${fmtNum(s.raven.repos)} repos &nbsp;·&nbsp;
+  last activity: ${escapeHtml(s.raven.last_activity ?? "—")}
+</div>
+
 <h2>Top tools by tokens saved</h2>
 <table><thead><tr><th>Tool</th><th>Calls</th><th>Tokens saved</th></tr></thead>
 <tbody>${rows(s.by_tool.map((t) => ({ label: t.tool, calls: t.calls, tokens: t.tokens_saved })))}</tbody></table>
@@ -221,7 +242,14 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
   const logPath = defaultLogPath();
   const entries = readEntries(logPath, opts.since);
   const pricePerMillion = opts.pricePerMillion ?? readConfigPrice();
-  const summary = summarize(entries, { top: opts.top, pricePerMillion });
+  let ravenEnabled = false;
+  try {
+    ravenEnabled = loadConfig(process.cwd()).raven.enabled;
+  } catch {
+    // Config unreadable — render Raven as "disabled" rather than failing the report.
+  }
+  const raven = collectRavenStats(undefined, ravenEnabled);
+  const summary = summarize(entries, { top: opts.top, pricePerMillion, raven });
   const html = renderHtml(summary);
   const tui = renderTui(summary);
   const htmlPath = opts.out ?? join(tokenomyDir(), "report.html");
