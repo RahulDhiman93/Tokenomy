@@ -246,6 +246,30 @@ export const render = (report: AggregateReport, opts: RenderOptions): string => 
     out.push("");
   }
 
+  // Raven bridge summary. Shown even when disabled so users see the feature
+  // exists; suppressed entirely when there's literally no data to avoid noise.
+  // Tolerate older JSON payloads / test fixtures that predate the `raven`
+  // field on AggregateReport — render nothing instead of crashing.
+  const rv = report.raven;
+  if (rv && (rv.enabled || rv.packets > 0 || rv.reviews > 0 || rv.decisions > 0)) {
+    out.push(`${c.bold}Raven bridge${c.reset}  ${c.dim}(cross-agent handoff / review)${c.reset}`);
+    const status = rv.enabled ? `${c.green}enabled${c.reset}` : `${c.dim}disabled${c.reset}`;
+    out.push(`  ${pad("Status", 26)} ${status}`);
+    out.push(
+      `  ${pad("Packets", 26)} ${c.bold}${n(rv.packets)}${c.reset}` +
+        `     ${pad("Repos", 14)} ${c.bold}${n(rv.repos)}${c.reset}`,
+    );
+    out.push(
+      `  ${pad("Reviews", 26)} ${c.bold}${n(rv.reviews)}${c.reset}` +
+        `     ${pad("Comparisons", 14)} ${c.bold}${n(rv.comparisons)}${c.reset}`,
+    );
+    out.push(
+      `  ${pad("Decisions", 26)} ${c.bold}${n(rv.decisions)}${c.reset}` +
+        `     ${pad("Last activity", 14)} ${c.dim}${rv.last_activity ? rv.last_activity.slice(0, 19) + "Z" : "—"}${c.reset}`,
+    );
+    out.push("");
+  }
+
   // By-day sparkline.
   if (report.by_day.length > 1) {
     out.push(`${c.bold}By day${c.reset}  ${c.dim}(observed tokens)${c.reset}`);

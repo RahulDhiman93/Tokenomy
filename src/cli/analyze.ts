@@ -118,6 +118,7 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
       opts.pricePerMillion ?? priceFromConfig(cfg as Config & { report?: { price_per_million?: number } }),
     tokenizer_name: tokenizer.name,
     tokenizer_approximate: tokenizer.approximate,
+    raven_enabled: cfg.raven?.enabled === true,
   });
 
   // Live progress: write \r-updated status line to stderr so stdout stays

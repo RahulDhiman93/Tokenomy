@@ -12,6 +12,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1-beta.5] — 2026-04-23
+
+### Added
+
+- **Statusline update marker.** `tokenomy update --check` now caches the
+  registry reply at `~/.tokenomy/update-cache.json` (dist-tag lookups only,
+  not pinned versions). The statusline reads that cache and renders a
+  `↑` after the version tag when a newer build exists on npm (e.g.
+  `[Tokenomy v0.1.1-beta.5↑ · …]`). Cache is ignored past 14 days.
+- **Raven in report + analyze.** `tokenomy report` (TUI + HTML) and
+  `tokenomy analyze` now surface Raven bridge stats — packets, reviews,
+  comparisons, decisions, repo count, last activity. The analyze block
+  is suppressed when Raven has zero data and is disabled, so empty
+  installs aren't spammed.
+
+### Changed
+
+- `ReportSummary` and `AggregateReport` gain a `raven` field. Callers
+  reading either interface will see the new key; JSON shape is additive.
+
 ## [0.1.1-beta.4] — 2026-04-23
 
 ### Added
@@ -763,7 +783,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.4...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.5...HEAD
+[0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5
 [0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4
 [0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3
 [0.1.1-beta.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.2

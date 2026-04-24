@@ -16,6 +16,9 @@ export const golemTunePath = (): string => join(tokenomyDir(), "golem-tune.json"
 // Written by `tokenomy analyze` as a side effect; read by the budget
 // PreToolUse rule for p95-response-size lookups.
 export const analyzeCachePath = (): string => join(tokenomyDir(), "analyze-cache.json");
+// Written by `tokenomy update --check`; read by the statusline to render
+// a `↑` marker after the version when a newer build exists on npm.
+export const updateCachePath = (): string => join(tokenomyDir(), "update-cache.json");
 // Per-session running totals for the budget rule. Cleared on SessionStart
 // of a new session. Session-state files are append-only JSONL ledgers keyed
 // by a sanitized hash of the session_id (to prevent path traversal when a
