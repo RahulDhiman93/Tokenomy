@@ -16,6 +16,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- **`tokenomy feedback "..."` command.** Backend-less feedback channel.
+  Files a labeled GitHub issue at `RahulDhiman93/Tokenomy/issues` via
+  `gh` CLI when available; falls back to opening a prefilled
+  `issues/new?title=…&body=…&labels=feedback` URL in the user's default
+  browser; falls back further to printing the URL when no display.
+  Every submission also appends to `~/.tokenomy/feedback.jsonl` so
+  the user has a local copy regardless. No third-party service, no
+  telemetry beyond a small env block (`tokenomy` version, node,
+  platform, detected agents). `--print-only` skips both `gh` and the
+  browser-open. Docs: `docs/features/feedback.md`.
 - **Kratos — security shield.** Opt-in, off by default. Continuous
   prompt-time scan (UserPromptSubmit) detects prompt-injection ("ignore
   previous instructions", "you are now …", "new system prompt:"),

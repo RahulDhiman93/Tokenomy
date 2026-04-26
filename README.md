@@ -141,6 +141,7 @@ Each feature has its own README. Main README stays small.
 | Golem | Terse output mode — `lite` / `full` / `ultra` / `grunt` / `recon` / `auto`. Safety-gated for code, commands, warnings, numbers | [docs/features/golem.md](./docs/features/golem.md) |
 | Raven bridge | Claude-primary + Codex-reviewer handoff packets, deterministic finding compare, PR-readiness verdict | [docs/features/raven.md](./docs/features/raven.md) |
 | Kratos *(beta.6+)* | Security shield — prompt-injection / data-exfil / secret-in-prompt detector + cross-MCP exfil-pair scanner | [docs/features/kratos.md](./docs/features/kratos.md) |
+| Feedback *(beta.6+)* | `tokenomy feedback "..."` files a GitHub issue (via `gh` or browser fallback). No backend service. | [docs/features/feedback.md](./docs/features/feedback.md) |
 | Observability | `savings.jsonl`, `report`, `analyze`, `diff`, `learn`, `budget`, `bench`, `status-line`, `doctor`, `update` | [docs/features/observability.md](./docs/features/observability.md) |
 | Compress | `tokenomy compress` — agent rule file cleanup (CLAUDE.md, AGENTS.md, .cursor/rules) | [docs/features/compress.md](./docs/features/compress.md) |
 | Cross-agent install | Per-agent adapters for Claude / Codex / Cursor / Windsurf / Cline / Gemini | [docs/features/cross-agent.md](./docs/features/cross-agent.md) |
