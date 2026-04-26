@@ -5,14 +5,14 @@ import {
   buildGolemTurnReminder,
 } from "../rules/golem.js";
 
-// `tokenomy golem enable|disable|status [--mode=lite|full|ultra]`
+// `tokenomy golem enable|disable|status [--mode=lite|full|ultra|grunt|recon|auto]`
 //
 // Pure CLI wrapper over the existing `tokenomy config set` machinery. No
 // settings.json patching here — the SessionStart + UserPromptSubmit hook
 // registrations land during `tokenomy init`. This command only toggles the
 // config flags that the live hooks read every invocation.
 
-const MODES = new Set(["lite", "full", "ultra", "grunt", "auto"]);
+const MODES = new Set(["lite", "full", "ultra", "grunt", "recon", "auto"]);
 
 const parseModeFlag = (argv: string[]): string | null => {
   for (const arg of argv) {
@@ -35,7 +35,7 @@ const writeStatus = (): number => {
   process.stdout.write(`  safety_gates: ${g.safety_gates}\n`);
   if (!g.enabled) {
     process.stdout.write(
-      "\nRun `tokenomy golem enable [--mode=lite|full|ultra]` to turn it on.\n",
+      "\nRun `tokenomy golem enable [--mode=lite|full|ultra|grunt|recon]` to turn it on.\n",
     );
     return 0;
   }
@@ -71,7 +71,7 @@ export const runGolem = (argv: string[]): number => {
     if (mode !== null) {
       if (!MODES.has(mode)) {
         process.stderr.write(
-          `tokenomy golem: invalid mode "${mode}". Expected one of: lite, full, ultra, grunt, auto.\n`,
+          `tokenomy golem: invalid mode "${mode}". Expected one of: lite, full, ultra, grunt, recon, auto.\n`,
         );
         return 1;
       }
@@ -108,7 +108,7 @@ export const runGolem = (argv: string[]): number => {
 
   process.stderr.write(
     "Usage:\n" +
-      "  tokenomy golem enable [--mode=lite|full|ultra|grunt|auto]\n" +
+      "  tokenomy golem enable [--mode=lite|full|ultra|grunt|recon|auto]\n" +
       "  tokenomy golem disable\n" +
       "  tokenomy golem status\n",
   );

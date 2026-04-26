@@ -12,6 +12,68 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1-beta.6] — 2026-04-26
+
+### Added
+
+- **Kratos — security shield.** Opt-in, off by default. Continuous
+  prompt-time scan (UserPromptSubmit) detects prompt-injection ("ignore
+  previous instructions", "you are now …", "new system prompt:"),
+  data-exfil requests ("send the contents/secrets/env to …", curl-POST
+  to non-local), credentials pasted directly in prompts (AWS / GitHub /
+  OpenAI / Anthropic / Slack / Stripe / Google keys, JWTs, Bearer
+  tokens, PEM blocks), zero-width / RTL-override hidden instructions,
+  and long base64 blocks. Plus on-demand `tokenomy kratos scan` static
+  audit of every installed agent's MCP servers (Claude / Codex / Cursor
+  / Windsurf / Cline / Gemini): classifies each as read-source or
+  write-sink and flags pairs that form an exfil route, dual-surface
+  servers (Slack, Gmail, Atlassian) as self-contained leak channels,
+  remote-URL servers as untrusted, and credentials in
+  `~/.tokenomy/savings.jsonl` as redact-pre bypasses. Never blocks —
+  surfaces a `[tokenomy-kratos]` warning via `additionalContext`.
+  Categories individually toggleable; severity threshold configurable
+  (default `high`). Commands: `tokenomy kratos enable|disable|status`,
+  `tokenomy kratos scan [--json]`, `tokenomy kratos check <prompt>`.
+  Docs: `docs/features/kratos.md`.
+- **Golem `recon` mode.** Beyond `grunt` — agent-in-the-field tone, zero
+  banter, info density only. Strips fillers ("well", "now", "so"),
+  transitional acknowledgments ("Got it"), self-narration ("I think"),
+  the dry-humor allowance grunt keeps ("aye", "bah"), and conversational
+  hooks ("Just to confirm", "By the way"). Status reports collapse to
+  `<verb> <object> <result>`; data with shape prefers key:value or fixed-
+  width tables; one-token answers when accurate. Same safety gates as the
+  other modes — numbers, code, commands, warnings, paths, errors stay
+  verbatim. Enable: `tokenomy golem enable --mode=recon`.
+- **README restructure.** Main README dropped from 662 to ~240 lines;
+  per-feature deep dives moved to `docs/features/*.md` (live-trimming,
+  code-graph, agent-nudges, golem, raven, observability, compress,
+  cross-agent, configure). Zero-touch install rewritten as an interactive
+  walk-through — Claude installs the core (`init --graph-path`) first,
+  then asks the user yes/no on each opt-in feature one at a time.
+
+### Fixed
+
+- **Raven packets now capture committed-only branches.** `collectGitState`
+  resolves a base ref (env `RAVEN_BASE_REF`, then `origin/HEAD`,
+  `origin/main`, `origin/master`, `main`, `master`) and adds
+  committed-but-unmerged files to `git.changed_files` and
+  `git.diff_summary`. Earlier behavior left these empty when the working
+  tree was clean — packets created on a feature branch with all changes
+  already committed had nothing for reviewers to read. The packet now
+  surfaces `repo.base_ref` and `git.committed_files`.
+- **OSS-alt nudge no longer fires on every coding turn.** The
+  `prompt_classifier` "build" intent previously matched
+  `build|implement|add|create|make|write` against any prompt, so the
+  `find_oss_alternatives` nudge surfaced on most messages. The pattern now
+  requires explicit library/package-search framing — "any existing
+  library for X", "alternative to Y", "off-the-shelf Z", "instead of
+  building", "reinventing the wheel", etc. Project-specific glue work
+  no longer triggers it.
+- **Repo-search relevance gate.** When a query has ≥3 distinct tokens,
+  `repoSearch` now drops files that matched only one token. Multi-word
+  descriptions like "rate limiter backoff" no longer surface random
+  `main.ts` matches that hit on a single common noun.
+
 ## [0.1.1-beta.5] — 2026-04-23
 
 ### Added
@@ -783,7 +845,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.5...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.6...HEAD
+[0.1.1-beta.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.6
 [0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5
 [0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4
 [0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3

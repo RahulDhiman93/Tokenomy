@@ -24,7 +24,7 @@ import { safeParse } from "../util/json.js";
 // actively harmful. The gates are on by default; advanced users can
 // disable via `nudge.golem.safety_gates = false` but that's rarely wise.
 
-export type GolemMode = "lite" | "full" | "ultra" | "grunt";
+export type GolemMode = "lite" | "full" | "ultra" | "grunt" | "recon";
 export type GolemConfigMode = GolemMode | "auto";
 
 // Shape written by `tokenomy analyze --tune` into ~/.tokenomy/golem-tune.json.
@@ -48,13 +48,13 @@ export const resolveGolemMode = (cfg: Config): GolemMode => {
       if (!existsSync(path)) return "full";
       const parsed = safeParse<GolemTuneState>(readFileSync(path, "utf8"));
       const m = parsed?.mode;
-      if (m === "lite" || m === "full" || m === "ultra" || m === "grunt") return m;
+      if (m === "lite" || m === "full" || m === "ultra" || m === "grunt" || m === "recon") return m;
       return "full";
     } catch {
       return "full";
     }
   }
-  if (raw === "lite" || raw === "full" || raw === "ultra" || raw === "grunt") return raw;
+  if (raw === "lite" || raw === "full" || raw === "ultra" || raw === "grunt" || raw === "recon") return raw;
   return "full";
 };
 
@@ -98,6 +98,32 @@ const GRUNT_RULES = [
   "Never sacrifice a number, name, path, or warning for brevity. Those stay verbatim.",
 ].join("\n  - ");
 
+// RECON — beyond grunt. An operator in the field: zero personality, zero
+// banter, zero playfulness. Output is information density only — paths,
+// symbols, numbers, commands, and imperative verbs. Strips every word that
+// is not load-bearing. Drops the dry humor allowance grunt keeps. Where
+// grunt says "ship it.", recon says "ship." (or just "ok."). When data has
+// shape, prefer key:value or fixed-width tables over prose. No greeting,
+// no acknowledgment, no transitional phrases. Same safety gates as the
+// other modes — numbers, code, commands, warnings, paths, errors stay
+// verbatim. Use when the human is a sysadmin or another agent and tone
+// is overhead.
+const RECON_RULES = [
+  GRUNT_RULES,
+  "Strip filler words entirely: \"well\", \"now\", \"so\", \"okay\", \"alright\", \"anyway\", \"basically\", \"actually\", \"essentially\", \"obviously\". Never use them.",
+  "Strip transitional acknowledgments: no \"Got it.\", \"Sure.\", \"Of course.\", \"Right.\", \"Makes sense.\", \"That said.\", \"In other words.\".",
+  "Strip self-narration of feelings or dispositions: no \"I think\", \"I believe\", \"I feel\", \"I'd say\", \"I notice\", \"I see that\".",
+  "Strip the dry-humor allowance grunt keeps. No \"aye.\", \"bah.\", \"done and done.\". Use \"ok.\", \"done.\", \"no.\", \"yes.\", \"blocked.\" only.",
+  "Strip conversational hooks: no \"Just to confirm\", \"By the way\", \"Worth noting\", \"For what it's worth\", \"To be clear\".",
+  "Status reports as: <verb> <object> <result>. Three tokens max. \"Tests green.\", \"Build red: TS2304.\", \"Migration applied.\".",
+  "When data has ≥2 rows of shape, prefer key:value lines or fixed-width tables over prose. Imperative verbs only outside tables.",
+  "One-token answers when accurate: \"yes\", \"no\", \"ok\", \"done\", \"blocked\", \"n/a\". Period optional.",
+  "No softening modifiers: drop \"a bit\", \"slightly\", \"sort of\", \"kind of\", \"fairly\", \"pretty\", \"quite\", \"rather\".",
+  "No epistemic hedges: drop \"likely\", \"probably\", \"seems to\", \"appears to\", \"might be\". State the fact or say \"unknown\".",
+  "Recommendations as imperatives: \"Use X.\", \"Drop Y.\", \"Run Z.\". Never \"You could consider X\" or \"It might be worth Y\".",
+  "When asked a yes/no question, lead with the one-word answer. Reasoning, if needed, follows on a separate line as a fragment — never embedded in the answer.",
+].join("\n  - ");
+
 const SAFETY_GATES = `
 ALWAYS PRESERVE IN FULL (these override every rule above):
   - Fenced code blocks and inline code spans
@@ -112,6 +138,7 @@ const rulesFor = (mode: GolemMode): string => {
   if (mode === "lite") return LITE_RULES;
   if (mode === "ultra") return ULTRA_RULES;
   if (mode === "grunt") return GRUNT_RULES;
+  if (mode === "recon") return RECON_RULES;
   return FULL_RULES;
 };
 
@@ -131,7 +158,7 @@ export const buildGolemSessionContext = (cfg: Config): string | null => {
     `Apply these output-style rules to every assistant reply in this session:\n` +
     `  - ${rules}${gates}\n\n` +
     `Turn Golem off: \`tokenomy golem disable\`. Change mode: ` +
-    `\`tokenomy golem enable --mode lite|full|ultra|grunt|auto\`.`
+    `\`tokenomy golem enable --mode lite|full|ultra|grunt|recon|auto\`.`
   );
 };
 
@@ -157,5 +184,6 @@ export const estimateGolemSavingsTokens = (mode: GolemMode): number => {
   if (mode === "lite") return 150; // per-turn estimate — gentle drops
   if (mode === "ultra") return 500; // aggressive terseness
   if (mode === "grunt") return 750; // tightest — articles + pronouns dropped too
+  if (mode === "recon") return 950; // extreme — fillers/hedges/transitions all dropped
   return 300; // full-mode default
 };

@@ -101,6 +101,7 @@ const selectDiffs = (
   files: string[],
   cfg: Config,
   scores: Map<string, number>,
+  baseRef: string | null,
 ): { entries: RavenDiffEntry[]; dropped: number; truncated: boolean } => {
   const maxTotal = cfg.raven.max_diff_bytes;
   const maxFile = cfg.raven.max_file_diff_bytes;
@@ -114,7 +115,7 @@ const selectDiffs = (
   let dropped = 0;
   let truncated = false;
   for (const file of ordered) {
-    const raw = diffForFile(root, file);
+    const raw = diffForFile(root, file, baseRef);
     const entry = raw
       ? (() => {
           const clipped = clipText(raw, maxFile);
@@ -152,7 +153,7 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
   if (!cfg.raven.enabled) return { ok: false, reason: "raven-disabled", hint: "Run `tokenomy raven enable` first." };
   const graph = graphContext(git.data.root, cfg, git.data.changed_files);
   const scores = hotspotScores(graph?.review_context);
-  const diffs = selectDiffs(git.data.root, git.data.changed_files, cfg, scores);
+  const diffs = selectDiffs(git.data.root, git.data.changed_files, cfg, scores, git.data.base_ref);
   const session = opts.sessionId && cfg.raven.include_session_state ? readSessionState(opts.sessionId) : null;
   const packet: RavenPacket = {
     schema_version: 1,
@@ -163,6 +164,7 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
       repo_id: git.data.repo_id,
       branch: git.data.branch,
       head_sha: git.data.head_sha,
+      ...(git.data.base_ref ? { base_ref: git.data.base_ref } : {}),
       dirty: git.data.dirty,
     },
     source: {
@@ -175,6 +177,7 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
       staged_files: git.data.staged_files,
       unstaged_files: git.data.unstaged_files,
       untracked_files: git.data.untracked_files,
+      ...(git.data.committed_files.length > 0 ? { committed_files: git.data.committed_files } : {}),
       changed_files: git.data.changed_files,
       stats: git.data.stats,
       diff_summary: diffs.entries,

@@ -54,12 +54,15 @@ const previewPrompt = (prompt: string): string => {
 const INTENTS: IntentPattern[] = [
   {
     intent: "build",
-    // Match "build|implement|add|create|make|write" — but NOT when followed
-    // within 30 chars by git/workflow nouns like "branch", "commit", "PR
-    // description", etc. The .{0,30} window covers "make a new branch",
-    // "write a short PR description", "create another release tag", etc.
+    // OSS-alt nudge fires ONLY when the prompt frames a library/package
+    // search — "any existing library for X", "alternative to Y", "off-the-
+    // shelf cron parser". The earlier broad-verb pattern (build|implement|
+    // add|create|make|write) lit up on virtually every coding request,
+    // which sent repeatedly-irrelevant package suggestions for project-
+    // specific glue. Library-search framing requires the user to actually
+    // be in research-mode for an external dependency.
     pattern:
-      /\b(build|implement|add|create|make|write)\b(?!.{0,30}\b(?:branch|commit|tag|release|pr|pull\s+request|comment|message|note|test\s+case|docstring|log\s+entry|changelog)\b)/i,
+      /\b(?:(?:any|some|an?)\s+(?:existing|known|good|popular|maintained)?\s*(?:library|libraries|package|packages|module|modules|sdk|wrapper|shim|polyfill|crate|gem)\s+(?:for|to|that)\b|is\s+there\s+(?:a|an|any)\s+(?:library|package|module|sdk|tool)\b|alternative(?:s)?\s+to\b|instead\s+of\s+(?:writing|building|implementing|rolling|reinventing)\b|off[-\s]the[-\s]shelf\b|out[-\s]of[-\s]the[-\s]box\b|already\s+exists?\b|reinvent(?:ing)?\s+the\s+wheel\b|similar\s+(?:library|package|module|tool|project)\b|find\s+(?:a|an|any)\s+(?:library|package|module|alternative)\b|use\s+(?:a|an|any)\s+(?:library|package|existing)\b|recommend(?:ation)?\s+(?:a|an|any)?\s*(?:library|package)\b)/i,
     needsGraph: false,
     hint: (preview) =>
       `[tokenomy-nudge (build): "${preview}" — before planning or writing code, ` +

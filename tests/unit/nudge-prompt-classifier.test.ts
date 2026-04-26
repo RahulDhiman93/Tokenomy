@@ -44,8 +44,10 @@ const withFakeGraph = <T>(fn: (cwd: string) => T): T => {
 
 test("classifyPromptRule: build intent nudges toward find_oss_alternatives", () => {
   const cfg = DEFAULT_CONFIG;
+  // beta.6+: build intent now requires explicit library/package-search framing
+  // — the earlier "build/implement/add" pattern fired on every coding turn.
   const r = classifyPromptRule(
-    "Build a retry-with-backoff wrapper for our fetch calls.",
+    "Is there a library for retry-with-backoff we can use instead of building one?",
     cfg,
     process.cwd(),
   );
@@ -53,6 +55,28 @@ test("classifyPromptRule: build intent nudges toward find_oss_alternatives", () 
   assert.equal(r.intent, "build");
   assert.match(r.additionalContext ?? "", /find_oss_alternatives/);
   assert.match(r.additionalContext ?? "", /tokenomy-nudge \(build\)/);
+});
+
+test("classifyPromptRule: build intent does NOT fire on plain coding requests (beta.6+)", () => {
+  const cfg = DEFAULT_CONFIG;
+  // Pre-beta.6 these would have fired the build nudge — false positives that
+  // sent OSS-alt searches on every implementation request.
+  const noisyPrompts = [
+    "Build a retry-with-backoff wrapper for our fetch calls.",
+    "Add a 30-second timeout to the upload endpoint.",
+    "Implement the new pricing schema in the billing module.",
+    "Make the toolbar collapse on mobile breakpoints.",
+    "Write a test that asserts the queue drains in FIFO order.",
+    "Create a new helper to format ISO durations.",
+  ];
+  for (const prompt of noisyPrompts) {
+    const r = classifyPromptRule(prompt, cfg, process.cwd());
+    assert.equal(
+      r.kind,
+      "passthrough",
+      `expected passthrough for "${prompt}" (build intent should require library-search framing)`,
+    );
+  }
 });
 
 test("classifyPromptRule: change intent nudges toward find_usages + get_impact_radius", () => {
@@ -183,7 +207,7 @@ test("classifyPromptRule: build intent fires without a graph snapshot (OSS tool 
   process.env["HOME"] = home;
   try {
     const r = classifyPromptRule(
-      "Let's build a schema validator for our API inputs.",
+      "Any existing library for schema validation we can use, or do we need to roll our own?",
       DEFAULT_CONFIG,
       cwd,
     );

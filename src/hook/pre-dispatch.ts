@@ -23,6 +23,7 @@ import {
   resolveGolemMode,
 } from "../rules/golem.js";
 import { buildRavenSessionContext, buildRavenTurnReminder } from "../raven/nudge.js";
+import { evaluatePrompt as evaluateKratosPrompt } from "../kratos/prompt-rule.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -261,6 +262,27 @@ export const dispatchUserPrompt = (
   const r = classifyPromptRule(input.prompt ?? "", cfg, input.cwd);
   const golemReminder = buildGolemTurnReminder(cfg);
   const ravenReminder = buildRavenTurnReminder(input.prompt ?? "", cfg);
+  // Kratos prompt-time scan (UserPromptSubmit). Continuous=false → static-only.
+  const kratos =
+    cfg.kratos?.enabled && cfg.kratos?.continuous
+      ? evaluateKratosPrompt(input.prompt ?? "", cfg)
+      : { flagged: false, findings: [], notice: "" };
+  const kratosNotice = kratos.notice || null;
+  if (kratos.flagged) {
+    // Log the hit so `tokenomy report` and `tokenomy analyze` can surface
+    // kratos activity. Token-savings value is 0 — kratos is about leak
+    // prevention, not compression. Categories ride in `reason`.
+    const cats = [...new Set(kratos.findings.map((f) => f.category))].join("+");
+    appendSavingsLog(cfg.log_path, {
+      ts: new Date().toISOString(),
+      session_id: input.session_id,
+      tool: "UserPromptSubmit",
+      bytes_in: 0,
+      bytes_out: 0,
+      tokens_saved_est: 0,
+      reason: `kratos:${cats}:${kratos.findings.length}`,
+    });
+  }
 
   if (r.kind === "nudge" && r.additionalContext) {
     // Log a savings entry so `tokenomy report` and `tokenomy analyze` surface
@@ -282,7 +304,7 @@ export const dispatchUserPrompt = (
 
     // If Golem is active, append its per-turn reminder so the style rules
     // survive plugin drift even in turns where a classifier intent fires.
-    const additionalContext = [r.additionalContext, golemReminder, ravenReminder].filter(Boolean).join("\n\n");
+    const additionalContext = [r.additionalContext, golemReminder, ravenReminder, kratosNotice].filter(Boolean).join("\n\n");
     return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
@@ -293,12 +315,12 @@ export const dispatchUserPrompt = (
 
   // No classifier intent matched. Golem still needs its per-turn reminder
   // so other plugins can't shadow the style rules over time.
-  if (golemReminder || ravenReminder) {
-    if (!golemReminder && ravenReminder) {
+  if (golemReminder || ravenReminder || kratosNotice) {
+    if (!golemReminder && (ravenReminder || kratosNotice)) {
       return {
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: ravenReminder,
+          additionalContext: [ravenReminder, kratosNotice].filter(Boolean).join("\n\n"),
         },
       };
     }
@@ -317,7 +339,7 @@ export const dispatchUserPrompt = (
     return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: [golemReminder, ravenReminder].filter(Boolean).join("\n\n"),
+        additionalContext: [golemReminder, ravenReminder, kratosNotice].filter(Boolean).join("\n\n"),
       },
     };
   }

@@ -137,6 +137,23 @@ export const DEFAULT_CONFIG: Config = {
     clean_keep: 20,
     clean_older_than_days: 14,
   },
+  kratos: {
+    enabled: false,
+    continuous: true,
+    categories: {
+      "prompt-injection": true,
+      "data-exfil": true,
+      "secret-in-prompt": true,
+      "encoded-payload": true,
+      "mcp-exfil-pair": true,
+      "mcp-untrusted-server": true,
+      "hook-overbroad": true,
+      "config-drift": true,
+      "transcript-leak": true,
+    },
+    prompt_min_severity: "high",
+    notice_max_bytes: 1200,
+  },
   nudge: {
     enabled: true,
     oss_search: {
