@@ -1,4 +1,4 @@
-# `tokenomy feedback` (beta.6+)
+# `tokenomy feedback` (0.1.2+)
 
 Backend-less feedback channel. No service to operate, no auth to manage, no telemetry beyond what you typed plus a small env block you can review.
 
@@ -22,7 +22,7 @@ tokenomy feedback --print-only "feedback text"   # always print URL, never auto-
 The body of every submission is your text plus this env block:
 
 ```
-tokenomy:  0.1.1-beta.6
+tokenomy:  0.1.2
 node:      v20.x.x
 platform:  darwin arm64
 agents:    claude-code, codex, cursor

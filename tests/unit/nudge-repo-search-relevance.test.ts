@@ -18,7 +18,7 @@ test("repoSearch: drops single-token false positives when query has ≥3 distinc
     runGit(repo, ["config", "user.name", "Tokenomy Test"]);
     runGit(repo, ["config", "user.email", "tokenomy@example.test"]);
     mkdirSync(join(repo, "src"), { recursive: true });
-    // main.ts mentions only "config" — a single common token. Pre-beta.6
+    // main.ts mentions only "config" — a single common token. Pre-0.1.2
     // this would surface as a "matching code already exists" hit.
     writeFileSync(join(repo, "src", "main.ts"), "import { config } from './config';\n");
     // limiter.ts is the actual relevant file — covers all three tokens.

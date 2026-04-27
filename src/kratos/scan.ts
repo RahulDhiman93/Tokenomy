@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { safeParse } from "../util/json.js";
@@ -79,6 +87,148 @@ const readJson = (path: string): unknown => {
   } catch {
     return null;
   }
+};
+
+// Minimal TOML extractor for Codex's `~/.codex/config.toml`. We parse just
+// enough to recover `[mcp_servers.<name>]` tables — command, args, env, url.
+// Everything else is ignored. Codex doesn't expose a JS-side TOML parser;
+// shipping a generic dep for one section would be over-budget for kratos.
+const readCodexMcpServers = (path: string, agent: string): KratosMcpServer[] => {
+  if (!existsSync(path)) return [];
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const out: KratosMcpServer[] = [];
+  const lines = text.split("\n");
+  let currentName: string | null = null;
+  let entry: Record<string, unknown> = {};
+  const flush = (): void => {
+    if (currentName === null) return;
+    const command = typeof entry["command"] === "string" ? (entry["command"] as string) : undefined;
+    const args = Array.isArray(entry["args"])
+      ? (entry["args"] as unknown[]).filter((v): v is string => typeof v === "string")
+      : undefined;
+    const env =
+      entry["env"] && typeof entry["env"] === "object" && !Array.isArray(entry["env"])
+        ? Object.fromEntries(
+            Object.entries(entry["env"] as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+          )
+        : undefined;
+    const url = typeof entry["url"] === "string" ? (entry["url"] as string) : undefined;
+    out.push({
+      source: path,
+      agent,
+      name: currentName,
+      ...(command ? { command } : {}),
+      ...(args && args.length > 0 ? { args } : {}),
+      ...(env ? { env } : {}),
+      ...(url ? { url } : {}),
+    });
+    currentName = null;
+    entry = {};
+  };
+  // Match `[mcp_servers.<name>]` at line start. Codex also accepts
+  // `[mcp_servers."hyphenated-name"]` (quoted). Both forms covered.
+  const HEADER = /^\s*\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_\-]+))\]\s*$/;
+  // Bare scalar / array / inline-table assignment lines inside the table.
+  const ASSIGN = /^\s*([A-Za-z0-9_\-]+)\s*=\s*(.+?)\s*$/;
+  const parseValue = (raw: string): unknown => {
+    const trimmed = raw.trim().replace(/\s*#.*$/, "");
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1);
+    }
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      const inner = trimmed.slice(1, -1);
+      // Naive split on commas that don't fall inside quotes — sufficient for
+      // typical "args" arrays of plain strings.
+      const items: string[] = [];
+      let buf = "";
+      let inStr = false;
+      let quote = "";
+      for (const ch of inner) {
+        if (inStr) {
+          if (ch === quote) inStr = false;
+          buf += ch;
+        } else if (ch === '"' || ch === "'") {
+          inStr = true;
+          quote = ch;
+          buf += ch;
+        } else if (ch === ",") {
+          items.push(buf.trim());
+          buf = "";
+        } else {
+          buf += ch;
+        }
+      }
+      if (buf.trim().length > 0) items.push(buf.trim());
+      return items.map((it) => parseValue(it));
+    }
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      const inner = trimmed.slice(1, -1);
+      const obj: Record<string, unknown> = {};
+      // Naive inline-table split. Same caveats as the array case.
+      let buf = "";
+      let inStr = false;
+      let quote = "";
+      const parts: string[] = [];
+      for (const ch of inner) {
+        if (inStr) {
+          if (ch === quote) inStr = false;
+          buf += ch;
+        } else if (ch === '"' || ch === "'") {
+          inStr = true;
+          quote = ch;
+          buf += ch;
+        } else if (ch === ",") {
+          parts.push(buf.trim());
+          buf = "";
+        } else {
+          buf += ch;
+        }
+      }
+      if (buf.trim().length > 0) parts.push(buf.trim());
+      for (const part of parts) {
+        const m = part.match(/^([A-Za-z0-9_\-]+)\s*=\s*(.+)$/);
+        if (m && m[1] && m[2]) obj[m[1]] = parseValue(m[2]);
+      }
+      return obj;
+    }
+    if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+    return trimmed;
+  };
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/^\s*#.*$/, "").replace(/(?<!\\)#.*$/, "");
+    const headerMatch = line.match(HEADER);
+    if (headerMatch) {
+      flush();
+      currentName = headerMatch[1] ?? headerMatch[2] ?? null;
+      continue;
+    }
+    if (line.match(/^\s*\[/)) {
+      // Some other table section — flush the in-progress mcp_servers entry
+      // and stop accumulating until the next `[mcp_servers.x]` header.
+      flush();
+      currentName = null;
+      continue;
+    }
+    if (currentName === null) continue;
+    const assignMatch = line.match(ASSIGN);
+    if (!assignMatch) continue;
+    const key = assignMatch[1];
+    const rawVal = assignMatch[2];
+    if (typeof key !== "string" || typeof rawVal !== "string") continue;
+    entry[key] = parseValue(rawVal);
+  }
+  flush();
+  return out;
 };
 
 const asObj = (v: unknown): Record<string, unknown> =>
@@ -235,6 +385,57 @@ const flagUntrustedServer = (server: KratosMcpServer): KratosFinding[] => {
   return out;
 };
 
+// Hook audit. Two categories:
+//
+//   hook-overbroad: a UserPromptSubmit / SessionStart entry whose `matcher`
+//                   doesn't constrain to a known event-shape, or a
+//                   PreToolUse / PostToolUse entry with `matcher: "*"` or
+//                   empty — these touch every tool call, so a hostile or
+//                   buggy hook here gets maximum reach.
+//   config-drift:   a hook command that doesn't run a vetted Tokenomy
+//                   binary AND isn't running an obvious user binary
+//                   (node / npx / python / sh path under their own home).
+//                   Surfaces foreign hooks the user may have forgotten or
+//                   that some other tool injected without their knowledge.
+const flagHooks = (hooks: KratosHook[]): KratosFinding[] => {
+  const out: KratosFinding[] = [];
+  const TOKENOMY_HINTS = ["tokenomy-hook", "tokenomy", "/.tokenomy/bin/"];
+  const isVettedCommand = (cmd: string): boolean =>
+    TOKENOMY_HINTS.some((h) => cmd.includes(h));
+  for (const hook of hooks) {
+    const wide = hook.matcher === "" || hook.matcher === "*" || hook.matcher === ".*";
+    if (wide && (hook.event === "PreToolUse" || hook.event === "PostToolUse")) {
+      out.push({
+        category: "hook-overbroad",
+        severity: "medium",
+        confidence: "medium",
+        title: `Overbroad ${hook.event} matcher: "${hook.matcher || "(empty)"}"`,
+        detail:
+          `Hook on ${hook.event} matches every tool. Any bug or compromise in this hook ` +
+          "reaches every Read/Write/Bash/MCP call. Prefer a tighter matcher (e.g. " +
+          "`Read|Bash|Write` or `mcp__.*`) so the blast radius matches the hook's purpose.",
+        evidence: `${hook.source} → ${hook.event}: ${hook.command}`,
+        fix: "Edit ~/.claude/settings.json to constrain the matcher to the tools the hook actually needs.",
+      });
+    }
+    if (!isVettedCommand(hook.command)) {
+      out.push({
+        category: "config-drift",
+        severity: "medium",
+        confidence: "low",
+        title: `Foreign hook command on ${hook.event}`,
+        detail:
+          `Hook command does not look like a Tokenomy binary. This is fine if you installed ` +
+          "another tool's hook on purpose (e.g. a project lint hook); flagged so you can " +
+          "confirm nothing was injected without your knowledge.",
+        evidence: `${hook.command} (matcher: ${hook.matcher})`,
+        fix: "Run `tokenomy doctor` to confirm Tokenomy hooks are intact; remove unknown entries.",
+      });
+    }
+  }
+  return out;
+};
+
 const flagExfilPairs = (servers: KratosMcpServer[]): KratosFinding[] => {
   const out: KratosFinding[] = [];
   // Group by agent so we only pair servers reachable to the same client.
@@ -301,24 +502,40 @@ const SECRET_RX_FOR_LOG = [
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
 ];
 
+// Read the last `tailBytes` bytes of a file without loading the whole file.
+// Critical on long-lived installs where ~/.tokenomy/savings.jsonl can be
+// hundreds of MB — earlier readFileSync-then-slice version scaled memory
+// + runtime with the entire log size despite the cap.
+const readTail = (path: string, tailBytes: number): string => {
+  let fd: number | undefined;
+  try {
+    const stat = statSync(path);
+    const bytes = Math.min(stat.size, tailBytes);
+    if (bytes === 0) return "";
+    const start = Math.max(0, stat.size - bytes);
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(bytes);
+    const read = readSync(fd, buf, 0, bytes, start);
+    return buf.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+};
+
 const flagTranscriptLeak = (logPath: string): KratosFinding[] => {
   if (!existsSync(logPath)) return [];
-  let stat;
-  try {
-    stat = statSync(logPath);
-  } catch {
-    return [];
-  }
-  // Cap: only scan the most recent 1 MB of the log. Past that, kratos audits
-  // become slow and the user should rotate.
-  const tailBytes = Math.min(stat.size, 1_000_000);
-  let chunk: string;
-  try {
-    const fd = readFileSync(logPath, { encoding: "utf8" });
-    chunk = fd.slice(Math.max(0, fd.length - tailBytes));
-  } catch {
-    return [];
-  }
+  // Cap: only scan the most recent 1 MB of the log.
+  const tailBytes = 1_000_000;
+  const chunk = readTail(logPath, tailBytes);
+  if (chunk.length === 0) return [];
   for (const rx of SECRET_RX_FOR_LOG) {
     const m = chunk.match(rx);
     if (!m) continue;
@@ -332,7 +549,7 @@ const flagTranscriptLeak = (logPath: string): KratosFinding[] => {
           "Tokenomy's own savings log contains a string matching a known credential format. " +
           "Either redact-pre is off, or a tool input bypassed it. Rotate the credential and " +
           "enable `cfg.redact.pre_tool_use = true` if not already on.",
-        evidence: `${logPath} (~${tailBytes} bytes scanned)`,
+        evidence: `${logPath} (~${chunk.length} bytes scanned)`,
         fix: "Rotate the leaked credential; truncate ~/.tokenomy/savings.jsonl; enable redact.pre_tool_use.",
       },
     ];
@@ -350,11 +567,15 @@ export const runKratosScan = (logPath: string): KratosScanReport => {
       hooks.push(...extractClaudeHooks(cfg.path));
       continue;
     }
-    const servers = extractMcpServers(cfg).map(classifyServer);
+    const servers =
+      cfg.shape === "codex-toml"
+        ? readCodexMcpServers(cfg.path, cfg.agent).map(classifyServer)
+        : extractMcpServers(cfg).map(classifyServer);
     allServers.push(...servers);
     for (const s of servers) findings.push(...flagUntrustedServer(s));
   }
   findings.push(...flagExfilPairs(allServers));
+  findings.push(...flagHooks(hooks));
   findings.push(...flagTranscriptLeak(logPath));
 
   const counts: Record<KratosSeverity, number> = { info: 0, medium: 0, high: 0, critical: 0 };

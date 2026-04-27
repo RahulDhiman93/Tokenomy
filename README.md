@@ -45,7 +45,7 @@ tokenomy doctor                     # all checks passing
 
 Codex CLI, Cursor, Windsurf, Cline, Gemini auto-detected and registered when each is on PATH. Force one target with `--agent <name>`; inspect first with `tokenomy init --list-agents`.
 
-> **Pre-`1.0`.** Every release is `-beta.N`; breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.1-beta.6`. Upgrade: `tokenomy update`.
+> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.2`. Upgrade: `tokenomy update`.
 
 ---
 
@@ -91,7 +91,7 @@ Step 2 — Then ask me about each optional feature, one at a time.
 
   d) Prompt-classifier nudge — fires once per turn when I prompt
      "any existing library for X" / "alternative to Y" / "instead of
-     building Z". Conservative since beta.6 (was overly broad before).
+     building Z". Conservative since 0.1.2 (was overly broad before).
      Default ON; ask if I want it off.
      Disable: tokenomy config set nudge.prompt_classifier.enabled false
 
@@ -140,8 +140,8 @@ Each feature has its own README. Main README stays small.
 | Agent nudges | OSS-alternatives Write nudge, prompt-classifier, repo-search relevance gate | [docs/features/agent-nudges.md](./docs/features/agent-nudges.md) |
 | Golem | Terse output mode — `lite` / `full` / `ultra` / `grunt` / `recon` / `auto`. Safety-gated for code, commands, warnings, numbers | [docs/features/golem.md](./docs/features/golem.md) |
 | Raven bridge | Claude-primary + Codex-reviewer handoff packets, deterministic finding compare, PR-readiness verdict | [docs/features/raven.md](./docs/features/raven.md) |
-| Kratos *(beta.6+)* | Security shield — prompt-injection / data-exfil / secret-in-prompt detector + cross-MCP exfil-pair scanner | [docs/features/kratos.md](./docs/features/kratos.md) |
-| Feedback *(beta.6+)* | `tokenomy feedback "..."` files a GitHub issue (via `gh` or browser fallback). No backend service. | [docs/features/feedback.md](./docs/features/feedback.md) |
+| Kratos *(0.1.2+)* | Security shield — prompt-injection / data-exfil / secret-in-prompt detector + cross-MCP exfil-pair scanner | [docs/features/kratos.md](./docs/features/kratos.md) |
+| Feedback *(0.1.2+)* | `tokenomy feedback "..."` files a GitHub issue (via `gh` or browser fallback). No backend service. | [docs/features/feedback.md](./docs/features/feedback.md) |
 | Observability | `savings.jsonl`, `report`, `analyze`, `diff`, `learn`, `budget`, `bench`, `status-line`, `doctor`, `update` | [docs/features/observability.md](./docs/features/observability.md) |
 | Compress | `tokenomy compress` — agent rule file cleanup (CLAUDE.md, AGENTS.md, .cursor/rules) | [docs/features/compress.md](./docs/features/compress.md) |
 | Cross-agent install | Per-agent adapters for Claude / Codex / Cursor / Windsurf / Cline / Gemini | [docs/features/cross-agent.md](./docs/features/cross-agent.md) |
@@ -213,7 +213,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool + Write context nudge.
 - [x] **Phase 5.** Polish — Golem output mode, statusline, prompt-classifier, `compress`, `bench`, cross-agent installers.
 - [x] **Phase 5.5.** Codex hook foothold — user-scoped `SessionStart` + `UserPromptSubmit` hooks for Golem and prompt-classifier nudges.
-- [x] **Phase 6 (beta.4–6).** Raven bridge, statusline update marker, Raven in report/analyze, Golem `recon` mode, audit-feedback fixes.
+- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command.
 - [ ] **Phase 7.** Language breadth — Python parser plugin, richer benchmark fixtures, npm publish at 1.0.
 - [ ] **Phase 8.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, team-ready reports. See [docs/NEXT_FEATURES.md](./docs/NEXT_FEATURES.md).
 

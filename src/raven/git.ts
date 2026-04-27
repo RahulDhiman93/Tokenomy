@@ -168,12 +168,16 @@ export const collectGitState = (cwd: string): RavenResult<RavenGitState> => {
 export const diffForFile = (cwd: string, file: string, baseRef?: string | null): string => {
   const unstaged = git(cwd, ["diff", "--", file]) ?? "";
   const staged = git(cwd, ["diff", "--cached", "--", file]) ?? "";
-  // For files that exist only as committed-on-branch (no working-tree diff),
-  // fall back to base...HEAD so reviewers get the actual change. Skipping
-  // when staged/unstaged already cover the file avoids double-rendering.
-  const branch =
-    baseRef && !staged && !unstaged
-      ? git(cwd, ["diff", `${baseRef}...HEAD`, "--", file]) ?? ""
-      : "";
-  return [staged, unstaged, branch].filter(Boolean).join("\n");
+  // Always include the base...HEAD hunks when a base ref is resolved AND
+  // the file actually has committed changes against it. Earlier behavior
+  // suppressed the base diff whenever a local edit existed, so files that
+  // had BOTH a committed change AND a working-tree edit only surfaced the
+  // last delta — reviewers missed the already-committed part. Cost of
+  // including both: occasional duplicate context for files where the
+  // committed hunk and the unstaged hunk overlap, which reviewers handle
+  // fine.
+  const branch = baseRef
+    ? git(cwd, ["diff", `${baseRef}...HEAD`, "--", file]) ?? ""
+    : "";
+  return [branch, staged, unstaged].filter(Boolean).join("\n");
 };

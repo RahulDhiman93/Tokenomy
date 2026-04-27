@@ -16,7 +16,7 @@ Fires once per user turn, **before** Claude plans. Classifies intent and points 
 
 | Intent | Trigger | Suggested tool |
 |---|---|---|
-| `build` | Library/package-search framing only — "any existing library for X", "alternative to Y", "off-the-shelf Z", "instead of building", "reinventing the wheel" *(beta.6+: was `build\|implement\|add\|create\|make\|write` — too broad, fired on every coding turn)* | `find_oss_alternatives` |
+| `build` | Library/package-search framing only — "any existing library for X", "alternative to Y", "off-the-shelf Z", "instead of building", "reinventing the wheel" *(0.1.2+: was `build\|implement\|add\|create\|make\|write` — too broad, fired on every coding turn)* | `find_oss_alternatives` |
 | `change` | `refactor\|rename\|migrate\|extract\|replace` | `find_usages` + `get_impact_radius` |
 | `remove` | `remove\|delete\|drop\|deprecate\|prune` | `get_impact_radius` |
 | `review` | `review\|audit\|blast radius\|what changed` | `get_review_context` |
@@ -25,7 +25,7 @@ Conservative gates: skips prompts under 20 chars, skips when the prompt already 
 
 Per-intent toggles via `nudge.prompt_classifier.intents.{build,change,remove,review}`. Disable entirely: `tokenomy config set nudge.prompt_classifier.enabled false`.
 
-## Repo-search relevance gate (beta.6+)
+## Repo-search relevance gate (0.1.2+)
 
 When the OSS-alt query has ≥ 3 distinct tokens, `find_oss_alternatives` requires at least 2 token hits per file before returning a repo match. Multi-word descriptions like "rate limiter backoff" no longer surface random `main.ts` matches that hit on a single common noun.
 

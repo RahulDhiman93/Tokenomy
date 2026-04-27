@@ -25,7 +25,7 @@ const initRepoOnFeatureBranch = (): { repo: string; cleanup: () => void } => {
   runGit(repo, ["add", "."]);
   runGit(repo, ["commit", "-m", "initial on main"]);
   // Feature branch with two committed-only files. Working tree clean → the
-  // pre-beta.6 collectGitState would return changed_files = [].
+  // pre-0.1.2 collectGitState would return changed_files = [].
   runGit(repo, ["checkout", "-b", "feature/x"]);
   writeFileSync(join(repo, "src", "feature-a.ts"), "export const featureA = 1;\n");
   writeFileSync(join(repo, "src", "feature-b.ts"), "export const featureB = 2;\n");
@@ -93,6 +93,29 @@ test("resolveBaseRef: returns null when on the trunk branch", () => {
     runGit(repo, ["checkout", "main"]);
     // No remote, no master, current = main → no candidate left.
     assert.equal(resolveBaseRef(repo, "main"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("collectGitState: file with both committed change and unstaged edit surfaces both deltas", async () => {
+  const { repo, cleanup } = initRepoOnFeatureBranch();
+  try {
+    // Add an unstaged edit on top of an already-committed feature file.
+    writeFileSync(join(repo, "src", "feature-a.ts"), "export const featureA = 99;\n");
+    const result = collectGitState(repo);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.data.dirty, true);
+    // The file appears in BOTH committed and unstaged sets — diff_summary
+    // must include hunks from both deltas (regression fix from Codex audit).
+    assert.ok(result.data.committed_files.includes("src/feature-a.ts"));
+    assert.ok(result.data.unstaged_files.includes("src/feature-a.ts"));
+    // Pull the diff via diffForFile to confirm both base...HEAD AND working-tree hunks land.
+    const { diffForFile } = await import("../../src/raven/git.js");
+    const diff = diffForFile(repo, "src/feature-a.ts", result.data.base_ref);
+    assert.ok(/featureA = 1/.test(diff), "expected committed hunk (featureA = 1) in diff");
+    assert.ok(/featureA = 99/.test(diff), "expected unstaged hunk (featureA = 99) in diff");
   } finally {
     cleanup();
   }

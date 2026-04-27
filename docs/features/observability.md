@@ -33,7 +33,7 @@ tokenomy report --out /tmp/report.html
 
 HTML adds a daily bar chart. Pricing: `tokenomy config set report.price_per_million 15`.
 
-Beta.5+: surfaces Raven bridge stats (packets, reviews, comparisons, decisions, repo count, last activity) alongside trims.
+Surfaces Raven bridge stats (packets, reviews, comparisons, decisions, repo count, last activity) alongside trims.
 
 ## `tokenomy analyze`
 
@@ -50,7 +50,7 @@ tokenomy analyze --verbose                # per-day breakdown
 tokenomy analyze --tune                   # writes ~/.tokenomy/golem-tune.json
 ```
 
-Output: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, ⚠ Wasted-probe incidents (same tool, ≥ 3 distinct-arg calls within 60 s), largest individual results, by-day sparkline, Raven block (beta.5+).
+Output: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, ⚠ Wasted-probe incidents (same tool, ≥ 3 distinct-arg calls within 60 s), largest individual results, by-day sparkline, Raven block.
 
 Tokenizers: `heuristic` (default, ±10 % on code/JSON), `tiktoken` (real `cl100k_base`), `auto` (tiktoken if present).
 
@@ -92,9 +92,9 @@ tokenomy bench compare <a.json> <b.json>   # per-scenario regressions
 
 ## `tokenomy status-line` (beta.2+)
 
-`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.1-beta.6 · GOLEM-GRUNT · 4.2k saved | graph fresh]`.
+`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.2 · GOLEM-GRUNT · 4.2k saved | graph fresh]`.
 
-After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.1-beta.6↑`). Cache at `~/.tokenomy/update-cache.json` is ignored past 14 days.
+After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.2↑`). Cache at `~/.tokenomy/update-cache.json` is ignored past 14 days.
 
 Must return in < 50 ms — uses a bounded read of the log and no external I/O. Fails open: missing config or parse error → empty string → Claude Code renders nothing.
 
@@ -116,8 +116,8 @@ Single-command self-update.
 ```bash
 tokenomy update              # install latest + re-stage hook
 tokenomy update --check      # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.1-beta.6 # npm-style pin
-tokenomy update --version=0.1.1-beta.6
+tokenomy update@0.1.2 # npm-style pin
+tokenomy update --version=0.1.2
 tokenomy update --tag=beta   # opt into a non-default dist-tag
 ```
 

@@ -44,7 +44,7 @@ const withFakeGraph = <T>(fn: (cwd: string) => T): T => {
 
 test("classifyPromptRule: build intent nudges toward find_oss_alternatives", () => {
   const cfg = DEFAULT_CONFIG;
-  // beta.6+: build intent now requires explicit library/package-search framing
+  // 0.1.2+: build intent now requires explicit library/package-search framing
   // — the earlier "build/implement/add" pattern fired on every coding turn.
   const r = classifyPromptRule(
     "Is there a library for retry-with-backoff we can use instead of building one?",
@@ -57,9 +57,9 @@ test("classifyPromptRule: build intent nudges toward find_oss_alternatives", () 
   assert.match(r.additionalContext ?? "", /tokenomy-nudge \(build\)/);
 });
 
-test("classifyPromptRule: build intent does NOT fire on plain coding requests (beta.6+)", () => {
+test("classifyPromptRule: build intent does NOT fire on plain coding requests (0.1.2+)", () => {
   const cfg = DEFAULT_CONFIG;
-  // Pre-beta.6 these would have fired the build nudge — false positives that
+  // Pre-0.1.2 these would have fired the build nudge — false positives that
   // sent OSS-alt searches on every implementation request.
   const noisyPrompts = [
     "Build a retry-with-backoff wrapper for our fetch calls.",

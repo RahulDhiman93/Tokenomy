@@ -21,15 +21,15 @@ tokenomy raven disable
 
 `tokenomy raven brief` writes a packet with:
 
-- **repo**: root, repo_id, branch, head_sha, base_ref *(beta.6+)*, dirty
-- **git**: staged_files, unstaged_files, untracked_files, committed_files *(beta.6+)*, changed_files (union), stats, diff_summary, dropped_files, diff_truncated
+- **repo**: root, repo_id, branch, head_sha, base_ref *(0.1.2+)*, dirty
+- **git**: staged_files, unstaged_files, untracked_files, committed_files *(0.1.2+)*, changed_files (union), stats, diff_summary, dropped_files, diff_truncated
 - **graph** (when enabled): review_context + impact_radius for changed files
 - **session** (when enabled): estimated_tokens + recent_tools
 - **risks**, **review_focus**, **open_questions**
 
 Diffs are ranked by hotspot score with per-file + total byte budgets enforced — hot-path files win.
 
-## base_ref + committed_files (beta.6+)
+## base_ref + committed_files (0.1.2+)
 
 Earlier behavior left `changed_files` empty when the working tree was clean — packets created on a feature branch with all changes already committed had nothing for reviewers to read. Raven now resolves a base ref:
 

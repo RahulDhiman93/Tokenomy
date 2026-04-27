@@ -1,4 +1,4 @@
-# Kratos — security shield (beta.6+)
+# Kratos — security shield (0.1.2+)
 
 Opt-in. Off by default. Two modes:
 

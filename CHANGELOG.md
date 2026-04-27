@@ -12,7 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [0.1.1-beta.6] — 2026-04-26
+## [0.1.2] — 2026-04-26
+
+> Renamed from `0.1.1-beta.6` at release time — `-beta.N` dist-tag retired; pre-`1.0` releases now use plain SemVer. Real version bump (0.1.1 → 0.1.2) since this release ships Kratos, Golem `recon` mode, the `tokenomy feedback` command, and Codex-flagged correctness fixes (Codex MCP TOML parsing, hook auditing, Raven base-diff completeness, kratos transcript scan now stream-reads tail).
 
 ### Added
 
@@ -83,6 +85,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   `repoSearch` now drops files that matched only one token. Multi-word
   descriptions like "rate limiter backoff" no longer surface random
   `main.ts` matches that hit on a single common noun.
+- **Kratos: parse Codex MCP servers from TOML.** `~/.codex/config.toml`
+  was being fed to `JSON.parse`, so Codex installs always returned an
+  empty server list and none of the `mcp-untrusted-server` /
+  `mcp-exfil-pair` checks fired. Added a minimal TOML extractor that
+  recovers `[mcp_servers.<name>]` tables (command, args, env, url).
+- **Kratos: hook auditing now runs.** Collected `KratosHook` entries
+  were being returned without evaluation, so the `hook-overbroad` and
+  `config-drift` categories were unreachable. The scan now flags
+  PreToolUse / PostToolUse hooks with `*` / `.*` / empty matchers
+  (overbroad blast radius) and any hook command that doesn't look
+  like a Tokenomy binary (foreign / drifted entries).
+- **Raven: include base-branch hunks even when local edits exist.**
+  `diffForFile` previously suppressed the `base...HEAD` diff whenever
+  the file also had unstaged or staged changes. Reviewers missed the
+  already-committed part of files that received follow-up fixups. The
+  base diff is now always included when `base_ref` is set.
+- **Kratos: tail-read `savings.jsonl` instead of slurping it.** The
+  transcript-leak scan documented a 1 MB cap, but the previous code
+  loaded the entire log into memory before slicing. Now uses
+  `openSync` + positional `readSync` to read only the last 1 MB.
 
 ## [0.1.1-beta.5] — 2026-04-23
 
@@ -855,8 +877,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.6...HEAD
-[0.1.1-beta.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.6
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.2
 [0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5
 [0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4
 [0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3
