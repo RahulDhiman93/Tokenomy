@@ -35,7 +35,10 @@ const writeStatus = (): number => {
 const runScan = (argv: string[]): number => {
   const cfg = loadConfig(process.cwd());
   const json = argv.includes("--json");
-  const report = runKratosScan(cfg.log_path);
+  // Pass the configured category toggles so users who silenced a noisy
+  // category (e.g. `tokenomy config set kratos.categories.transcript-leak false`)
+  // also stop seeing it in scan output AND stop failing CI on it.
+  const report = runKratosScan(cfg.log_path, { categories: cfg.kratos.categories });
   if (json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {

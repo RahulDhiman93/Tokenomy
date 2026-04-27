@@ -557,7 +557,17 @@ const flagTranscriptLeak = (logPath: string): KratosFinding[] => {
   return [];
 };
 
-export const runKratosScan = (logPath: string): KratosScanReport => {
+export interface RunKratosScanOptions {
+  // Per-category gate. When provided, findings whose `category` is mapped
+  // to `false` are filtered out of the report (and out of the exit-code
+  // computation in `tokenomy kratos scan`). Mirrors `cfg.kratos.categories`.
+  categories?: Partial<Record<KratosFinding["category"], boolean>>;
+}
+
+export const runKratosScan = (
+  logPath: string,
+  options: RunKratosScanOptions = {},
+): KratosScanReport => {
   const allServers: KratosMcpServer[] = [];
   const findings: KratosFinding[] = [];
   const hooks: KratosHook[] = [];
@@ -578,16 +588,25 @@ export const runKratosScan = (logPath: string): KratosScanReport => {
   findings.push(...flagHooks(hooks));
   findings.push(...flagTranscriptLeak(logPath));
 
+  // Apply category gate. A `false` toggle for a category drops every
+  // finding in that category — both from the rendered output and from the
+  // exit-code rollup, so users can suppress noise in CI without losing
+  // visibility into the rest of the audit.
+  const gate = options.categories;
+  const filtered = gate
+    ? findings.filter((f) => gate[f.category] !== false)
+    : findings;
+
   const counts: Record<KratosSeverity, number> = { info: 0, medium: 0, high: 0, critical: 0 };
   let worst: KratosSeverity = "info";
-  for (const f of findings) {
+  for (const f of filtered) {
     counts[f.severity] += 1;
     worst = max(worst, f.severity);
   }
   return {
     schema_version: 1,
     scanned_at: new Date().toISOString(),
-    findings,
+    findings: filtered,
     mcp_servers: allServers,
     hooks,
     worst,
