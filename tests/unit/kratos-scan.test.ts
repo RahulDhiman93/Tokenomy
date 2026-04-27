@@ -196,6 +196,79 @@ test("kratos-scan: formatKratosScan produces a non-empty summary string", () => 
   });
 });
 
+test("kratos-scan: codex hooks.json surfaces hook findings", () => {
+  withTmpHome((home) => {
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(
+      join(home, ".codex", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [
+            {
+              matcher: "*",
+              hooks: [{ type: "command", command: "/usr/local/bin/some-foreign-hook" }],
+            },
+          ],
+        },
+      }),
+    );
+    const r = runKratosScan(join(home, ".tokenomy", "savings.jsonl"));
+    assert.equal(r.hooks.length, 1);
+    assert.equal(r.hooks[0]?.agent, "codex");
+    // UserPromptSubmit isn't PreToolUse/PostToolUse, so hook-overbroad doesn't
+    // fire — but config-drift should, since the command isn't a Tokenomy binary.
+    assert.ok(
+      r.findings.some((f) => f.category === "config-drift"),
+      `expected config-drift for foreign codex hook: ${JSON.stringify(r.findings)}`,
+    );
+  });
+});
+
+test("kratos-scan: localhost-spoof hostnames don't slip past mcp-untrusted-server", () => {
+  withTmpHome((home) => {
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(
+      join(home, ".cursor", "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          // Substring "localhost" appears in the hostname, but the host is remote.
+          spoofedHost: { url: "https://localhost.attacker.com/sse" },
+          // Substring "127.0.0.1" appears in the query string, but the host is remote.
+          spoofedQuery: { url: "https://evil.example.com/?next=127.0.0.1" },
+        },
+      }),
+    );
+    const r = runKratosScan(join(home, ".tokenomy", "savings.jsonl"));
+    const remoteFindings = r.findings.filter(
+      (f) => f.category === "mcp-untrusted-server" && /Remote MCP server/.test(f.title),
+    );
+    // Both URLs should be flagged — the parsed hostname is the only thing that
+    // matters, query strings and crafted subdomains don't get a free pass.
+    assert.equal(remoteFindings.length, 2, JSON.stringify(remoteFindings));
+  });
+});
+
+test("kratos-scan: real localhost / 127.0.0.1 / private-network URLs are exempted", () => {
+  withTmpHome((home) => {
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(
+      join(home, ".cursor", "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          local: { url: "http://localhost:9000/sse" },
+          loopback: { url: "http://127.0.0.1:8080/sse" },
+          rfc1918: { url: "http://10.0.0.5:7000/sse" },
+        },
+      }),
+    );
+    const r = runKratosScan(join(home, ".tokenomy", "savings.jsonl"));
+    const remoteFindings = r.findings.filter(
+      (f) => f.category === "mcp-untrusted-server" && /Remote MCP server/.test(f.title),
+    );
+    assert.equal(remoteFindings.length, 0, JSON.stringify(remoteFindings));
+  });
+});
+
 test("kratos-scan: counts shape includes all severity buckets", () => {
   withTmpHome(() => {
     const r = runKratosScan("/no/such/log.jsonl");

@@ -125,9 +125,20 @@ const buildPrefilledUrl = (title: string, body: string): string => {
 };
 
 const openInBrowser = (url: string): boolean => {
-  const cmd = platform() === "darwin" ? "open" : platform() === "win32" ? "start" : "xdg-open";
-  const args = platform() === "win32" ? ["", url] : [url];
-  const r = spawnSync(cmd, args, { stdio: "ignore", timeout: 5_000 });
+  // On Windows, `start` is a cmd.exe builtin, NOT a standalone .exe — so a
+  // direct `spawnSync("start", ...)` returns ENOENT and the browser never
+  // opens. Route through `cmd /c start "" <url>`. The empty quoted "" is
+  // start's window-title arg, required when the URL contains spaces or &.
+  if (platform() === "win32") {
+    const r = spawnSync("cmd", ["/c", "start", "", url], {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsVerbatimArguments: false,
+    });
+    return r.status === 0;
+  }
+  const cmd = platform() === "darwin" ? "open" : "xdg-open";
+  const r = spawnSync(cmd, [url], { stdio: "ignore", timeout: 5_000 });
   return r.status === 0;
 };
 

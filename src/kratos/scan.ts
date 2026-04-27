@@ -64,7 +64,15 @@ const VETTED_LOCAL_COMMANDS = new Set([
 interface AgentConfigPath {
   agent: string;
   path: string;
-  shape: "claude-code" | "claude-json" | "codex-toml" | "cursor" | "windsurf" | "cline" | "gemini";
+  shape:
+    | "claude-code"
+    | "claude-json"
+    | "codex-toml"
+    | "codex-hooks"
+    | "cursor"
+    | "windsurf"
+    | "cline"
+    | "gemini";
 }
 
 const candidatePaths = (): AgentConfigPath[] => {
@@ -73,6 +81,9 @@ const candidatePaths = (): AgentConfigPath[] => {
     { agent: "claude-code", path: join(home, ".claude", "settings.json"), shape: "claude-code" },
     { agent: "claude-code", path: join(home, ".claude.json"), shape: "claude-json" },
     { agent: "codex", path: join(home, ".codex", "config.toml"), shape: "codex-toml" },
+    // Codex stores hooks separately from MCP servers — must scan this path
+    // for the hook-overbroad / config-drift audit to fire on Codex setups.
+    { agent: "codex", path: join(home, ".codex", "hooks.json"), shape: "codex-hooks" },
     { agent: "cursor", path: join(home, ".cursor", "mcp.json"), shape: "cursor" },
     { agent: "windsurf", path: join(home, ".codeium", "windsurf", "mcp_config.json"), shape: "windsurf" },
     { agent: "cline", path: join(home, ".cline", "mcp_settings.json"), shape: "cline" },
@@ -329,6 +340,28 @@ const classifyServer = (server: KratosMcpServer): KratosMcpServer => {
   return { ...server, readSource, writeSink, reasons };
 };
 
+const extractCodexHooks = (path: string): KratosHook[] => {
+  const json = readJson(path);
+  if (!json) return [];
+  const hooks = asObj(asObj(json)["hooks"]);
+  const out: KratosHook[] = [];
+  for (const [event, raw] of Object.entries(hooks)) {
+    const arr = asArr(raw);
+    for (const entry of arr) {
+      const e = asObj(entry);
+      const matcher = asStr(e["matcher"]) ?? "*";
+      const inner = asArr(e["hooks"]);
+      for (const h of inner) {
+        const hh = asObj(h);
+        const command = asStr(hh["command"]);
+        if (!command) continue;
+        out.push({ source: path, agent: "codex", event, matcher, command });
+      }
+    }
+  }
+  return out;
+};
+
 const extractClaudeHooks = (path: string): KratosHook[] => {
   const json = readJson(path);
   if (!json) return [];
@@ -351,10 +384,30 @@ const extractClaudeHooks = (path: string): KratosHook[] => {
   return out;
 };
 
+// Strict localhost check via URL parsing. The earlier substring regex was
+// trivially bypassed: `https://localhost.attacker.com/sse` and
+// `https://evil.example/?next=127.0.0.1` would match `localhost` /
+// `127.0.0.1` even though the actual host is remote. Parsing pulls out
+// only the hostname so query strings, paths, and crafted subdomains
+// can't sneak past the audit.
+const isLocalUrl = (raw: string): boolean => {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
+    // RFC1918 + link-local ranges. Cheap regex over the hostname only —
+    // we already know it's not a remote name at this point.
+    return /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host);
+  } catch {
+    // Unparseable URL → treat as remote (better to over-flag than miss).
+    return false;
+  }
+};
+
 const flagUntrustedServer = (server: KratosMcpServer): KratosFinding[] => {
   const out: KratosFinding[] = [];
   // HTTP-transport MCPs are trust-on-first-use against a remote endpoint.
-  if (server.url && /^https?:\/\//i.test(server.url) && !/localhost|127\.0\.0\.1/.test(server.url)) {
+  if (server.url && /^https?:\/\//i.test(server.url) && !isLocalUrl(server.url)) {
     out.push({
       category: "mcp-untrusted-server",
       severity: "high",
@@ -575,6 +628,10 @@ export const runKratosScan = (
     if (!existsSync(cfg.path)) continue;
     if (cfg.shape === "claude-code") {
       hooks.push(...extractClaudeHooks(cfg.path));
+      continue;
+    }
+    if (cfg.shape === "codex-hooks") {
+      hooks.push(...extractCodexHooks(cfg.path));
       continue;
     }
     const servers =
