@@ -42,6 +42,10 @@ export interface RavenPacket {
     staged_files: string[];
     unstaged_files: string[];
     untracked_files: string[];
+    // Committed-but-unmerged files relative to repo.base_ref. Empty when no
+    // base resolves (orphan branches, missing remotes). Surfacing this lets
+    // reviewers see a branch's footprint even when the working tree is clean.
+    committed_files?: string[];
     changed_files: string[];
     stats: RavenFileStat[];
     diff_summary: RavenDiffEntry[];

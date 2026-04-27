@@ -19,6 +19,10 @@ export const analyzeCachePath = (): string => join(tokenomyDir(), "analyze-cache
 // Written by `tokenomy update --check`; read by the statusline to render
 // a `↑` marker after the version when a newer build exists on npm.
 export const updateCachePath = (): string => join(tokenomyDir(), "update-cache.json");
+// Local copy of every `tokenomy feedback` submission. Append-only JSONL.
+// Survives even when the user is offline / `gh` is missing / browser
+// fallback is canceled — gives them a way to resubmit later.
+export const feedbackLogPath = (): string => join(tokenomyDir(), "feedback.jsonl");
 // Per-session running totals for the budget rule. Cleared on SessionStart
 // of a new session. Session-state files are append-only JSONL ledgers keyed
 // by a sanitized hash of the session_id (to prevent path traversal when a

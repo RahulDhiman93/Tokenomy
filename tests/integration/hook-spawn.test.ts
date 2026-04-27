@@ -237,7 +237,7 @@ test("hook: UserPromptSubmit build-intent prompt → nudge with find_oss_alterna
         transcript_path: "/tmp/t",
         cwd: "/tmp",
         hook_event_name: "UserPromptSubmit",
-        prompt: "Build a retry-with-backoff wrapper for our fetch calls.",
+        prompt: "Is there a library for retry-with-backoff we can use instead of building one?",
       },
       env,
     );
@@ -392,7 +392,7 @@ test("hook: UserPromptSubmit with Golem + classifier intent → stacks both cont
         transcript_path: "/tmp/t",
         cwd: "/tmp",
         hook_event_name: "UserPromptSubmit",
-        prompt: "Build a retry-with-backoff wrapper for our fetch calls.",
+        prompt: "Is there a library for retry-with-backoff we can use instead of building one?",
       },
       env,
     );

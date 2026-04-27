@@ -12,6 +12,100 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-04-26
+
+> Renamed from `0.1.1-beta.6` at release time — `-beta.N` dist-tag retired; pre-`1.0` releases now use plain SemVer. Real version bump (0.1.1 → 0.1.2) since this release ships Kratos, Golem `recon` mode, the `tokenomy feedback` command, and Codex-flagged correctness fixes (Codex MCP TOML parsing, hook auditing, Raven base-diff completeness, kratos transcript scan now stream-reads tail).
+
+### Added
+
+- **`tokenomy feedback "..."` command.** Backend-less feedback channel.
+  Files a labeled GitHub issue at `RahulDhiman93/Tokenomy/issues` via
+  `gh` CLI when available; falls back to opening a prefilled
+  `issues/new?title=…&body=…&labels=feedback` URL in the user's default
+  browser; falls back further to printing the URL when no display.
+  Every submission also appends to `~/.tokenomy/feedback.jsonl` so
+  the user has a local copy regardless. No third-party service, no
+  telemetry beyond a small env block (`tokenomy` version, node,
+  platform, detected agents). `--print-only` skips both `gh` and the
+  browser-open. Docs: `docs/features/feedback.md`.
+- **Kratos — security shield.** Opt-in, off by default. Continuous
+  prompt-time scan (UserPromptSubmit) detects prompt-injection ("ignore
+  previous instructions", "you are now …", "new system prompt:"),
+  data-exfil requests ("send the contents/secrets/env to …", curl-POST
+  to non-local), credentials pasted directly in prompts (AWS / GitHub /
+  OpenAI / Anthropic / Slack / Stripe / Google keys, JWTs, Bearer
+  tokens, PEM blocks), zero-width / RTL-override hidden instructions,
+  and long base64 blocks. Plus on-demand `tokenomy kratos scan` static
+  audit of every installed agent's MCP servers (Claude / Codex / Cursor
+  / Windsurf / Cline / Gemini): classifies each as read-source or
+  write-sink and flags pairs that form an exfil route, dual-surface
+  servers (Slack, Gmail, Atlassian) as self-contained leak channels,
+  remote-URL servers as untrusted, and credentials in
+  `~/.tokenomy/savings.jsonl` as redact-pre bypasses. Never blocks —
+  surfaces a `[tokenomy-kratos]` warning via `additionalContext`.
+  Categories individually toggleable; severity threshold configurable
+  (default `high`). Commands: `tokenomy kratos enable|disable|status`,
+  `tokenomy kratos scan [--json]`, `tokenomy kratos check <prompt>`.
+  Docs: `docs/features/kratos.md`.
+- **Golem `recon` mode.** Beyond `grunt` — agent-in-the-field tone, zero
+  banter, info density only. Strips fillers ("well", "now", "so"),
+  transitional acknowledgments ("Got it"), self-narration ("I think"),
+  the dry-humor allowance grunt keeps ("aye", "bah"), and conversational
+  hooks ("Just to confirm", "By the way"). Status reports collapse to
+  `<verb> <object> <result>`; data with shape prefers key:value or fixed-
+  width tables; one-token answers when accurate. Same safety gates as the
+  other modes — numbers, code, commands, warnings, paths, errors stay
+  verbatim. Enable: `tokenomy golem enable --mode=recon`.
+- **README restructure.** Main README dropped from 662 to ~240 lines;
+  per-feature deep dives moved to `docs/features/*.md` (live-trimming,
+  code-graph, agent-nudges, golem, raven, observability, compress,
+  cross-agent, configure). Zero-touch install rewritten as an interactive
+  walk-through — Claude installs the core (`init --graph-path`) first,
+  then asks the user yes/no on each opt-in feature one at a time.
+
+### Fixed
+
+- **Raven packets now capture committed-only branches.** `collectGitState`
+  resolves a base ref (env `RAVEN_BASE_REF`, then `origin/HEAD`,
+  `origin/main`, `origin/master`, `main`, `master`) and adds
+  committed-but-unmerged files to `git.changed_files` and
+  `git.diff_summary`. Earlier behavior left these empty when the working
+  tree was clean — packets created on a feature branch with all changes
+  already committed had nothing for reviewers to read. The packet now
+  surfaces `repo.base_ref` and `git.committed_files`.
+- **OSS-alt nudge no longer fires on every coding turn.** The
+  `prompt_classifier` "build" intent previously matched
+  `build|implement|add|create|make|write` against any prompt, so the
+  `find_oss_alternatives` nudge surfaced on most messages. The pattern now
+  requires explicit library/package-search framing — "any existing
+  library for X", "alternative to Y", "off-the-shelf Z", "instead of
+  building", "reinventing the wheel", etc. Project-specific glue work
+  no longer triggers it.
+- **Repo-search relevance gate.** When a query has ≥3 distinct tokens,
+  `repoSearch` now drops files that matched only one token. Multi-word
+  descriptions like "rate limiter backoff" no longer surface random
+  `main.ts` matches that hit on a single common noun.
+- **Kratos: parse Codex MCP servers from TOML.** `~/.codex/config.toml`
+  was being fed to `JSON.parse`, so Codex installs always returned an
+  empty server list and none of the `mcp-untrusted-server` /
+  `mcp-exfil-pair` checks fired. Added a minimal TOML extractor that
+  recovers `[mcp_servers.<name>]` tables (command, args, env, url).
+- **Kratos: hook auditing now runs.** Collected `KratosHook` entries
+  were being returned without evaluation, so the `hook-overbroad` and
+  `config-drift` categories were unreachable. The scan now flags
+  PreToolUse / PostToolUse hooks with `*` / `.*` / empty matchers
+  (overbroad blast radius) and any hook command that doesn't look
+  like a Tokenomy binary (foreign / drifted entries).
+- **Raven: include base-branch hunks even when local edits exist.**
+  `diffForFile` previously suppressed the `base...HEAD` diff whenever
+  the file also had unstaged or staged changes. Reviewers missed the
+  already-committed part of files that received follow-up fixups. The
+  base diff is now always included when `base_ref` is set.
+- **Kratos: tail-read `savings.jsonl` instead of slurping it.** The
+  transcript-leak scan documented a 1 MB cap, but the previous code
+  loaded the entire log into memory before slicing. Now uses
+  `openSync` + positional `readSync` to read only the last 1 MB.
+
 ## [0.1.1-beta.5] — 2026-04-23
 
 ### Added
@@ -783,7 +877,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.1-beta.5...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.2
 [0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5
 [0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4
 [0.1.1-beta.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.3

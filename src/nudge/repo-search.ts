@@ -96,7 +96,7 @@ const rankFilesByTokenHits = (
   tokens: string[],
   opts: RepoSearchOptions,
   branch?: string,
-): string[] => {
+): { file: string; score: number }[] => {
   const scores = new Map<string, number>();
   const branchPrefix = branch ? `${branch}:` : null;
   for (const token of tokens) {
@@ -120,9 +120,18 @@ const rankFilesByTokenHits = (
       scores.set(file, (scores.get(file) ?? 0) + 1);
     }
   }
+  // Relevance gate: when the query has ≥3 distinct tokens, drop files that
+  // matched only a single token. Most multi-word descriptions ("rate limiter
+  // backoff", "OAuth provider config") have 1-2 common words ("config",
+  // "provider") that hit unrelated entrypoints (main.ts, app.ts). Without
+  // this gate the OSS-alt nudge surfaces those as "matching code already
+  // exists" and the agent reports them upstream as repo matches even when
+  // the file is plainly unrelated.
+  const minScore = tokens.length >= 3 ? 2 : 1;
   return [...scores.entries()]
+    .filter(([, score]) => score >= minScore)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([file]) => file)
+    .map(([file, score]) => ({ file, score }))
     .slice(0, MAX_FILES_STAGE_TWO);
 };
 
@@ -135,8 +144,9 @@ const currentBranchMatches = (
   // against the working tree, and keeps tooling consistent with the
   // other-branch path below. Avoids a ripgrep dependency + ENOENT on
   // machines where `rg` is a shell alias rather than a real binary.
-  const files = rankFilesByTokenHits(cwd, tokens, opts);
-  if (files.length === 0) return [];
+  const ranked = rankFilesByTokenHits(cwd, tokens, opts);
+  if (ranked.length === 0) return [];
+  const files = ranked.map((entry) => entry.file);
   const pattern = tokens.map(escapeRegex).join("|");
   const r = spawnSync(
     "git",
@@ -150,10 +160,6 @@ const currentBranchMatches = (
     },
   );
   if (r.status !== 0 || !r.stdout) return [];
-  // `git grep` emits output in its own (alphabetical / tree) order regardless
-  // of the pathspec argument order, so we re-sort the parsed matches against
-  // the ranked file list. `Array.prototype.sort` is stable, so within-file
-  // line order is preserved.
   const rank = new Map(files.map((f, i) => [f, i]));
   return r.stdout
     .split("\n")
@@ -206,8 +212,9 @@ const otherBranchMatches = (
   const pattern = tokens.map(escapeRegex).join("|");
   for (const branch of branchNames(cwd, opts.timeoutMs)) {
     if (out.length + already >= opts.maxResults) break;
-    const files = rankFilesByTokenHits(cwd, tokens, opts, branch);
-    if (files.length === 0) continue;
+    const ranked = rankFilesByTokenHits(cwd, tokens, opts, branch);
+    if (ranked.length === 0) continue;
+    const files = ranked.map((entry) => entry.file);
     const r = spawnSync(
       "git",
       ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, branch, "--", ...files],
@@ -220,7 +227,6 @@ const otherBranchMatches = (
       },
     );
     if (r.status !== 0 || !r.stdout) continue;
-    // `git grep` doesn't honor pathspec argument order; re-sort by ranking.
     const rank = new Map(files.map((f, i) => [f, i]));
     const branchMatches: RepoAlternative[] = [];
     for (const line of r.stdout.split("\n")) {

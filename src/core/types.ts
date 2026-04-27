@@ -322,12 +322,16 @@ export interface GolemConfig {
   //            where possible
   // - "grunt": + drop articles / subject pronouns where meaning survives,
   //            fragments over sentences, occasional playful terseness
-  //            ("ship it.", "nope.", "aye."). Tightest mode — caveman-
-  //            adjacent energy, still safety-gated.
+  //            ("ship it.", "nope.", "aye."). Caveman-adjacent energy,
+  //            still safety-gated.
+  // - "recon": + strip fillers/hedges/transitions/conversational hooks,
+  //            single-token answers ("ok", "no", "blocked"), key:value or
+  //            tabular over prose, imperatives only. Beyond grunt — agent-
+  //            in-the-field tone, zero banter, info density only.
   // "auto" resolves at SessionStart from ~/.tokenomy/golem-tune.json
   // (written by `tokenomy analyze --tune`). Falls back to "full" if the
   // tune file doesn't exist yet.
-  mode: "lite" | "full" | "ultra" | "grunt" | "auto";
+  mode: "lite" | "full" | "ultra" | "grunt" | "recon" | "auto";
   // Always-preserved content carve-outs. Fenced code / shell / security /
   // destructive-action / error-message text is never subject to the style
   // rules. Off this only if you understand the risk.
@@ -378,6 +382,29 @@ export interface Config {
   golem: GolemConfig;
   // Raven: Claude Code-first cross-agent handoff/review packets.
   raven: RavenConfig;
+  // Kratos: security shield. Off by default. Continuous prompt scan
+  // (UserPromptSubmit) plus on-demand `tokenomy kratos scan` static audit.
+  kratos: KratosConfig;
+}
+
+export interface KratosConfig {
+  enabled: boolean;
+  // When true, every UserPromptSubmit prompt is checked for injection /
+  // exfil / secret patterns. When false, kratos is purely CLI-driven.
+  continuous: boolean;
+  categories: {
+    "prompt-injection": boolean;
+    "data-exfil": boolean;
+    "secret-in-prompt": boolean;
+    "encoded-payload": boolean;
+    "mcp-exfil-pair": boolean;
+    "mcp-untrusted-server": boolean;
+    "hook-overbroad": boolean;
+    "config-drift": boolean;
+    "transcript-leak": boolean;
+  };
+  prompt_min_severity: "info" | "medium" | "high" | "critical";
+  notice_max_bytes: number;
 }
 
 export interface DedupConfig {
