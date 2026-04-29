@@ -151,20 +151,50 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
   if (!git.ok) return git;
   const cfg = loadConfig(git.data.root);
   if (!cfg.raven.enabled) return { ok: false, reason: "raven-disabled", hint: "Run `tokenomy raven enable` first." };
-  // 0.1.5+: refuse to brief while merge conflicts are unresolved. The diff
-  // would otherwise contain `<<<<<<<`/`=======`/`>>>>>>>` markers that
-  // confuse reviewers and pollute the markdown render. Detected by
-  // scanning the diffForFile output of every changed file for the marker
-  // shape — bounded since changed_files is already bounded by selectDiffs.
-  const conflicted = git.data.changed_files.filter((f) => {
+  // 0.1.5+: refuse to brief while merge conflicts are unresolved. Detected
+  // two ways:
+  //   1. Authoritative source — `git ls-files -u` lists files with stage
+  //      entries > 0 (= unmerged). This is the cheap, correct check that
+  //      doesn't depend on diff line shape.
+  //   2. Defensive fallback — scan the diffForFile output for marker lines.
+  //      Diff lines are prefixed with `+`/`-`/space, so the regex must
+  //      tolerate that prefix or look at the marker shape after stripping
+  //      the prefix. Codex audit caught the original regex missing
+  //      `+<<<<<<<` lines.
+  const unmergedRaw = (() => {
+    try {
+      const r = require("node:child_process").spawnSync(
+        "git",
+        ["ls-files", "-u", "--full-name"],
+        { cwd: git.data.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      );
+      return r.status === 0 ? (r.stdout as string) : "";
+    } catch {
+      return "";
+    }
+  })();
+  const lsFilesUnmerged = new Set<string>();
+  for (const line of unmergedRaw.split("\n")) {
+    // Format: "<mode> <sha> <stage>\t<path>"
+    const tab = line.indexOf("\t");
+    if (tab > 0) lsFilesUnmerged.add(line.slice(tab + 1));
+  }
+  // Marker regex: tolerate the leading `+`/`-`/space prefix that diff
+  // hunks add, and the `++`/`+ ` prefix that `git diff --cc` uses for
+  // combined diffs.
+  const CONFLICT_MARKER = /^[+\- ]{0,2}<<<<<<< |^[+\- ]{0,2}=======\s*$|^[+\- ]{0,2}>>>>>>> /m;
+  const conflicted = new Set<string>(lsFilesUnmerged);
+  for (const f of git.data.changed_files) {
+    if (conflicted.has(f)) continue;
     const d = diffForFile(git.data.root, f, git.data.base_ref);
-    return /^<<<<<<< |^=======$|^>>>>>>> /m.test(d);
-  });
-  if (conflicted.length > 0) {
+    if (CONFLICT_MARKER.test(d)) conflicted.add(f);
+  }
+  if (conflicted.size > 0) {
+    const list = [...conflicted];
     return {
       ok: false,
       reason: "merge-conflicts",
-      hint: `Resolve merge conflicts in ${conflicted.slice(0, 5).join(", ")}${conflicted.length > 5 ? `, +${conflicted.length - 5} more` : ""} before running \`tokenomy raven brief\`.`,
+      hint: `Resolve merge conflicts in ${list.slice(0, 5).join(", ")}${list.length > 5 ? `, +${list.length - 5} more` : ""} before running \`tokenomy raven brief\`.`,
     };
   }
   const graph = graphContext(git.data.root, cfg, git.data.changed_files);

@@ -228,14 +228,22 @@ const sectionFeedback = (): SectionResult => {
 };
 
 export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
-  const doctorChecks = await runDoctor();
-  const failures = doctorChecks.filter((c) => !c.ok);
-  const doctor: SectionResult = {
-    ok: failures.length === 0,
-    total: doctorChecks.length,
-    failed: failures.length,
-    failed_names: failures.map((f) => f.name),
-  };
+  // 0.1.5+: never let runDoctor's failure abort the whole report. If it
+  // throws, surface a `doctor: { ok: false, reason }` block and force
+  // `worst: "error"`. Codex audit catch.
+  let doctor: SectionResult;
+  try {
+    const doctorChecks = await runDoctor();
+    const failures = doctorChecks.filter((c) => !c.ok);
+    doctor = {
+      ok: failures.length === 0,
+      total: doctorChecks.length,
+      failed: failures.length,
+      failed_names: failures.map((f) => f.name),
+    };
+  } catch (e) {
+    doctor = { ok: false, reason: (e as Error).message };
+  }
   const sections = {
     graph: sectionGraph(),
     raven: sectionRaven(),

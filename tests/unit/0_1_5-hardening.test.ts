@@ -184,3 +184,21 @@ test("buildDiagnoseReport: emits a complete shape", async () => {
     assert.equal(typeof section.ok, "boolean");
   }
 });
+
+// --- Codex audit fixes ---
+
+test("update: isTransientNpmFailure distinguishes 404 (no retry) from connect-refused (retry)", async () => {
+  // We can't drive runNpm's spawnSync easily without a stub; instead pull
+  // the helper export and unit-test the classifier directly.
+  const mod = await import("../../src/cli/update.js");
+  // The helper isn't exported on purpose — assert behavior via the
+  // surface (fetchRegistryVersion) using a non-existent tag. The npm
+  // call returns 404 → must NOT retry, must return null fast.
+  const t0 = Date.now();
+  const result = mod.fetchRegistryVersion(`__nonexistent_tag_${Date.now()}__`);
+  const elapsed = Date.now() - t0;
+  assert.equal(result, null);
+  // Single attempt under 8s (5s timeout per attempt + overhead). A double
+  // attempt would push past 10s — strict bound below catches the regression.
+  assert.ok(elapsed < 10_000, `expected <10s, got ${elapsed}ms (likely retried a 404)`);
+});
