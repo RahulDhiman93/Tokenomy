@@ -76,3 +76,13 @@ Capped at `kratos.notice_max_bytes` (default 1200) — long notices are truncate
 ## Logging
 
 Every flag appends a row to `~/.tokenomy/savings.jsonl` with `tool: "UserPromptSubmit"` and `reason: "kratos:<category-list>:<count>"` so `tokenomy report` / `tokenomy analyze` can surface kratos activity alongside trims. Token-savings value is 0 — kratos is about leak prevention, not compression.
+
+## Statusline badge (0.1.4+)
+
+When `kratos.enabled && kratos.continuous` are both true, the statusline appends ` · Kratos` so users see at a glance that the prompt-time shield is active:
+
+```
+[Tokenomy v0.1.4 · GOLEM-RECON · 1.9k saved · Raven · Kratos]
+```
+
+CLI-only audit mode (`enabled: true, continuous: false`) doesn't render the badge — that mode is on-demand `tokenomy kratos scan` only, with no per-turn rule firing.
