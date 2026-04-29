@@ -36,9 +36,13 @@ const INJECTION_PATTERNS: RegExp[] = [
   // 0.1.5+: function-calling impersonation. Common payload shape an
   // attacker uses to coax the assistant into emitting a fake `tool_use`
   // block in its reply, hoping the host re-feeds it as if it were a
-  // legitimate tool call. Conservative: anchored on the literal JSON
-  // keys an MCP-style block would carry.
-  /\{\s*"?(?:type|tool_use|name)"?\s*:\s*"(?:tool_use|function_call|tool_call)"/i,
+  // legitimate tool call. Round-4 codex catch: detector must be
+  // order-independent — `{"name":"shell","type":"tool_use"}` and
+  // nested `{"function_call":{...}}` are equally suspicious as the
+  // canonical `{"type":"tool_use",...}` form.
+  /"type"\s*:\s*"(?:tool_use|function_call|tool_call)"/i,
+  /"(?:tool_use|function_call|tool_call)"\s*:\s*\{/i,
+  /"(?:type|name|tool|function)"\s*:\s*"(?:bash|shell|exec|run|eval|exec_command)"/i,
   // 0.1.5+: chat-template prefix injection. Some attackers paste
   // multi-turn boilerplate intended to convince the model the user has
   // ended their turn. Catch the canonical OpenAI/Anthropic markers when

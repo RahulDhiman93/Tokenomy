@@ -33,12 +33,15 @@ export const readBoundRule = (
   const offsetOk =
     explicitOffset !== undefined && Number.isFinite(explicitOffset) && explicitOffset >= 0;
 
-  // 0.1.5 round-3 codex catch: when EITHER bound is invalid, DON'T
-  // passthrough on the surviving bound. The host treats passthrough as
-  // "use the original tool_input untouched" — meaning the bad value
-  // would still reach the underlying Read. Force the call into the
-  // clamp path so updatedInput (with the bad value stripped) is what
-  // actually flows downstream.
+  // 0.1.5 round-3 codex catch: when EITHER bound is invalid, force the
+  // clamp path so updatedInput (with the bad value stripped) flows
+  // downstream — passthrough returns no updatedInput, so the host
+  // would otherwise reuse the bad original.
+  //
+  // 0.1.5 round-4 codex catch: when ONLY the offset is invalid and the
+  // limit is valid, DON'T overwrite the valid limit with the injected
+  // default. `{limit:1, offset:-5}` was returning `{limit:500}` — five
+  // hundred times more lines than the user asked for.
   const dropKeys = new Set<string>();
   if (explicitLimit !== undefined && !limitOk) dropKeys.add("limit");
   if (explicitOffset !== undefined && !offsetOk) dropKeys.add("offset");
@@ -51,6 +54,12 @@ export const readBoundRule = (
   // is the all-clean path (no invalid args). Otherwise fall through.
   if (limitOk && dropKeys.size === 0) return { kind: "passthrough", reason: "explicit-limit" };
   if (offsetOk && dropKeys.size === 0) return { kind: "passthrough", reason: "explicit-offset" };
+  // Preserve any surviving valid bound through the clamp path. We carry
+  // a hint that `clampInjects` should NOT overwrite a valid `limit` the
+  // user already supplied. Stash it on toolInput so the clamp branch
+  // below picks it up.
+  const surviveValidLimit = limitOk && !dropKeys.has("limit");
+  const surviveValidOffset = offsetOk && !dropKeys.has("offset");
 
   const filePath = toolInput["file_path"];
   if (typeof filePath !== "string" || filePath.length === 0) {
@@ -82,7 +91,13 @@ export const readBoundRule = (
     return { kind: "passthrough", reason: "below-threshold", fileBytes };
   }
 
-  const limit = cfg.read.injected_limit;
+  // 0.1.5 round-4: when the user supplied a valid limit alongside an
+  // invalid offset (now stripped), honor the user's limit instead of
+  // overwriting it with the injected default. `{limit:1, offset:-5}`
+  // → updatedInput `{limit:1}` (was {limit:500}, returning 500× more
+  // lines than the user asked for).
+  const limit = surviveValidLimit && explicitLimit !== undefined ? explicitLimit : cfg.read.injected_limit;
+  void surviveValidOffset;
   return {
     kind: "clamp",
     updatedInput: { ...toolInput, limit },

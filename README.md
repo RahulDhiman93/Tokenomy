@@ -201,19 +201,25 @@ Top tools by tokens saved
 ```
 ✓ Node ≥ 20
 ✓ ~/.claude/settings.json parses
-✓ Hook entries present (PostToolUse + PreToolUse)
-✓ PreToolUse matcher covers Read + Bash + Write — Read|Bash|Write
+✓ Hook entries present (PostToolUse + PreToolUse + UserPromptSubmit + SessionStart)
+✓ PreToolUse matcher covers Read + Bash + Write + Edit — Read|Bash|Write|Edit
 ✓ Hook binary exists + executable
 ✓ Smoke spawn hook (empty mcp call) — exit=0 elapsed=74ms
 ✓ ~/.tokenomy/config.json parses
 ✓ Log directory writable
 ✓ Manifest drift — clean
+✓ No overlapping mcp__ hook — clean
 ✓ Graph MCP registration — tokenomy-graph configured in ~/.claude.json
 ✓ Statusline registered — tokenomy status-line
 ✓ Agent detection — claude-code, codex, cursor
+✓ Graph MCP SDK available — @modelcontextprotocol/sdk import ok
 ✓ Hook perf budget — p50=5ms p95=12ms max=14ms (n=30, budget 50ms)
+✓ Graph dirty sentinel age — no pending sentinel
+✓ Raven store size — 0.0 MB
+✓ Savings log size — 1.2 MB
+✓ Update cache age — 12min old
 
-16/16 checks passed
+19/19 checks passed
 ```
 
 Every check has an actionable remediation hint on failure. `tokenomy doctor --fix` for routine repair.
