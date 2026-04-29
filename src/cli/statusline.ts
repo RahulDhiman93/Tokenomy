@@ -17,6 +17,10 @@ export interface StatusLineState {
   graph?: "fresh" | "stale";
   golem?: string;
   raven?: boolean;
+  // 0.1.4+: rendered as ` · Kratos` when continuous prompt-time scan is
+  // active. Mirrors the Raven badge so users notice the security shield
+  // is on at a glance.
+  kratos?: boolean;
   // Populated when a cached `tokenomy update --check` reply indicates a
   // newer version is available on npm. Renders as `↑` after the version.
   updateAvailable?: string;
@@ -143,18 +147,19 @@ export const renderStatusLine = (state: StatusLineState): string => {
   if (!state.active) return "";
   const versionTag = `v${TOKENOMY_VERSION}${state.updateAvailable ? "↑" : ""}`;
   const raven = state.raven ? " · Raven" : "";
+  const kratos = state.kratos ? " · Kratos" : "";
   if (state.golem) {
     const savings = state.tokensToday > 0 ? ` · ${compact(state.tokensToday)} saved` : "";
-    return `[Tokenomy ${versionTag} · GOLEM-${state.golem.toUpperCase()}${savings}${raven}]`;
+    return `[Tokenomy ${versionTag} · GOLEM-${state.golem.toUpperCase()}${savings}${raven}${kratos}]`;
   }
-  if (state.tokensToday <= 0) return `[Tokenomy ${versionTag} · active${raven}]`;
+  if (state.tokensToday <= 0) return `[Tokenomy ${versionTag} · active${raven}${kratos}]`;
   const graph =
     state.graph === "fresh"
       ? " · graph fresh"
       : state.graph === "stale"
         ? " · graph stale - rebuild"
         : "";
-  return `[Tokenomy ${versionTag} · ${compact(state.tokensToday)} saved${graph}${raven}]`;
+  return `[Tokenomy ${versionTag} · ${compact(state.tokensToday)} saved${graph}${raven}${kratos}]`;
 };
 
 export const runStatusLine = (argv: string[]): number => {
@@ -166,6 +171,10 @@ export const runStatusLine = (argv: string[]): number => {
       graph: graphState(process.cwd()),
       golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
       raven: cfg.raven.enabled,
+      // 0.1.4+: surface kratos when the continuous prompt-time shield
+      // is on. Both flags must be true; `enabled: true, continuous: false`
+      // is the CLI-only audit mode and shouldn't render a session badge.
+      kratos: cfg.kratos?.enabled === true && cfg.kratos?.continuous === true,
       updateAvailable: readUpdateCache(),
     };
     // 0.1.3+: keep the update cache fresh on the order of 3h so a new

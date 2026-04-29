@@ -12,6 +12,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-04-29
+
+### Fixed
+
+- **Statusline now renders Kratos.** Pre-0.1.4 the statusline already
+  showed `· Raven` and the GOLEM mode but silently dropped Kratos —
+  users couldn't tell at a glance whether the security shield was
+  actively scanning their prompts. The statusline now appends `·
+  Kratos` after `· Raven` whenever `kratos.enabled && kratos.continuous`
+  is true. CLI-only audit mode (`enabled: true, continuous: false`)
+  doesn't render the badge — that mode is opt-in scan only.
+- New StatusLineState field: `kratos?: boolean`.
+
 ## [0.1.3] — 2026-04-28
 
 ### Fixed
@@ -924,7 +937,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.4
 [0.1.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.3
 [0.1.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.2
 [0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5

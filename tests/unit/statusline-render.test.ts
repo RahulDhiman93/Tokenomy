@@ -44,3 +44,31 @@ test("renderStatusLine: Raven marker appears when enabled", () => {
     `[Tokenomy ${V} · active · Raven]`,
   );
 });
+
+test("renderStatusLine: Kratos marker appears when continuous shield is on", () => {
+  assert.equal(
+    renderStatusLine({ active: true, tokensToday: 0, kratos: true }),
+    `[Tokenomy ${V} · active · Kratos]`,
+  );
+});
+
+test("renderStatusLine: Raven + Kratos render together", () => {
+  assert.equal(
+    renderStatusLine({ active: true, tokensToday: 0, raven: true, kratos: true }),
+    `[Tokenomy ${V} · active · Raven · Kratos]`,
+  );
+});
+
+test("renderStatusLine: Kratos appended after savings + graph segments", () => {
+  assert.equal(
+    renderStatusLine({ active: true, tokensToday: 4500, graph: "fresh", kratos: true }),
+    `[Tokenomy ${V} · 4.5k saved · graph fresh · Kratos]`,
+  );
+});
+
+test("renderStatusLine: Kratos appended in GOLEM line", () => {
+  assert.equal(
+    renderStatusLine({ active: true, tokensToday: 1900, golem: "recon", raven: true, kratos: true }),
+    `[Tokenomy ${V} · GOLEM-RECON · 1.9k saved · Raven · Kratos]`,
+  );
+});
