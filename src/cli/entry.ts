@@ -37,7 +37,7 @@ Usage:
   tokenomy bench run [scenario] [--json]
   tokenomy bench compare <a.json> <b.json>
   tokenomy bench report --md
-  tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json]
+  tokenomy report [--since=<ISO>] [--top=<N>] [--out=<path>] [--json] [--all-repos]
   tokenomy analyze [--path=<dir>] [--since=<ISO|Nd|Nw>] [--project=<str>] [--session=<id>]
                    [--top=<N>] [--tokenizer=heuristic|tiktoken|auto] [--json] [--no-color] [--verbose]
   tokenomy diff --call-key <sha256> | --tool <name> [--grep <str>] | --session <id> [--index <N>]
@@ -51,7 +51,7 @@ Usage:
   tokenomy graph purge [--path=<dir>|--all]
   tokenomy graph query <minimal|impact|review|usages> ...
   tokenomy uninstall [--purge] [--no-backup] [--agent=<name>]
-  tokenomy update [--tag=alpha|latest|beta|rc] [--version=<v>] [--check] [--force]
+  tokenomy update [--tag=alpha|latest|beta|rc] [--version=<v>] [--check] [--force] [--quiet]
   tokenomy config get <key>
   tokenomy config set <key> <value>
   tokenomy golem enable [--mode=lite|full|ultra|grunt|recon]
@@ -234,6 +234,7 @@ const main = async (): Promise<number> => {
       version,
       check: args.flags["check"] === true,
       force: args.flags["force"] === true,
+      quiet: args.flags["quiet"] === true,
     });
   }
 
@@ -301,6 +302,7 @@ const main = async (): Promise<number> => {
       verbose: args.flags["verbose"] === true,
       tune: args.flags["tune"] === true,
       cache: args.flags["no-cache"] !== true,
+      allRepos: args.flags["all-repos"] === true,
     });
   }
 
@@ -313,7 +315,8 @@ const main = async (): Promise<number> => {
       typeof args.flags["price-per-million"] === "string"
         ? parseFloat(args.flags["price-per-million"])
         : undefined;
-    const r = runReport({ since, top, out, pricePerMillion: price });
+    const allRepos = args.flags["all-repos"] === true;
+    const r = runReport({ since, top, out, pricePerMillion: price, allRepos });
     if (args.flags["json"]) {
       process.stdout.write(JSON.stringify(r.summary, null, 2) + "\n");
     } else {

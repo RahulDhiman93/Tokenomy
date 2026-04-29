@@ -16,7 +16,18 @@ export interface ToolDefinition {
   inputSchema: JsonSchema;
 }
 
-export const TOOL_DEFS: ToolDefinition[] = [
+// 0.1.3+: every tool gets an optional `path` arg so callers can route a
+// query at a specific repo. Without this, every call uses the MCP server's
+// startup cwd — wrong when the agent works across multiple repos in one
+// session. Applied via post-process below so individual tool schemas
+// stay clean.
+const PATH_PROP: JsonSchema = {
+  type: "string",
+  description:
+    "Repository path to scope this query. Defaults to the MCP server's startup cwd. Pass an absolute path (e.g. \"$PWD\") when working across multiple repos in one session so Tokenomy resolves the correct per-repo graph + Raven store.",
+};
+
+const RAW_TOOL_DEFS: ToolDefinition[] = [
   {
     name: "build_or_update_graph",
     description: "Build or refresh the local Tokenomy code graph for the current repository.",
@@ -232,3 +243,21 @@ export const TOOL_DEFS: ToolDefinition[] = [
     },
   },
 ];
+
+// Post-process: inject `path` into every tool's properties. Skip
+// `build_or_update_graph` because it already declares it. Idempotent; if a
+// future tool adds `path` directly, this leaves the existing entry alone.
+export const TOOL_DEFS: ToolDefinition[] = RAW_TOOL_DEFS.map((tool) => {
+  if (!tool.inputSchema.properties) return tool;
+  if (tool.inputSchema.properties["path"]) return tool;
+  return {
+    ...tool,
+    inputSchema: {
+      ...tool.inputSchema,
+      properties: {
+        ...tool.inputSchema.properties,
+        path: PATH_PROP,
+      },
+    },
+  };
+});

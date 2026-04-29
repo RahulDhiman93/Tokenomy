@@ -8,6 +8,7 @@ import type { Config, SavingsLogEntry } from "../core/types.js";
 import { globalConfigPath } from "../core/paths.js";
 import { collectRavenStats, type RavenStats } from "../raven/stats.js";
 import { loadConfig } from "../core/config.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 
 // Per-1M-token pricing (USD). Used purely to estimate $ saved for the
 // "tokens saved" column. Users can override via `tokenomy config set
@@ -19,6 +20,10 @@ export interface ReportOptions {
   top: number; // limit for per-tool/reason rankings
   out?: string; // HTML output path
   pricePerMillion?: number;
+  // 0.1.3+: when true, aggregate Raven stats across every registered
+  // repo (pre-0.1.3 default). When false (new default), scope the
+  // Raven block to the current repo only.
+  allRepos?: boolean;
 }
 
 export interface ReportSummary {
@@ -248,7 +253,19 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
   } catch {
     // Config unreadable — render Raven as "disabled" rather than failing the report.
   }
-  const raven = collectRavenStats(undefined, ravenEnabled);
+  // 0.1.3+: scope Raven stats to the current repo by default. Pass
+  // `allRepos: true` (driven by `--all-repos` from the CLI) to roll up
+  // every registered Raven store. Pre-0.1.3 always aggregated globally,
+  // which inflated counters and confused agents working in one repo.
+  let repoId: string | undefined;
+  if (!opts.allRepos) {
+    try {
+      repoId = resolveRepoId(process.cwd()).repoId;
+    } catch {
+      // Non-git or not-a-repo cwd → fall through to global aggregate.
+    }
+  }
+  const raven = collectRavenStats(undefined, ravenEnabled, repoId ? { repoId } : {});
   const summary = summarize(entries, { top: opts.top, pricePerMillion, raven });
   const html = renderHtml(summary);
   const tui = renderTui(summary);

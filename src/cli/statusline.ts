@@ -4,6 +4,7 @@ import { graphMetaPath, graphSnapshotPath, tokenomyGraphRootDir, updateCachePath
 import type { SavingsLogEntry } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { compareVersions } from "./update.js";
+import { spawnUpdateCheck } from "./update-check-spawn.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { resolveGolemMode } from "../rules/golem.js";
 import { safeParse } from "../util/json.js";
@@ -22,9 +23,17 @@ export interface StatusLineState {
 }
 
 // Staleness window for the update cache. Past this, treat the cache as
-// unknown rather than a stale hit (registry state drifts; a 2-week-old
-// "update available" isn't signal worth rendering).
-const UPDATE_CACHE_TTL_MS = 14 * 86_400_000;
+// unknown rather than a stale hit (registry state drifts; a stale
+// "update available" isn't signal worth rendering). 0.1.3+: dropped from
+// 14 days to 24 hours since SessionStart and the statusline now keep the
+// cache fresh proactively — past 24h means our refresh path is broken
+// and we'd rather show "no update" than a stale hit.
+const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// 0.1.3+: refresh-trigger window. When the cache is older than this, the
+// statusline spawns a non-blocking `tokenomy update --check` so we pick
+// up new releases promptly without waiting for the next SessionStart.
+const UPDATE_CACHE_REFRESH_AFTER_MS = 3 * 60 * 60 * 1000; // 3h
 
 export const readUpdateCache = (
   path = updateCachePath(),
@@ -43,6 +52,37 @@ export const readUpdateCache = (
   } catch {
     return undefined;
   }
+};
+
+// 0.1.3+: returns the cache age in ms, or null when the file is missing
+// or unparseable. Drives the periodic refresh trigger in the statusline
+// hot path. Cheap: one stat + one small read; bounded by node's cache.
+export const updateCacheAgeMs = (path = updateCachePath(), now = Date.now()): number | null => {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = safeParse<{ fetched_at?: string }>(readFileSync(path, "utf8"));
+    if (!parsed?.fetched_at) return null;
+    const fetchedAt = Date.parse(parsed.fetched_at);
+    if (!Number.isFinite(fetchedAt)) return null;
+    return Math.max(0, now - fetchedAt);
+  } catch {
+    return null;
+  }
+};
+
+// 0.1.3+: returns true when the statusline should kick off a non-blocking
+// `tokenomy update --check`. Triggers when:
+//   - cache is missing entirely, OR
+//   - cache is older than UPDATE_CACHE_REFRESH_AFTER_MS (3h).
+// Caller is expected to spawn the refresh detached + unref'd; this helper
+// is pure so tests can drive it deterministically.
+export const shouldRefreshUpdateCache = (
+  path = updateCachePath(),
+  now = Date.now(),
+): boolean => {
+  const age = updateCacheAgeMs(path, now);
+  if (age === null) return true;
+  return age > UPDATE_CACHE_REFRESH_AFTER_MS;
 };
 
 const localDateKey = (d: Date): string => {
@@ -128,6 +168,11 @@ export const runStatusLine = (argv: string[]): number => {
       raven: cfg.raven.enabled,
       updateAvailable: readUpdateCache(),
     };
+    // 0.1.3+: keep the update cache fresh on the order of 3h so a new
+    // release shows up in the statusline within one statusline tick of
+    // crossing that threshold. The spawn is fully detached + unref'd so
+    // it can't block the statusline's < 50ms budget.
+    if (shouldRefreshUpdateCache()) spawnUpdateCheck();
     if (argv.includes("--json")) process.stdout.write(JSON.stringify(state, null, 2) + "\n");
     else process.stdout.write(renderStatusLine(state) + "\n");
     return 0;

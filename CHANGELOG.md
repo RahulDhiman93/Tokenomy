@@ -12,6 +12,53 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-04-28
+
+### Fixed
+
+- **Graph stays fresh during a Claude Code session.** Previously the
+  graph snapshot only refreshed when the agent called a graph MCP tool;
+  edits via Edit / Write / MultiEdit / NotebookEdit silently drifted it
+  out of date. Tokenomy now writes a `.dirty` sentinel under
+  `~/.tokenomy/graphs/<repo-id>/.dirty` on every PostToolUse for those
+  tools, and `isGraphStaleCheap` short-circuits to "stale" the moment it
+  exists — saving the full enumerate-and-stat repo walk on every read-
+  side MCP query. The next graph query rebuilds; the rebuild path
+  clears the sentinel.
+- **Async graph rebuild on the read path.** When the snapshot is stale
+  but exists, the read-side now serves the cached snapshot immediately
+  AND fires the rebuild in the background (locked per-repo to prevent
+  pile-up). Earlier behavior awaited the rebuild — on a 5k-file repo
+  that's a 1-3s tax on every first MCP query of a session, which made
+  agents stop using the graph and fall back to broad `Read`s. Caller
+  still gets `stale: true` so the assistant knows the data is not
+  fresh. Opt-out: `tokenomy config set graph.async_rebuild false`.
+- **Raven MCP tools stop bleeding cross-repo.** Every graph + Raven
+  MCP tool now accepts an optional `path` arg routing the call at a
+  specific repo. Previously the MCP server's startup cwd was used for
+  every tool call, so an agent working across repos in one session got
+  data for the registered repo regardless of the active one. Agents
+  should pass `path: "$PWD"` when working across multiple repos.
+- **`tokenomy report` / `analyze` Raven block scopes to current repo.**
+  Pre-0.1.3 the Raven counters aggregated across every registered
+  repo, inflating numbers and confusing agents. Now scoped by default;
+  pass `--all-repos` to restore the global aggregate. `tokenomy raven
+  status` was already per-repo.
+- **Update marker shows up promptly.** Statusline cache TTL dropped
+  from 14 days to 24 hours. SessionStart now fires `tokenomy update
+  --check --quiet` (detached, fail-open, throttled by the 3h cache-
+  age window). Statusline kicks the same refresh whenever the cached
+  `fetched_at` ages past 3h. Net effect: a new release shows up in
+  the `↑` marker on the user's next Claude Code restart, or within
+  3h on a long-running session.
+
+### Added
+
+- New config keys: `graph.async_rebuild` (default `true`), every MCP
+  tool's input schema gains an optional `path` property, `analyze`
+  + `report` accept `--all-repos`, `update` accepts `--quiet`.
+- New paths: `graphDirtySentinelPath(repoId)`, `graphRebuildLockPath(repoId)`.
+
 ## [0.1.2] — 2026-04-26
 
 > Renamed from `0.1.1-beta.6` at release time — `-beta.N` dist-tag retired; pre-`1.0` releases now use plain SemVer. Real version bump (0.1.1 → 0.1.2) since this release ships Kratos, Golem `recon` mode, the `tokenomy feedback` command, and Codex-flagged correctness fixes (Codex MCP TOML parsing, hook auditing, Raven base-diff completeness, kratos transcript scan now stream-reads tail).
@@ -877,7 +924,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.3
 [0.1.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.2
 [0.1.1-beta.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.5
 [0.1.1-beta.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.1-beta.4

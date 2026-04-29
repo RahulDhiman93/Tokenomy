@@ -45,7 +45,7 @@ tokenomy doctor                     # all checks passing
 
 Codex CLI, Cursor, Windsurf, Cline, Gemini auto-detected and registered when each is on PATH. Force one target with `--agent <name>`; inspect first with `tokenomy init --list-agents`.
 
-> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.2`. Upgrade: `tokenomy update`.
+> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.3`. Upgrade: `tokenomy update`.
 
 ---
 
@@ -120,6 +120,26 @@ Step 2 — Then ask me about each optional feature, one at a time.
      Golem mode, graph freshness, today's trims, and a `↑` after the
      version when an update is available. Already wired by `init`;
      just confirm it's working and move on.
+
+  h) Live graph freshness (0.1.3+) — graph stays fresh during the
+     session. PostToolUse hook on Edit/Write/MultiEdit drops a
+     `.dirty` sentinel; the next graph query rebuilds in the
+     background. ON by default. Tell me whether to keep it ON
+     (recommended) or disable.
+     Disable: tokenomy config set graph.async_rebuild false
+
+  i) Multi-repo graph + Raven (0.1.3+) — register the graph in EACH
+     repo I want it for. Run `tokenomy init --graph-path "$PWD"` in
+     each project root. When working across repos in one Claude
+     session, agents should pass `path: "$PWD"` to the MCP tools so
+     Tokenomy resolves the right per-repo graph + Raven store.
+     No-op for single-repo workflows.
+
+  j) Auto update-check (0.1.3+) — SessionStart fires
+     `tokenomy update --check --quiet` (detached, fail-open,
+     throttled 3h) so a new release shows up in the statusline `↑`
+     marker on the next Claude restart. ON by default. No action
+     needed; just confirm.
 
 Step 3 — Final check:
   1. Run: tokenomy doctor
@@ -213,7 +233,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool + Write context nudge.
 - [x] **Phase 5.** Polish — Golem output mode, statusline, prompt-classifier, `compress`, `bench`, cross-agent installers.
 - [x] **Phase 5.5.** Codex hook foothold — user-scoped `SessionStart` + `UserPromptSubmit` hooks for Golem and prompt-classifier nudges.
-- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command.
+- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3).
 - [ ] **Phase 7.** Language breadth — Python parser plugin, richer benchmark fixtures, npm publish at 1.0.
 - [ ] **Phase 8.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, team-ready reports. See [docs/NEXT_FEATURES.md](./docs/NEXT_FEATURES.md).
 

@@ -29,11 +29,23 @@ const countJsonFiles = (dir: string): { count: number; latestMs: number } => {
   return { count, latestMs };
 };
 
+export interface CollectRavenStatsOptions {
+  // 0.1.3+: scope the rollup to a single repo_id. When set, only that
+  // subdirectory is walked. When undefined (default), aggregate across
+  // every registered Raven repo — preserves the historical "global"
+  // behavior that `tokenomy report --all-repos` continues to use.
+  repoId?: string;
+}
+
 // Walk ~/.tokenomy/raven/<repo-id>/{packets,reviews,comparisons,decisions}
 // and roll the JSON file counts into a single summary. Intentionally
 // filesystem-driven rather than re-reading each JSON: callers only need
 // counts + newest-mtime, so this stays O(files) with no parse cost.
-export const collectRavenStats = (root = ravenRootDir(), enabled = false): RavenStats => {
+export const collectRavenStats = (
+  root: string = ravenRootDir(),
+  enabled = false,
+  options: CollectRavenStatsOptions = {},
+): RavenStats => {
   const stats: RavenStats = {
     enabled,
     packets: 0,
@@ -45,7 +57,16 @@ export const collectRavenStats = (root = ravenRootDir(), enabled = false): Raven
   };
   if (!existsSync(root)) return stats;
   let latestMs = 0;
-  for (const repoId of readdirSync(root)) {
+  // 0.1.3+: when scoped to a single repoId, walk just that dir. Avoids
+  // rolling up cross-repo Raven activity into the agent's report — that
+  // inflated counters and cost tokens explaining "100 packets" when the
+  // current repo only had 2.
+  const repoIds = options.repoId
+    ? existsSync(join(root, options.repoId))
+      ? [options.repoId]
+      : []
+    : readdirSync(root);
+  for (const repoId of repoIds) {
     const repoDir = join(root, repoId);
     try {
       if (!statSync(repoDir).isDirectory()) continue;

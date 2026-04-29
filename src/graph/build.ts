@@ -1,7 +1,7 @@
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
-import { graphBuildLogPath, graphLockPath } from "../core/paths.js";
+import { graphBuildLogPath, graphDirtySentinelPath, graphLockPath } from "../core/paths.js";
 import { stableStringify } from "../util/json.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
@@ -456,6 +456,16 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
     }
     built.data.duration_ms = Date.now() - start;
     logGraphBuild(identity.repoId, identity.repoPath, built);
+    // 0.1.3+: clear the dirty sentinel after a successful rebuild so the
+    // next isGraphStaleCheap call falls back to its normal mtime walk
+    // instead of short-circuiting to "stale". Best-effort; missing-file
+    // is the desired post-state anyway.
+    try {
+      const dirty = graphDirtySentinelPath(identity.repoId);
+      if (existsSync(dirty)) rmSync(dirty, { force: true });
+    } catch {
+      // ignore
+    }
     return built;
   } catch (error) {
     const result = fail("io-error", (error as Error).message);

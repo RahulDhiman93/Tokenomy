@@ -125,17 +125,20 @@ test("read-side auto-refresh: graph.auto_refresh_on_read=false leaves graph stal
   });
 });
 
-test("read-side auto-refresh: propagates rebuild FailOpen instead of silently serving stale data", async () => {
+test("read-side auto-refresh: propagates rebuild FailOpen when async_rebuild=false", async () => {
   await withSandbox(async (repo) => {
     // Build the graph successfully first so there's a stored snapshot.
     const built = (await dispatchGraphTool("build_or_update_graph", {}, repo)) as BuildResult;
     assert.equal(built.ok, true);
 
-    // Force staleness by adding a source file, then constrain hard_max_files
-    // via config so the rebuild attempt will fail with repo-too-large.
+    // 0.1.3+: by default the read-side serves the cached snapshot and rebuilds
+    // in the background, so a doomed rebuild no longer surfaces synchronously.
+    // Opt out of the async path here so we exercise the original semantics.
     writeFileSync(join(repo, "src", "overflow.ts"), "export const x = 1;\n");
     execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
-    writeConfig(process.env["HOME"]!, { graph: { hard_max_files: 0 } });
+    writeConfig(process.env["HOME"]!, {
+      graph: { hard_max_files: 0, async_rebuild: false },
+    });
 
     const result = (await dispatchGraphTool(
       "get_minimal_context",
@@ -143,10 +146,31 @@ test("read-side auto-refresh: propagates rebuild FailOpen instead of silently se
       repo,
     )) as { ok: boolean; reason?: string };
 
-    // Must surface the rebuild failure rather than silently returning
-    // stale ok:true data from the old snapshot.
+    // Synchronous path: must surface the rebuild failure.
     assert.equal(result.ok, false, JSON.stringify(result));
     assert.equal(result.reason, "repo-too-large");
+  });
+});
+
+test("read-side auto-refresh: async_rebuild=true serves cached snapshot + flags stale", async () => {
+  await withSandbox(async (repo) => {
+    const built = (await dispatchGraphTool("build_or_update_graph", {}, repo)) as BuildResult;
+    assert.equal(built.ok, true);
+
+    // Add a file → snapshot becomes stale. async_rebuild defaults true.
+    writeFileSync(join(repo, "src", "added.ts"), "export const z = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+
+    const result = (await dispatchGraphTool(
+      "get_minimal_context",
+      { target: { file: "src/a.ts" }, depth: 1 },
+      repo,
+    )) as { ok: boolean; stale?: boolean };
+
+    // Stale-but-cached: ok:true, stale:true. The agent sees results
+    // immediately; rebuild runs in the background.
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.stale, true);
   });
 });
 

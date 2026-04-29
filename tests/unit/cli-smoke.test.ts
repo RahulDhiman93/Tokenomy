@@ -233,7 +233,7 @@ test("statusline: text mode shows version + tokens", () => {
   withTmpHome(() => {
     const r = captureOut(() => runStatusLine([]));
     assert.equal(r.value, 0);
-    assert.match(r.out, /\[Tokenomy v0\.1\.2/);
+    assert.match(r.out, /\[Tokenomy v0\.1\.\d/);
   });
 });
 

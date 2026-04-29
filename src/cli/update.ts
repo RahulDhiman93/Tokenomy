@@ -72,6 +72,10 @@ export interface UpdateOptions {
   // Override the dev-symlink guard (see isDevSymlink()). Use at own risk:
   // the `npm install -g` will replace your linked dev checkout.
   force?: boolean;
+  // 0.1.3+: silence stdout/stderr when triggered by SessionStart /
+  // statusline. The cache write is the side effect that matters; the
+  // human-readable lines are noise in those code paths.
+  quiet?: boolean;
 }
 
 const runNpm = (args: string[], inherit = false): { status: number; stdout: string; stderr: string } => {
@@ -190,6 +194,11 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
   const target = opts.version ?? tag;
 
   if (opts.check) {
+    // 0.1.3+: --quiet silences user-facing prints (used by SessionStart /
+    // statusline auto-spawn). Cache write still happens — that's the
+    // side effect we actually need.
+    const writeOut = opts.quiet ? () => {} : (s: string) => process.stdout.write(s);
+    const writeErr = opts.quiet ? () => {} : (s: string) => process.stderr.write(s);
     // Honor an explicit pin: if the user passed --version=X or the
     // update@X shorthand, check resolves against THAT version — not the
     // default tag. A pinned target like `0.1.0-alpha.13` asks the registry
@@ -197,7 +206,7 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
     // version doesn't exist on the registry).
     const resolved = fetchRegistryVersion(target);
     if (resolved === null) {
-      process.stderr.write(
+      writeErr(
         `tokenomy update: could not query npm registry for tokenomy@${target}. ` +
           `Is npm on PATH, is the network reachable, and does that version exist?\n`,
       );
@@ -207,18 +216,18 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
     // (e.g. `latest on npm`) vs a pinned version (`pin 0.1.0-alpha.13`).
     const isPinnedVersion = opts.version !== undefined;
     const label = isPinnedVersion ? `pin ${target}` : `${target} on npm`;
-    process.stdout.write(`  installed:       ${installed}\n`);
-    process.stdout.write(`  ${label.padEnd(16)}: ${resolved}\n`);
+    writeOut(`  installed:       ${installed}\n`);
+    writeOut(`  ${label.padEnd(16)}: ${resolved}\n`);
     const cmp = compareVersions(resolved, installed);
     // Cache the registry reply so the statusline can render an ↑ marker.
     // Skip pinned-version checks — those aren't meaningful as "latest".
     if (!isPinnedVersion) writeUpdateCache(resolved, target);
     if (cmp === 0) {
-      process.stdout.write(`  ✓ Up to date\n`);
+      writeOut(`  ✓ Up to date\n`);
       return 0;
     }
     if (cmp < 0) {
-      process.stdout.write(
+      writeOut(
         isPinnedVersion
           ? `  ✓ Installed is newer than the pinned target.\n`
           : `  ✓ Up to date (installed is newer than the \`${target}\` dist-tag on npm).\n`,
@@ -233,7 +242,7 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
       : opts.tag && opts.tag !== defaultTag()
       ? `tokenomy update --tag=${target}`
       : `tokenomy update`;
-    process.stdout.write(`  ⚠ Update available. Run \`${suggest}\`.\n`);
+    writeOut(`  ⚠ Update available. Run \`${suggest}\`.\n`);
     return 1;
   }
 

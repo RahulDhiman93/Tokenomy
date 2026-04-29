@@ -10,6 +10,7 @@ import { Simulator } from "../analyze/simulate.js";
 import { loadTokenizer, type TokenizerChoice } from "../analyze/tokens.js";
 import { computeGolemTune, writeGolemTune } from "../analyze/tune.js";
 import { analyzeCachePath } from "../core/paths.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "../core/types.js";
@@ -32,6 +33,9 @@ export interface AnalyzeOptions {
   // (SessionStart resolver, budget PreToolUse rule) can pick them up.
   tune?: boolean;
   cache?: boolean;
+  // 0.1.3+: when true, the rolled-up Raven block aggregates across every
+  // registered repo. Default (false) scopes to the current repo only.
+  allRepos?: boolean;
 }
 
 const parseSince = (input: string | undefined): Date | undefined => {
@@ -119,6 +123,15 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
     tokenizer_name: tokenizer.name,
     tokenizer_approximate: tokenizer.approximate,
     raven_enabled: cfg.raven?.enabled === true,
+    raven_repo_id: opts.allRepos
+      ? undefined
+      : (() => {
+          try {
+            return resolveRepoId(process.cwd()).repoId;
+          } catch {
+            return undefined;
+          }
+        })(),
   });
 
   // Live progress: write \r-updated status line to stderr so stdout stays
