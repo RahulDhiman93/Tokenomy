@@ -110,7 +110,9 @@ const runNpm = (
 //     "ECONNRESET" / "fetch failed"
 // "Permanent" (no retry): stderr mentions "404" / "E404" / "Not found" /
 // "Unauthorized" / "ENEEDAUTH" / "EPERM".
-const isTransientNpmFailure = (stderr: string): boolean => {
+// Exported for unit tests so we don't have to drive live npm to verify
+// the retry classifier. 0.1.5 round-3 codex catch.
+export const isTransientNpmFailure = (stderr: string): boolean => {
   if (stderr.length === 0) return true;
   if (/ETIMEDOUT|ENOTFOUND|ECONNRESET|ECONNREFUSED|fetch failed|EAI_AGAIN/i.test(stderr)) return true;
   if (/E404|404\b|not found|unauthorized|ENEEDAUTH|EPERM|EACCES/i.test(stderr)) return false;

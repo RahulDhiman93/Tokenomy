@@ -33,13 +33,12 @@ export const readBoundRule = (
   const offsetOk =
     explicitOffset !== undefined && Number.isFinite(explicitOffset) && explicitOffset >= 0;
 
-  if (limitOk) return { kind: "passthrough", reason: "explicit-limit" };
-  if (offsetOk) return { kind: "passthrough", reason: "explicit-offset" };
-  // If the agent passed a bad limit AND/OR a bad offset (>50k, negative,
-  // NaN), drop ALL invalid keys and let the clamp path inject our defaults.
-  // 0.1.5 round-2 codex catch: earlier code used an if-else chain, so a
-  // call with both `limit: 1e9` AND `offset: -1` would only strip whichever
-  // appeared first in the cascade and leak the other through.
+  // 0.1.5 round-3 codex catch: when EITHER bound is invalid, DON'T
+  // passthrough on the surviving bound. The host treats passthrough as
+  // "use the original tool_input untouched" — meaning the bad value
+  // would still reach the underlying Read. Force the call into the
+  // clamp path so updatedInput (with the bad value stripped) is what
+  // actually flows downstream.
   const dropKeys = new Set<string>();
   if (explicitLimit !== undefined && !limitOk) dropKeys.add("limit");
   if (explicitOffset !== undefined && !offsetOk) dropKeys.add("offset");
@@ -48,6 +47,10 @@ export const readBoundRule = (
       Object.entries(toolInput).filter(([k]) => !dropKeys.has(k)),
     );
   }
+  // Honor surviving user intent ONLY when nothing was stripped — this
+  // is the all-clean path (no invalid args). Otherwise fall through.
+  if (limitOk && dropKeys.size === 0) return { kind: "passthrough", reason: "explicit-limit" };
+  if (offsetOk && dropKeys.size === 0) return { kind: "passthrough", reason: "explicit-offset" };
 
   const filePath = toolInput["file_path"];
   if (typeof filePath !== "string" || filePath.length === 0) {
