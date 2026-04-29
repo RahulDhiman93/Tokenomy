@@ -46,3 +46,23 @@ TypeScript / JavaScript AST via the TS compiler (no type checker). `tsconfig.pat
 ## Incremental updates (beta.3+)
 
 `cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or > 40 % of files changed. Opt-in.
+
+## Live freshness (0.1.3+)
+
+Pre-0.1.3 the graph snapshot only refreshed when the agent invoked a graph MCP tool. Mid-session edits via `Edit` / `Write` / `MultiEdit` / `NotebookEdit` silently drifted it out of date.
+
+0.1.3+ wires three layers:
+
+1. **Dirty sentinel.** PostToolUse on those edit tools touches `~/.tokenomy/graphs/<repo-id>/.dirty` with the changed file path. Cost per edit: one `existsSync` + one small append (~50 B). Skipped when no graph dir exists for the repo (no graph built yet).
+2. **Cheap-stale short-circuit.** `isGraphStaleCheap` returns `{ stale: true }` immediately when the sentinel exists — saves the full enumerate-and-stat repo walk on every read-side MCP query. O(repo) → O(1).
+3. **Async rebuild.** When the snapshot is stale-but-cached, the read-side serves the cached snapshot AND fires the rebuild in the background (process-local lockset prevents pile-up across rapid agent calls). Caller still receives `stale: true` in the response. The build clears the sentinel on success.
+
+Opt-out: `tokenomy config set graph.async_rebuild false` reverts to the synchronous-await behavior so a doomed rebuild surfaces immediately.
+
+## Cross-repo isolation (0.1.3+)
+
+The MCP server's startup cwd was previously baked into every tool call. When the agent worked across multiple repos in one Claude session, every query returned data for the registered repo regardless of the active one.
+
+0.1.3+ adds an optional `path` arg to every tool's input schema. Pass `path: "$PWD"` (or any absolute repo root) and Tokenomy resolves the per-repo graph + Raven store from that path. Default falls back to the server's startup cwd, so single-repo workflows are unchanged.
+
+Recommended: run `tokenomy init --graph-path "$PWD"` in EACH repo so each Claude Code project window registers its own MCP server bound to its own repo.

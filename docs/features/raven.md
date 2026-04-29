@@ -70,6 +70,14 @@ All budget-clipped, all refuse stale packets:
 - `get_pr_readiness`
 - `record_decision`
 
+## Cross-repo scope (0.1.3+)
+
+Every Raven MCP tool accepts an optional `path` arg routing the call at a specific repo. Without it, the MCP server's startup cwd is used — wrong when the agent works across multiple repos in one Claude session. Pass `path: "$PWD"` (or any absolute repo root) and Tokenomy resolves the right per-repo Raven store.
+
+`tokenomy report` and `tokenomy analyze` scope the rolled-up Raven block to the current repo by default. Pass `--all-repos` to either CLI to restore the pre-0.1.3 global aggregate (across every registered Raven store under `~/.tokenomy/raven/`).
+
+`tokenomy raven status` was already per-repo.
+
 ## Out-of-scope
 
 `review --agent` auto-subprocessing (human-in-the-loop flow instead — print the packet path, run Codex in a second terminal, it calls `record_agent_review`) and `dispatch --worktree` (follow-up).
