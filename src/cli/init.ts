@@ -40,7 +40,13 @@ export interface InitOptions {
   agent?: AgentName;
 }
 
-const POST_MATCHER = "mcp__.*";
+// 0.1.3+: PostToolUse covers MCP (response trim) + Bash (stacktrace
+// compress) AND now Edit/Write/MultiEdit/NotebookEdit so the
+// graph-dirty sentinel fires whenever the agent mutates a tracked file.
+// Per-edit cost: one stat + one small file append (~50 B). Net win
+// because `isGraphStaleCheap` short-circuits to "stale" without
+// walking the repo.
+const POST_MATCHER = "mcp__.*|Bash|Edit|Write|MultiEdit|NotebookEdit";
 // PreToolUse fires for Read (file clamp), Bash (input bounder), and Write
 // (OSS-alternatives nudge, alpha.18+). Claude Code matchers accept regex-style
 // alternation, so one entry covers all three.

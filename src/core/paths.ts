@@ -50,6 +50,16 @@ export const graphBuildLogPath = (repoId: string): string =>
   join(graphDir(repoId), "build.jsonl");
 export const graphLockPath = (repoId: string): string =>
   join(graphDir(repoId), ".build.lock");
+// 0.1.3+: PostToolUse Edit/Write/MultiEdit touches this sentinel; cleared
+// by buildGraph after a successful rebuild. Existence = "graph definitely
+// stale, skip the enumerate walk."
+export const graphDirtySentinelPath = (repoId: string): string =>
+  join(graphDir(repoId), ".dirty");
+// 0.1.3+: per-repo lock taken by the async background-rebuild path so
+// rapid edits don't pile up rebuilds. Existence = "rebuild in flight."
+// Same dir as the snapshot so it's atomic-safe with rmSync recursive.
+export const graphRebuildLockPath = (repoId: string): string =>
+  join(graphDir(repoId), ".rebuilding");
 
 export const claudeSettingsPath = (): string =>
   join(homedir(), ".claude", "settings.json");

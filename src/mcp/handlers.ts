@@ -10,6 +10,7 @@ import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import { npmSearch, registrySearch } from "../nudge/npm-search.js";
 import { repoSearch } from "../nudge/repo-search.js";
 import { createAndSaveRavenPacket } from "../raven/brief.js";
@@ -219,12 +220,57 @@ const withGraphContext = <T>(
 // caller so they see the actionable reason instead of silently receiving
 // a stale snapshot. Catches unexpected throws and falls back to the cheap
 // pre-check's stale state so the read path doesn't tear down.
+// 0.1.3+: in-flight rebuild lockset. Keyed on repoId. Prevents the agent
+// from kicking off N parallel rebuilds in quick succession when each tool
+// call sees a stale snapshot. Process-local; the on-disk
+// graphRebuildLockPath sentinel covers cross-process concurrency.
+const inFlightRebuilds = new Set<string>();
+
+const startBackgroundRebuild = (cwd: string, cfg: Config): void => {
+  let repoId: string;
+  try {
+    repoId = resolveRepoId(cwd).repoId;
+  } catch {
+    repoId = cwd;
+  }
+  if (inFlightRebuilds.has(repoId)) return;
+  inFlightRebuilds.add(repoId);
+  // Fire-and-forget. Errors are logged via buildGraph's own log path.
+  void buildGraph({ cwd, config: cfg, force: false })
+    .then((result) => {
+      if (result.ok && result.data.built) queryCache.invalidate();
+    })
+    .catch(() => {
+      // buildGraph is meant to be non-throwing; swallow anyway.
+    })
+    .finally(() => {
+      inFlightRebuilds.delete(repoId);
+    });
+};
+
 const ensureFreshGraph = async (
   cwd: string,
   cfg: Config,
 ): Promise<PrecomputedStale | FailOpen> => {
   const check = isGraphStaleCheap(cwd, cfg);
   if (!check.missing && !check.stale) return { stale: false, stale_files: [] };
+  // 0.1.3+: when the snapshot exists but is stale, return the cached
+  // version IMMEDIATELY and rebuild in the background. Earlier behavior
+  // awaited the rebuild — on a 5k-file repo that's a 1-3s tax on every
+  // first MCP query of a session, which agents respond to by skipping
+  // the graph and falling back to broad Reads (defeating the point of
+  // the graph). Caller still gets `stale: true` so the response can
+  // surface the freshness state to the assistant.
+  //
+  // Path taken only when a snapshot already exists. When `missing` is
+  // true (graph never built) we still await the synchronous build —
+  // there's nothing to serve in the meantime.
+  if (!check.missing && check.stale) {
+    if (cfg.graph.async_rebuild !== false) {
+      startBackgroundRebuild(cwd, cfg);
+      return { stale: true, stale_files: check.stale_files };
+    }
+  }
   try {
     const result = await buildGraph({ cwd, config: cfg, force: false });
     if (result.ok) {
@@ -299,17 +345,23 @@ export const dispatchGraphTool = async (
   cwd: string,
 ): Promise<QueryResult<unknown>> => {
   const args = asObject(rawArgs);
+  // 0.1.3+: every tool accepts an optional `path` arg so callers can route
+  // the query at a specific repo. Falls back to the MCP server's startup
+  // cwd. Resolves the cross-repo bleed where a single MCP instance bound
+  // to one cwd was returning data for the wrong repo when the agent
+  // worked across multiple repos in one session.
+  const argPath = typeof args["path"] === "string" && args["path"].length > 0 ? args["path"] : null;
+  const effectiveCwd = argPath ?? cwd;
 
   if (RAVEN_TOOLS.has(name)) {
-    return dispatchRavenTool(name, args, cwd);
+    return dispatchRavenTool(name, args, effectiveCwd);
   }
 
   if (name === "build_or_update_graph") {
-    const target = typeof args["path"] === "string" ? args["path"] : cwd;
-    const config = loadConfig(target);
+    const config = loadConfig(effectiveCwd);
     if (!config.graph.enabled) return fail("graph-disabled");
     const result: BuildGraphResult = await buildGraph({
-      cwd: target,
+      cwd: effectiveCwd,
       force: args["force"] === true,
       config,
     });
@@ -332,7 +384,7 @@ export const dispatchGraphTool = async (
     const invalid = earlyValidateReadArgs(name, args);
     if (invalid) return invalid;
 
-    const config = loadConfig(cwd);
+    const config = loadConfig(effectiveCwd);
 
     // Auto-refresh is opt-in via config. When enabled, run the cheap stale
     // check + conditional rebuild FIRST; when disabled, skip entirely and let
@@ -340,7 +392,7 @@ export const dispatchGraphTool = async (
     // behavior — mtime-only stale isn't good enough for the opt-out path
     // because a `touch` would incorrectly flag a file as changed).
     if (config.graph.auto_refresh_on_read) {
-      const fresh = await ensureFreshGraph(cwd, config);
+      const fresh = await ensureFreshGraph(effectiveCwd, config);
       if ("ok" in fresh && fresh.ok === false) {
         // Rebuild failed with an actionable reason — surface it to the caller
         // instead of serving a silently-stale snapshot.
@@ -350,7 +402,7 @@ export const dispatchGraphTool = async (
     }
 
     let graphContext = loadGraphContext(
-      cwd,
+      effectiveCwd,
       config,
       precomputedStale ? { skipStaleCheck: true, precomputedStale } : {},
     );
@@ -365,14 +417,14 @@ export const dispatchGraphTool = async (
       config.graph.auto_refresh_on_read
     ) {
       try {
-        const rebuild = await buildGraph({ cwd, config, force: false });
+        const rebuild = await buildGraph({ cwd: effectiveCwd, config, force: false });
         if (!rebuild.ok) return rebuild;
         queryCache.invalidate();
         precomputedStale = {
           stale: rebuild.stale ?? false,
           stale_files: rebuild.stale_files ?? [],
         };
-        graphContext = loadGraphContext(cwd, config, {
+        graphContext = loadGraphContext(effectiveCwd, config, {
           skipStaleCheck: true,
           precomputedStale,
         });
@@ -394,7 +446,7 @@ export const dispatchGraphTool = async (
     }
   }
 
-  const result = await dispatchGraphToolUncached(name, args, cwd, precomputedStale);
+  const result = await dispatchGraphToolUncached(name, args, effectiveCwd, precomputedStale);
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
   return result;
 };

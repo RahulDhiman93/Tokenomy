@@ -224,6 +224,11 @@ export interface GraphConfig {
   query_budget_bytes: GraphQueryBudgetConfig;
   exclude: string[];
   auto_refresh_on_read: boolean;
+  // 0.1.3+: when true (default), a stale-but-existing snapshot is served
+  // immediately and the rebuild runs in the background. The caller still
+  // gets `stale: true` in the response so the assistant knows the data is
+  // not fresh. Set to false to revert to the synchronous-await behavior.
+  async_rebuild?: boolean;
   // Beta-3: delta graph builds. When true, the builder compares file
   // content hashes against the prior snapshot and re-parses only changed
   // files. Falls back to a full build when tsconfig/package.json change or

@@ -9,6 +9,7 @@ import {
 } from "./pre-dispatch.js";
 import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
+import { markGraphDirty } from "../rules/graph-dirty.js";
 import type {
   HookInput,
   PreHookInput,
@@ -180,6 +181,10 @@ const main = async (): Promise<void> => {
 
     const input = parsed as HookInput;
     const respBytes = Buffer.byteLength(JSON.stringify(input.tool_response ?? null), "utf8");
+    // Mark graph dirty on Edit/Write/MultiEdit. Independent of dispatch's
+    // mcp/Bash filter — we always run this regardless of whether the
+    // PostToolUse pipeline fires for the tool. Fail-open inside the rule.
+    markGraphDirty(input, cfg);
     const output = dispatch(input, cfg);
 
     const resp = input.tool_response as Record<string, unknown> | null;

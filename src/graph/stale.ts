@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../core/types.js";
-import { graphSnapshotPath } from "../core/paths.js";
+import { graphDirtySentinelPath, graphRebuildLockPath, graphSnapshotPath } from "../core/paths.js";
 import type { GraphMeta } from "./schema.js";
 import {
   enumerateAllFiles,
@@ -117,6 +117,16 @@ export const isGraphStaleCheap = (
   // fail with graph-not-built. Codex round 1 review catch.
   if (!existsSync(graphSnapshotPath(identity.repoId))) {
     return { missing: true, stale: true, stale_files: [] };
+  }
+
+  // 0.1.3 fast path: PostToolUse on Edit/Write/MultiEdit drops a `.dirty`
+  // sentinel under the graph dir. When it exists we know SOMETHING changed
+  // and short-circuit straight to stale — saves the full enumerate-and-stat
+  // walk on every read-side MCP query. The actual rebuild path picks up the
+  // SHA-256 verification, so a false positive (file touched but content
+  // unchanged) still short-circuits cheaply downstream.
+  if (existsSync(graphDirtySentinelPath(identity.repoId))) {
+    return { missing: false, stale: true, stale_files: [] };
   }
 
   if (meta.exclude_fingerprint !== fingerprintExcludes(cfg.graph.exclude)) {

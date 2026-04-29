@@ -68,6 +68,9 @@ export interface AggregatorOptions {
   // whether the bridge is currently turned on. Stats are collected
   // unconditionally; this only colours the "status" line.
   raven_enabled?: boolean;
+  // 0.1.3+: scope the rolled-up Raven stats to a single repo. When unset,
+  // aggregate across every registered Raven store (pre-0.1.3 behavior).
+  raven_repo_id?: string;
 }
 
 interface ToolBucket {
@@ -391,7 +394,11 @@ export class Aggregator {
         name: this.opts.tokenizer_name,
         approximate: this.opts.tokenizer_approximate,
       },
-      raven: collectRavenStats(undefined, this.opts.raven_enabled === true),
+      raven: collectRavenStats(
+        undefined,
+        this.opts.raven_enabled === true,
+        this.opts.raven_repo_id ? { repoId: this.opts.raven_repo_id } : {},
+      ),
     };
   }
 }

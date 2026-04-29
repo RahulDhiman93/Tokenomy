@@ -24,6 +24,8 @@ import {
 } from "../rules/golem.js";
 import { buildRavenSessionContext, buildRavenTurnReminder } from "../raven/nudge.js";
 import { evaluatePrompt as evaluateKratosPrompt } from "../kratos/prompt-rule.js";
+import { shouldRefreshUpdateCache } from "../cli/statusline.js";
+import { spawnUpdateCheck } from "../cli/update-check-spawn.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
 import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
@@ -351,6 +353,12 @@ export const dispatchSessionStart = (
   input: SessionStartHookInput,
   cfg: Config,
 ): SessionStartHookOutput | null => {
+  // 0.1.3+: refresh ~/.tokenomy/update-cache.json every SessionStart so
+  // a fresh Claude Code session sees new Tokenomy releases on the
+  // statusline within one tick of the next refresh. Throttled by the
+  // statusline's 3h refresh window so rapid restarts don't pound npm.
+  // Spawn is detached + unref'd; cannot block the hook's < 50ms budget.
+  if (shouldRefreshUpdateCache()) spawnUpdateCheck();
   const ctx = buildGolemSessionContext(cfg);
   const raven = buildRavenSessionContext(cfg);
   const combined = [ctx, raven].filter(Boolean).join("\n\n");
