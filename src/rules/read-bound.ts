@@ -16,13 +16,35 @@ export const readBoundRule = (
 ): ReadBoundResult => {
   if (!cfg.read.enabled) return { kind: "passthrough", reason: "disabled" };
 
-  // Respect explicit user intent
-  if (typeof toolInput["limit"] === "number") {
-    return { kind: "passthrough", reason: "explicit-limit" };
-  }
-  if (typeof toolInput["offset"] === "number") {
-    return { kind: "passthrough", reason: "explicit-offset" };
-  }
+  // 0.1.5+ argument validation. Reject malformed `limit` / `offset` BEFORE
+  // honoring explicit user intent: a `limit: 1e9` would defeat the clamp
+  // and let an oversized Read through. We don't reject — that would break
+  // the agent's call — but we strip the bad value and fall through to the
+  // normal clamp path. Same for negative offsets.
+  const explicitLimit =
+    typeof toolInput["limit"] === "number" ? (toolInput["limit"] as number) : undefined;
+  const explicitOffset =
+    typeof toolInput["offset"] === "number" ? (toolInput["offset"] as number) : undefined;
+  const limitOk =
+    explicitLimit !== undefined &&
+    Number.isFinite(explicitLimit) &&
+    explicitLimit > 0 &&
+    explicitLimit <= 50_000;
+  const offsetOk =
+    explicitOffset !== undefined && Number.isFinite(explicitOffset) && explicitOffset >= 0;
+
+  if (limitOk) return { kind: "passthrough", reason: "explicit-limit" };
+  if (offsetOk) return { kind: "passthrough", reason: "explicit-offset" };
+  // If the agent passed a bad limit/offset (>50k, negative, NaN), drop them
+  // and let the clamp path inject our defaults. The cleaned input flows
+  // downstream as `updatedInput` so Claude Code uses it instead.
+  const cleanedInput =
+    explicitLimit !== undefined && !limitOk
+      ? Object.fromEntries(Object.entries(toolInput).filter(([k]) => k !== "limit"))
+      : explicitOffset !== undefined && !offsetOk
+        ? Object.fromEntries(Object.entries(toolInput).filter(([k]) => k !== "offset"))
+        : toolInput;
+  toolInput = cleanedInput;
 
   const filePath = toolInput["file_path"];
   if (typeof filePath !== "string" || filePath.length === 0) {

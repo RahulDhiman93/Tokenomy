@@ -54,6 +54,25 @@ const debugLog = (entry: Record<string, unknown>): void => {
 const MAX_STDIN_BYTES = 10 * 1024 * 1024;
 const TIMEOUT_MS = 2_500;
 
+// 0.1.5+: hard wall-clock kill switch on the hook process. If anything
+// in the dispatch path runs longer than this, the watchdog fires
+// process.exit(0) so Claude Code never sees a slow / hung hook. The
+// budget is generous (10× the doctor's 50ms p95 target) so legitimate
+// work — even on large MCP responses — completes well inside it.
+const HOOK_HARD_BUDGET_MS = 1_000;
+const installHookWatchdog = (): void => {
+  const t = setTimeout(() => {
+    // Fail-open: emit nothing, exit 0. The host treats no-stdout as
+    // passthrough.
+    process.stdout.write("");
+    process.exit(0);
+  }, HOOK_HARD_BUDGET_MS);
+  // Don't keep the event loop alive just for this timer.
+  if (typeof t === "object" && t && "unref" in t && typeof (t as { unref?: () => void }).unref === "function") {
+    (t as { unref: () => void }).unref();
+  }
+};
+
 const readStdin = (): Promise<Buffer | null> =>
   new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -97,6 +116,8 @@ const readStdin = (): Promise<Buffer | null> =>
 
 const main = async (): Promise<void> => {
   const hookStart = Date.now();
+  // 0.1.5+: hard kill switch — anything past 1s exits 0 with empty stdout.
+  installHookWatchdog();
   try {
     const buf = await readStdin();
     if (!buf) {

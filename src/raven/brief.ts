@@ -151,6 +151,22 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
   if (!git.ok) return git;
   const cfg = loadConfig(git.data.root);
   if (!cfg.raven.enabled) return { ok: false, reason: "raven-disabled", hint: "Run `tokenomy raven enable` first." };
+  // 0.1.5+: refuse to brief while merge conflicts are unresolved. The diff
+  // would otherwise contain `<<<<<<<`/`=======`/`>>>>>>>` markers that
+  // confuse reviewers and pollute the markdown render. Detected by
+  // scanning the diffForFile output of every changed file for the marker
+  // shape — bounded since changed_files is already bounded by selectDiffs.
+  const conflicted = git.data.changed_files.filter((f) => {
+    const d = diffForFile(git.data.root, f, git.data.base_ref);
+    return /^<<<<<<< |^=======$|^>>>>>>> /m.test(d);
+  });
+  if (conflicted.length > 0) {
+    return {
+      ok: false,
+      reason: "merge-conflicts",
+      hint: `Resolve merge conflicts in ${conflicted.slice(0, 5).join(", ")}${conflicted.length > 5 ? `, +${conflicted.length - 5} more` : ""} before running \`tokenomy raven brief\`.`,
+    };
+  }
   const graph = graphContext(git.data.root, cfg, git.data.changed_files);
   const scores = hotspotScores(graph?.review_context);
   const diffs = selectDiffs(git.data.root, git.data.changed_files, cfg, scores, git.data.base_ref);

@@ -40,6 +40,21 @@ export const BUILTIN_PATTERNS: RedactorPattern[] = [
     name: "pem-private-key",
     re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/g,
   },
+  // 0.1.5+ added patterns. Each is conservative — anchored on a vendor-
+  // specific prefix or shape so random base64 doesn't match.
+  // Azure AD client secret values often start with these segment lengths;
+  // we anchor on the JWT-shaped header `eyJ` is already covered by `jwt`,
+  // so here we target Azure SAS tokens in connection strings.
+  { name: "azure-sas", re: /\bsig=[A-Za-z0-9%]{20,}&?/g },
+  // Cloudflare API token — 40-char base62 prefixed by the standard form.
+  { name: "cloudflare-token", re: /\bcf-[A-Za-z0-9]{32,}\b/g },
+  // Twilio Account SID + Auth Token. Account SID: AC + 32 hex. Auth token
+  // is a 32-hex string immediately following — match the pair shape.
+  { name: "twilio-sid", re: /\bAC[a-f0-9]{32}\b/g },
+  // Sentry DSN: `https://<key>@<host>/<project>` form.
+  { name: "sentry-dsn", re: /\bhttps?:\/\/[a-f0-9]{32,64}@[a-z0-9.-]+\.ingest\.sentry\.io\/\d+\b/g },
+  // GitLab personal access token.
+  { name: "gitlab-pat", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/g },
 ];
 
 export interface RedactResult {

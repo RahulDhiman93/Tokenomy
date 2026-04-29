@@ -400,7 +400,171 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   out.push(agentDetectionCheck());
   out.push(await mcpSdkCheck());
   out.push(hookPerfCheck(cfgRaw));
+  // 0.1.5+ additions
+  out.push(graphDirtyAgeCheck());
+  out.push(ravenStoreSizeCheck());
+  out.push(savingsLogSizeCheck(cfgRaw));
+  out.push(updateCacheAgeCheck());
   return out;
+};
+
+// 0.1.5+: warn when the .dirty sentinel has been pending for over an hour
+// without a successful rebuild — indicates the read-side async rebuild is
+// failing (or no MCP graph tool has fired since the edits).
+const graphDirtyAgeCheck = (): CheckResult => {
+  try {
+    const { ravenRootDir, tokenomyGraphRootDir, graphDirtySentinelPath } = require("../core/paths.js");
+    const root = tokenomyGraphRootDir();
+    if (!existsSync(root)) {
+      return { name: "Graph dirty sentinel age", ok: true, detail: "no graphs registered" };
+    }
+    const fs = require("node:fs");
+    const path = require("node:path");
+    let oldestMs = 0;
+    let oldestRepo = "";
+    for (const repoId of fs.readdirSync(root)) {
+      const dirty = graphDirtySentinelPath(repoId);
+      if (!fs.existsSync(dirty)) continue;
+      try {
+        const ageMs = Date.now() - fs.statSync(dirty).mtimeMs;
+        if (ageMs > oldestMs) {
+          oldestMs = ageMs;
+          oldestRepo = repoId;
+        }
+      } catch {
+        // skip
+      }
+    }
+    if (oldestMs === 0) {
+      return { name: "Graph dirty sentinel age", ok: true, detail: "no pending sentinel" };
+    }
+    const oneHour = 60 * 60 * 1000;
+    const ok = oldestMs < oneHour;
+    return {
+      name: "Graph dirty sentinel age",
+      ok,
+      detail: `oldest .dirty: ${Math.round(oldestMs / 60_000)}min (repo ${oldestRepo.slice(0, 12)}…)`,
+      ...(ok
+        ? {}
+        : {
+            remediation:
+              "Open Claude Code and call any graph MCP tool (e.g. `find_usages`) to trigger the async rebuild that clears the sentinel. Or run `tokenomy graph build --path \"$PWD\"`.",
+          }),
+    };
+    void ravenRootDir;
+    void path;
+  } catch (e) {
+    return { name: "Graph dirty sentinel age", ok: true, detail: `(skipped: ${(e as Error).message})` };
+  }
+};
+
+const ravenStoreSizeCheck = (): CheckResult => {
+  try {
+    const { ravenRootDir } = require("../core/paths.js");
+    const root = ravenRootDir();
+    if (!existsSync(root)) return { name: "Raven store size", ok: true, detail: "no Raven store" };
+    const fs = require("node:fs");
+    const path = require("node:path");
+    let total = 0;
+    const stack: string[] = [root];
+    let scanned = 0;
+    const CAP = 50_000;
+    while (stack.length > 0 && scanned < CAP) {
+      const dir = stack.pop()!;
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        scanned++;
+        if (scanned >= CAP) break;
+        const full = path.join(dir, name);
+        try {
+          const st = fs.statSync(full);
+          if (st.isDirectory()) stack.push(full);
+          else total += st.size;
+        } catch {
+          // skip
+        }
+      }
+    }
+    const tenMB = 10 * 1024 * 1024;
+    const ok = total < tenMB;
+    return {
+      name: "Raven store size",
+      ok,
+      detail: `${(total / 1024 / 1024).toFixed(1)} MB`,
+      ...(ok
+        ? {}
+        : {
+            remediation:
+              "Run `tokenomy raven clean --keep=20 --older-than=14` to prune old packets/reviews.",
+          }),
+    };
+  } catch (e) {
+    return { name: "Raven store size", ok: true, detail: `(skipped: ${(e as Error).message})` };
+  }
+};
+
+const savingsLogSizeCheck = (cfgRaw: Partial<Config> | undefined): CheckResult => {
+  try {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const logPath = cfgRaw?.log_path ?? path.join(tokenomyDir(), "savings.jsonl");
+    if (!existsSync(logPath)) {
+      return { name: "Savings log size", ok: true, detail: "no log yet" };
+    }
+    const st = fs.statSync(logPath);
+    const fiftyMB = 50 * 1024 * 1024;
+    const ok = st.size < fiftyMB;
+    return {
+      name: "Savings log size",
+      ok,
+      detail: `${(st.size / 1024 / 1024).toFixed(1)} MB`,
+      ...(ok
+        ? {}
+        : {
+            remediation:
+              `Truncate or rotate ~/.tokenomy/savings.jsonl. Tokenomy's stream-tail readers cap at 1 MB but the file can still bloat.`,
+          }),
+    };
+  } catch (e) {
+    return { name: "Savings log size", ok: true, detail: `(skipped: ${(e as Error).message})` };
+  }
+};
+
+const updateCacheAgeCheck = (): CheckResult => {
+  try {
+    const { updateCachePath } = require("../core/paths.js");
+    const path = updateCachePath();
+    if (!existsSync(path)) {
+      return {
+        name: "Update cache age",
+        ok: true,
+        detail: "no cache yet (will populate on next SessionStart)",
+      };
+    }
+    const fs = require("node:fs");
+    const st = fs.statSync(path);
+    const ageMs = Date.now() - st.mtimeMs;
+    const oneDay = 24 * 60 * 60 * 1000;
+    const ok = ageMs < oneDay;
+    return {
+      name: "Update cache age",
+      ok,
+      detail: `${Math.round(ageMs / 60_000)}min old`,
+      ...(ok
+        ? {}
+        : {
+            remediation:
+              "Cache is past 24h — `tokenomy update --check` should be running on SessionStart. Run it manually or restart Claude Code.",
+          }),
+    };
+  } catch (e) {
+    return { name: "Update cache age", ok: true, detail: `(skipped: ${(e as Error).message})` };
+  }
 };
 
 // runDoctorFix applies a safe subset of remediations for failing checks.

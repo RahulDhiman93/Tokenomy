@@ -12,6 +12,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-04-29
+
+### Added
+
+- **`tokenomy diagnose`** — single-command JSON health report. Covers
+  every feature (live trim, graph, Raven, Kratos, Golem, statusline,
+  update cache) plus environment metadata. Designed for users to
+  copy + paste into `tokenomy feedback` when reporting issues.
+  Exits 1 only when `tokenomy doctor` reports a hard failure. Pass
+  `--json` for the machine-readable output.
+- **+4 doctor checks**: graph dirty sentinel age, Raven store size,
+  savings.jsonl size, update cache age. Each has actionable
+  remediation in the failure path.
+
+### Hardened (production-readiness pass)
+
+- **RECON v2** — 1 non-code line reply cap (was 3). Bare `yes` / `no`
+  with no trailing period. Refuse to repeat user's words. No
+  transition words. Mandatory tables for ≥ 2 rows of any shape.
+- **Hook hard wall budget** — every hook process exits 0 with empty
+  stdout if it runs longer than 1s. Backstops the existing 2.5s
+  stdin timeout against runaway dispatch loops.
+- **Statusline hard 50ms budget** — same kill switch on the statusline
+  tick so a slow render never delays the user's CLI prompt.
+- **Read clamp validates limit/offset** — strips `limit > 50_000`,
+  negative offsets, NaN; falls through to the normal clamp path.
+- **Bash bound** — `aws logs tail`, `gcloud logging tail`, `stern`,
+  `kail` added to the streaming-form exclusion list.
+- **Redact patterns** — Azure SAS, Cloudflare, Twilio Account SID,
+  Sentry DSN, GitLab PAT.
+- **Kratos prompt-rule** — added function-calling impersonation,
+  chat-template prefix injection (`assistant:` at line start),
+  developer-mode / DAN / jailbreak boilerplate.
+- **MCP `path` arg validation** — refuses `..` directory traversal,
+  verifies the resolved path is a real directory before
+  `loadConfig` / `resolveRepoId` runs. Returns `invalid-path` with
+  an actionable hint.
+- **Raven `brief` refuses on merge conflicts** — scans changed-file
+  diffs for `<<<<<<< / ======= / >>>>>>>` markers and bails with a
+  pointer to the offending files. Earlier behavior emitted packets
+  with conflict markers in the diff body.
+- **`tokenomy update --check` timeout + 1× retry** — 5s per attempt,
+  one retry on transient nonzero. Prevents the SessionStart spawn
+  from hanging on flaky networks.
+
 ## [0.1.4] — 2026-04-29
 
 ### Fixed
@@ -937,7 +982,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.5
 [0.1.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.4
 [0.1.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.3
 [0.1.2]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.2

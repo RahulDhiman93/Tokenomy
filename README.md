@@ -45,7 +45,7 @@ tokenomy doctor                     # all checks passing
 
 Codex CLI, Cursor, Windsurf, Cline, Gemini auto-detected and registered when each is on PATH. Force one target with `--agent <name>`; inspect first with `tokenomy init --list-agents`.
 
-> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.4`. Upgrade: `tokenomy update`.
+> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.5`. Upgrade: `tokenomy update`.
 
 ---
 
@@ -141,6 +141,12 @@ Step 2 — Then ask me about each optional feature, one at a time.
      marker on the next Claude restart. ON by default. No action
      needed; just confirm.
 
+  k) Diagnose (0.1.5+) — `tokenomy diagnose` emits a JSON health
+     report covering every feature + environment. Useful for paste
+     into `tokenomy feedback` when something looks wrong. No
+     install action needed; just demo it once and move on.
+     Demo: tokenomy diagnose
+
 Step 3 — Final check:
   1. Run: tokenomy doctor
   2. Tell me to fully quit Claude Code (Cmd+Q) and reopen so the new
@@ -162,6 +168,7 @@ Each feature has its own README. Main README stays small.
 | Raven bridge | Claude-primary + Codex-reviewer handoff packets, deterministic finding compare, PR-readiness verdict | [docs/features/raven.md](./docs/features/raven.md) |
 | Kratos *(0.1.2+)* | Security shield — prompt-injection / data-exfil / secret-in-prompt detector + cross-MCP exfil-pair scanner | [docs/features/kratos.md](./docs/features/kratos.md) |
 | Feedback *(0.1.2+)* | `tokenomy feedback "..."` files a GitHub issue (via `gh` or browser fallback). No backend service. | [docs/features/feedback.md](./docs/features/feedback.md) |
+| Diagnose *(0.1.5+)* | `tokenomy diagnose [--json]` — single-shot health report covering every feature + environment. Designed to paste into `tokenomy feedback`. | [docs/features/diagnose.md](./docs/features/diagnose.md) |
 | Observability | `savings.jsonl`, `report`, `analyze`, `diff`, `learn`, `budget`, `bench`, `status-line`, `doctor`, `update` | [docs/features/observability.md](./docs/features/observability.md) |
 | Compress | `tokenomy compress` — agent rule file cleanup (CLAUDE.md, AGENTS.md, .cursor/rules) | [docs/features/compress.md](./docs/features/compress.md) |
 | Cross-agent install | Per-agent adapters for Claude / Codex / Cursor / Windsurf / Cline / Gemini | [docs/features/cross-agent.md](./docs/features/cross-agent.md) |
@@ -233,7 +240,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool + Write context nudge.
 - [x] **Phase 5.** Polish — Golem output mode, statusline, prompt-classifier, `compress`, `bench`, cross-agent installers.
 - [x] **Phase 5.5.** Codex hook foothold — user-scoped `SessionStart` + `UserPromptSubmit` hooks for Golem and prompt-classifier nudges.
-- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4).
+- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4), `tokenomy diagnose` + production-hardening pass + RECON v2 (0.1.5).
 - [ ] **Phase 7.** Language breadth — Python parser plugin, richer benchmark fixtures, npm publish at 1.0.
 - [ ] **Phase 8.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, team-ready reports. See [docs/NEXT_FEATURES.md](./docs/NEXT_FEATURES.md).
 

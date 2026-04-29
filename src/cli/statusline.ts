@@ -162,9 +162,21 @@ export const renderStatusLine = (state: StatusLineState): string => {
   return `[Tokenomy ${versionTag} · ${compact(state.tokensToday)} saved${graph}${raven}${kratos}]`;
 };
 
+// 0.1.5+: hard wall budget for the statusline tick. Past this, bail to
+// an empty string instead of risking a slow render that delays the user's
+// CLI prompt. 50 ms matches the doctor advisory budget so users who pass
+// it in `tokenomy doctor` are guaranteed to pass it at runtime.
+const STATUSLINE_BUDGET_MS = 50;
+
 export const runStatusLine = (argv: string[]): number => {
+  const start = Date.now();
+  const overBudget = (): boolean => Date.now() - start > STATUSLINE_BUDGET_MS;
   try {
     const cfg = loadConfig(process.cwd());
+    if (overBudget()) {
+      process.stdout.write("");
+      return 0;
+    }
     const state: StatusLineState = {
       active: true,
       tokensToday: sumTodaySavings(cfg.log_path),
@@ -177,6 +189,10 @@ export const runStatusLine = (argv: string[]): number => {
       kratos: cfg.kratos?.enabled === true && cfg.kratos?.continuous === true,
       updateAvailable: readUpdateCache(),
     };
+    if (overBudget()) {
+      process.stdout.write("");
+      return 0;
+    }
     // 0.1.3+: keep the update cache fresh on the order of 3h so a new
     // release shows up in the statusline within one statusline tick of
     // crossing that threshold. The spawn is fully detached + unref'd so

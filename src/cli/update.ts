@@ -78,10 +78,15 @@ export interface UpdateOptions {
   quiet?: boolean;
 }
 
-const runNpm = (args: string[], inherit = false): { status: number; stdout: string; stderr: string } => {
+const runNpm = (
+  args: string[],
+  inherit = false,
+  timeoutMs?: number,
+): { status: number; stdout: string; stderr: string } => {
   const r = spawnSync("npm", args, {
     encoding: "utf8",
     stdio: inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
   });
   return {
     status: r.status ?? 1,
@@ -93,11 +98,24 @@ const runNpm = (args: string[], inherit = false): { status: number; stdout: stri
 // Query the npm registry for the version currently tagged `<tag>`.
 // Returns null if the network call fails or npm isn't on PATH — callers
 // treat that as "can't determine" and fail open.
+//
+// 0.1.5+: 5s timeout per attempt, 1× retry on transient failure (status
+// nonzero with empty stderr — npm's signal for connection-refused or
+// dropped DNS). A second hard-fail returns null without further retries
+// so SessionStart spawns can't pile up retries on flaky networks.
 export const fetchRegistryVersion = (tag: string): string | null => {
-  const r = runNpm(["view", `tokenomy@${tag}`, "version"]);
-  if (r.status !== 0) return null;
-  const v = r.stdout.trim();
-  return v.length > 0 ? v : null;
+  const TIMEOUT_MS = 5_000;
+  const attempt = (): string | null => {
+    const r = runNpm(["view", `tokenomy@${tag}`, "version"], false, TIMEOUT_MS);
+    if (r.status !== 0) return null;
+    const v = r.stdout.trim();
+    return v.length > 0 ? v : null;
+  };
+  const first = attempt();
+  if (first !== null) return first;
+  // Retry once. Conservative — only worth it because npm view can hit a
+  // transient DNS or 5xx that resolves immediately on a second try.
+  return attempt();
 };
 
 // Heuristic: are we running from an `npm link`-style dev checkout?

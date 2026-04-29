@@ -14,6 +14,7 @@ import { runUpdate } from "./update.js";
 import { runGolem } from "./golem-cmd.js";
 import { runKratos } from "./kratos-cmd.js";
 import { runFeedback } from "./feedback.js";
+import { runDiagnose } from "./diagnose.js";
 import { runCompress } from "./compress.js";
 import { runStatusLine } from "./statusline.js";
 import { runBenchCli } from "./bench.js";
@@ -61,6 +62,7 @@ Usage:
   tokenomy kratos scan [--json]
   tokenomy kratos check <prompt text>
   tokenomy feedback "<your feedback text>" [--print-only]
+  tokenomy diagnose [--json]
   tokenomy --version | --help
 `;
 
@@ -333,6 +335,7 @@ const main = async (): Promise<number> => {
   if (cmd === "golem") return runGolem(process.argv.slice(3));
   if (cmd === "kratos") return runKratos(process.argv.slice(3));
   if (cmd === "feedback") return runFeedback(process.argv.slice(3));
+  if (cmd === "diagnose") return runDiagnose(process.argv.slice(3));
   if (cmd === "compress") return runCompress(process.argv.slice(3));
   if (cmd === "status-line") return runStatusLine(process.argv.slice(3));
   if (cmd === "bench") return runBenchCli(process.argv.slice(3));
