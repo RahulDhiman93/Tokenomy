@@ -67,6 +67,19 @@ const graphHint = (cwd: string, cfg: Config): string | null => {
 const preDispatchRead = (input: PreHookInput, cfg: Config): PreHookOutput | null => {
   const resolved = resolveReadPath(input);
   const r = readBoundRule(resolved, cfg);
+  // 0.1.5 round-5: if the rule sanitized invalid limit/offset on a
+  // passthrough path (small file / doc passthrough), emit updatedInput
+  // so Claude Code doesn't reuse the original bad values. No savings
+  // log entry — there's no token saving to claim, just a defensive
+  // input rewrite.
+  if (r.kind === "passthrough" && r.updatedInput) {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: r.updatedInput,
+      },
+    };
+  }
   if (r.kind !== "clamp" || !r.updatedInput) return null;
 
   // Heuristic savings: we reduce the Read from its default (≈2000 lines) to

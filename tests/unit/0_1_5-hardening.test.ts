@@ -203,6 +203,38 @@ test("buildDiagnoseReport: emits a complete shape", async () => {
 
 // --- Codex audit fixes ---
 
+test("readBoundRule: small file passthrough still strips invalid offset (round-5 codex catch)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokenomy-read-r5-"));
+  const path = join(dir, "small.ts");
+  writeFileSync(path, "x".repeat(100)); // below clamp threshold
+  try {
+    const r = readBoundRule({ file_path: path, offset: -5 }, cfg());
+    assert.equal(r.kind, "passthrough");
+    assert.equal(r.reason, "below-threshold");
+    // Critical: updatedInput must be set so Claude Code doesn't reuse
+    // the original tool_input with the negative offset.
+    assert.ok(r.updatedInput, "expected updatedInput on small-file passthrough when offset stripped");
+    assert.equal(r.updatedInput?.["offset"], undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readBoundRule: doc passthrough still strips invalid limit (round-5 codex catch)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokenomy-read-r5-doc-"));
+  const path = join(dir, "README.md"); // doc-passthrough extension
+  writeFileSync(path, "x".repeat(100));
+  try {
+    const r = readBoundRule({ file_path: path, limit: 1_000_000 }, cfg());
+    assert.equal(r.kind, "passthrough");
+    assert.equal(r.reason, "doc-passthrough");
+    assert.ok(r.updatedInput, "expected updatedInput on doc-passthrough when limit stripped");
+    assert.equal(r.updatedInput?.["limit"], undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("readBoundRule: valid limit + invalid offset preserves user limit (round-4 codex catch)", () => {
   const dir = mkdtempSync(join(tmpdir(), "tokenomy-read-r4-"));
   const path = join(dir, "f.ts");
