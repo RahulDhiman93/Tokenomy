@@ -78,10 +78,15 @@ export interface UpdateOptions {
   quiet?: boolean;
 }
 
-const runNpm = (args: string[], inherit = false): { status: number; stdout: string; stderr: string } => {
+const runNpm = (
+  args: string[],
+  inherit = false,
+  timeoutMs?: number,
+): { status: number; stdout: string; stderr: string } => {
   const r = spawnSync("npm", args, {
     encoding: "utf8",
     stdio: inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
   });
   return {
     status: r.status ?? 1,
@@ -93,11 +98,42 @@ const runNpm = (args: string[], inherit = false): { status: number; stdout: stri
 // Query the npm registry for the version currently tagged `<tag>`.
 // Returns null if the network call fails or npm isn't on PATH — callers
 // treat that as "can't determine" and fail open.
+//
+// 0.1.5+: 5s timeout per attempt, 1× retry on TRANSIENT failure only.
+// Permanent failures (e.g. tag doesn't exist, auth error) don't retry —
+// codex audit catch: retrying a doomed call doubles latency for nothing.
+//
+// Heuristic for "transient":
+//   - status nonzero AND stderr empty (typical signal for connect refused,
+//     timeout, DNS drop where npm bails before printing)
+//   - status nonzero AND stderr mentions "ETIMEDOUT" / "ENOTFOUND" /
+//     "ECONNRESET" / "fetch failed"
+// "Permanent" (no retry): stderr mentions "404" / "E404" / "Not found" /
+// "Unauthorized" / "ENEEDAUTH" / "EPERM".
+// Exported for unit tests so we don't have to drive live npm to verify
+// the retry classifier. 0.1.5 round-3 codex catch.
+export const isTransientNpmFailure = (stderr: string): boolean => {
+  if (stderr.length === 0) return true;
+  if (/ETIMEDOUT|ENOTFOUND|ECONNRESET|ECONNREFUSED|fetch failed|EAI_AGAIN/i.test(stderr)) return true;
+  if (/E404|404\b|not found|unauthorized|ENEEDAUTH|EPERM|EACCES/i.test(stderr)) return false;
+  // Default to transient — better to retry once than miss a real flake.
+  return true;
+};
+
 export const fetchRegistryVersion = (tag: string): string | null => {
-  const r = runNpm(["view", `tokenomy@${tag}`, "version"]);
-  if (r.status !== 0) return null;
-  const v = r.stdout.trim();
-  return v.length > 0 ? v : null;
+  const TIMEOUT_MS = 5_000;
+  const attempt = (): { ok: boolean; version: string | null; stderr: string } => {
+    const r = runNpm(["view", `tokenomy@${tag}`, "version"], false, TIMEOUT_MS);
+    if (r.status !== 0) return { ok: false, version: null, stderr: r.stderr ?? "" };
+    const v = r.stdout.trim();
+    return { ok: true, version: v.length > 0 ? v : null, stderr: "" };
+  };
+  const first = attempt();
+  if (first.ok) return first.version;
+  // Retry only when the failure looked transient.
+  if (!isTransientNpmFailure(first.stderr)) return null;
+  const second = attempt();
+  return second.ok ? second.version : null;
 };
 
 // Heuristic: are we running from an `npm link`-style dev checkout?

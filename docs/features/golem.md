@@ -10,6 +10,7 @@ Opt-in plugin (beta.1+) that injects deterministic style rules at `SessionStart`
 | `full` | + declarative sentences, no softeners ("perhaps", "maybe", "could") |
 | `ultra` | + max 3 non-code lines per reply, single-word confirmations ("Done.", "Shipped.") |
 | `grunt` | + fragments over sentences, dropped articles/pronouns, occasional "ship it." / "nope." / "aye." — caveman-adjacent energy |
+| `recon` | + zero banter, info-density only. **0.1.5+ tightened to RECON v2:** 1 non-code line cap, bare `yes` / `no` (no period), no transitions, mandatory tables for ≥ 2 rows of any shape, never repeats the user's words. |
 | `auto` | Resolved at SessionStart from `~/.tokenomy/golem-tune.json` (written by `tokenomy analyze --tune`). Falls back to `full` |
 
 ## Safety gates

@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync as fsStatSync } from "node:fs";
+import { join, resolve as pathResolve } from "node:path";
 import { loadConfig } from "../core/config.js";
 import type { Config, GraphQueryBudgetConfig, OssSearchEcosystem } from "../core/types.js";
 import { buildGraph } from "../graph/build.js";
@@ -62,6 +62,33 @@ const asObject = (value: unknown): Record<string, unknown> =>
     : {};
 
 const fail = (reason: string, hint?: string) => ({ ok: false as const, reason, ...(hint ? { hint } : {}) });
+
+// 0.1.5+: defend against directory traversal in the per-tool `path` arg.
+// Anything containing `..` segments is refused even if it eventually
+// resolves inside the repo — agents shouldn't be using `..` in MCP args
+// at all. Then verify the path resolves to a real directory before we
+// hand it to loadConfig / repo-id resolution.
+const validatePathArg = (raw: string): { ok: true; absolute: string } | { ok: false; reason: string } => {
+  if (raw.split(/[/\\]/).includes("..")) {
+    return { ok: false, reason: "path arg contains '..' (directory traversal not allowed)" };
+  }
+  let absolute: string;
+  try {
+    absolute = pathResolve(raw);
+  } catch {
+    return { ok: false, reason: "path arg failed to resolve" };
+  }
+  let stat;
+  try {
+    stat = fsStatSync(absolute);
+  } catch {
+    return { ok: false, reason: `path arg does not exist: ${absolute}` };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, reason: `path arg is not a directory: ${absolute}` };
+  }
+  return { ok: true, absolute };
+};
 
 const parseMinimalContextInput = (args: Record<string, unknown>): MinimalContextInput | null => {
   const target = asObject(args["target"]);
@@ -350,7 +377,20 @@ export const dispatchGraphTool = async (
   // cwd. Resolves the cross-repo bleed where a single MCP instance bound
   // to one cwd was returning data for the wrong repo when the agent
   // worked across multiple repos in one session.
-  const argPath = typeof args["path"] === "string" && args["path"].length > 0 ? args["path"] : null;
+  //
+  // 0.1.5+: validate `path` before adopting it. Reject:
+  //   - relative paths containing `..` (directory traversal)
+  //   - paths that don't resolve to an existing directory
+  // Safe shape resolves to absolute via path.resolve so the
+  // downstream loadConfig / resolveRepoId calls operate on a real dir.
+  const rawArgPath =
+    typeof args["path"] === "string" && args["path"].length > 0 ? args["path"] : null;
+  let argPath: string | null = null;
+  if (rawArgPath !== null) {
+    const validated = validatePathArg(rawArgPath);
+    if (!validated.ok) return fail("invalid-path", validated.reason);
+    argPath = validated.absolute;
+  }
   const effectiveCwd = argPath ?? cwd;
 
   if (RAVEN_TOOLS.has(name)) {

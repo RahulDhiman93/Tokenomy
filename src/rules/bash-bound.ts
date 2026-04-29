@@ -123,9 +123,11 @@ const hasUserPipe = (cmd: string): boolean => {
   return stripped.includes("|");
 };
 
-// Streaming / interactive commands: never bind.
+// Streaming / interactive commands: never bind. 0.1.5+ extended to cover
+// cloud log-tail forms — these block forever waiting for new lines, so an
+// `awk 'NR<=N'` cap would cut them off mid-stream and confuse the agent.
 const STREAMING_RE =
-  /(?:^|\s)(watch|top|htop|less|more)(\s|$)|(?:^|\s)(-f|-F|--follow)(\s|$)/;
+  /(?:^|\s)(watch|top|htop|less|more)(\s|$)|(?:^|\s)(-f|-F|--follow)(\s|$)|(?:^|\s)(aws\s+logs\s+tail|gcloud\s+logging\s+tail|stern|kail)(\s|$)/;
 
 // ————————————————————————————————————————————————————————————————
 // Canonicalisation: strip `sudo`, `time`, env-var prefixes.
