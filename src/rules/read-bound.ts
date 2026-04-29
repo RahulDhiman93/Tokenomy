@@ -35,16 +35,19 @@ export const readBoundRule = (
 
   if (limitOk) return { kind: "passthrough", reason: "explicit-limit" };
   if (offsetOk) return { kind: "passthrough", reason: "explicit-offset" };
-  // If the agent passed a bad limit/offset (>50k, negative, NaN), drop them
-  // and let the clamp path inject our defaults. The cleaned input flows
-  // downstream as `updatedInput` so Claude Code uses it instead.
-  const cleanedInput =
-    explicitLimit !== undefined && !limitOk
-      ? Object.fromEntries(Object.entries(toolInput).filter(([k]) => k !== "limit"))
-      : explicitOffset !== undefined && !offsetOk
-        ? Object.fromEntries(Object.entries(toolInput).filter(([k]) => k !== "offset"))
-        : toolInput;
-  toolInput = cleanedInput;
+  // If the agent passed a bad limit AND/OR a bad offset (>50k, negative,
+  // NaN), drop ALL invalid keys and let the clamp path inject our defaults.
+  // 0.1.5 round-2 codex catch: earlier code used an if-else chain, so a
+  // call with both `limit: 1e9` AND `offset: -1` would only strip whichever
+  // appeared first in the cascade and leak the other through.
+  const dropKeys = new Set<string>();
+  if (explicitLimit !== undefined && !limitOk) dropKeys.add("limit");
+  if (explicitOffset !== undefined && !offsetOk) dropKeys.add("offset");
+  if (dropKeys.size > 0) {
+    toolInput = Object.fromEntries(
+      Object.entries(toolInput).filter(([k]) => !dropKeys.has(k)),
+    );
+  }
 
   const filePath = toolInput["file_path"];
   if (typeof filePath !== "string" || filePath.length === 0) {

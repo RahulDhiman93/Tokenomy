@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -163,7 +164,7 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
   //      `+<<<<<<<` lines.
   const unmergedRaw = (() => {
     try {
-      const r = require("node:child_process").spawnSync(
+      const r = spawnSync(
         "git",
         ["ls-files", "-u", "--full-name"],
         { cwd: git.data.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },

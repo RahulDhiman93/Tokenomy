@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -186,6 +187,83 @@ test("buildDiagnoseReport: emits a complete shape", async () => {
 });
 
 // --- Codex audit fixes ---
+
+test("readBoundRule: strips BOTH invalid limit and invalid offset (round-2 codex catch)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokenomy-read-clamp-double-"));
+  const path = join(dir, "f.ts");
+  writeFileSync(path, "x".repeat(60_000));
+  try {
+    const r = readBoundRule({ file_path: path, limit: 1_000_000, offset: -5 }, cfg());
+    // Both invalid → fall through to clamp path. Reason must NOT be
+    // explicit-limit OR explicit-offset.
+    assert.notEqual(r.reason, "explicit-limit");
+    assert.notEqual(r.reason, "explicit-offset");
+    if (r.kind === "clamp") {
+      // The injected updatedInput should not carry the bad values.
+      assert.equal(r.updatedInput?.["limit"], cfg().read.injected_limit);
+      assert.equal(r.updatedInput?.["offset"], undefined);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("raven brief: refuses on real merge conflict via git ls-files -u (round-2 codex catch)", async () => {
+  // Spin up a tmp repo, create a real conflict, leave it unresolved.
+  // buildRavenPacket must refuse with reason: merge-conflicts.
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-conflict-home-"));
+  const repo = mkdtempSync(join(tmpdir(), "tokenomy-conflict-repo-"));
+  const prevHome = process.env["HOME"];
+  process.env["HOME"] = home;
+  mkdirSync(join(home, ".tokenomy"), { recursive: true });
+  writeFileSync(
+    join(home, ".tokenomy", "config.json"),
+    JSON.stringify({ raven: { enabled: true, include_graph_context: false } }),
+  );
+  // execSync wrapper that fails open on merge-conflict exit codes (which
+  // throw because git merge returns non-zero) and forwards stderr to a
+  // buffer for diagnostics.
+  const sh = (cmd: string, allowFail = false): string => {
+    try {
+      return execSync(cmd, { cwd: repo, encoding: "utf8" });
+    } catch (e) {
+      if (!allowFail) throw e;
+      return "";
+    }
+  };
+  try {
+    sh("git init -q -b main");
+    sh("git config user.name t");
+    sh("git config user.email t@x.test");
+    writeFileSync(join(repo, "f.txt"), "base\n");
+    sh("git add f.txt");
+    sh('git commit -q -m base');
+    sh("git checkout -q -b side");
+    writeFileSync(join(repo, "f.txt"), "side\n");
+    sh('git commit -aq -m side');
+    sh("git checkout -q main");
+    writeFileSync(join(repo, "f.txt"), "main2\n");
+    sh('git commit -aq -m main2');
+    // Trigger a merge conflict (do not resolve).
+    sh("git merge --no-edit side", true);
+    const ls = sh("git ls-files -u --full-name");
+    assert.ok(ls.trim().length > 0, "test setup: expected unmerged entries, got: " + ls);
+    // Confirm HEAD is reachable so the test pre-condition is sound.
+    const head = sh("git rev-parse HEAD");
+    assert.ok(/^[a-f0-9]{40}/.test(head.trim()), "test setup: HEAD not reachable mid-conflict: " + head);
+
+    // Drive buildRavenPacket — must refuse with reason: merge-conflicts.
+    const m = await import("../../src/raven/brief.js");
+    const r = m.buildRavenPacket({ cwd: repo });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    if (!r.ok) assert.equal(r.reason, "merge-conflicts");
+  } finally {
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
 
 test("update: isTransientNpmFailure distinguishes 404 (no retry) from connect-refused (retry)", async () => {
   // We can't drive runNpm's spawnSync easily without a stub; instead pull
