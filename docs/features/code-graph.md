@@ -43,6 +43,17 @@ tokenomy init --graph-path "$PWD"   # registers in every detected agent + builds
 
 TypeScript / JavaScript AST via the TS compiler (no type checker). `tsconfig.paths` / `jsconfig.paths` resolved (alpha.17+) so `@/hooks/foo` and friends link to real source files on Next.js, Vite, Nuxt, monorepos. Read-side auto-refresh (alpha.15+) rebuilds on demand when files change between queries. Fail-open everywhere.
 
+## Production-scale defaults (0.1.6+)
+
+Default graph capacity is sized for real frontend repos: 25,000 JS/TS files, 100 MB compact snapshot cap, and generated-directory excludes for tracked `dist`, `build`, `coverage`, `.next`, `.nuxt`, `.turbo`, and `storybook-static` outputs. Query responses remain budget-clipped; the larger cap only affects local snapshot storage.
+
+If a repo still exceeds the cap, `graph-too-large` reports actual snapshot bytes and configured `graph.max_snapshot_bytes` so the fix is mechanical:
+
+```bash
+tokenomy config set graph.max_snapshot_bytes 200000000
+tokenomy graph build --path "$PWD" --exclude '**/generated/**'
+```
+
 ## Incremental updates (beta.3+)
 
 `cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or > 40 % of files changed. Opt-in.

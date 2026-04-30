@@ -10,6 +10,8 @@ import {
   createAndSaveRavenPacket,
   packetDigest,
 } from "../../src/raven/brief.js";
+import { loadConfig } from "../../src/core/config.js";
+import { buildGraph } from "../../src/graph/build.js";
 import type { RavenPacket } from "../../src/raven/schema.js";
 
 const runGit = (cwd: string, args: string[]): void => {
@@ -75,6 +77,32 @@ test("buildRavenPacket: returns ok with packet + markdown for a real git repo", 
     assert.equal(packet.repo.base_ref, "main");
     assert.ok(packet.git.changed_files.includes("src/feature.ts"));
     assert.match(result.data.markdown, /# Tokenomy Raven Packet/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("buildRavenPacket: graph context surfaces last build failure when snapshot is missing", async () => {
+  const { repo, home, cleanup } = initRepo();
+  try {
+    writeFileSync(
+      join(home, ".tokenomy", "config.json"),
+      JSON.stringify({ raven: { enabled: true }, graph: { max_snapshot_bytes: 1 } }),
+    );
+    const built = await buildGraph({ cwd: repo, force: true, config: loadConfig(repo) });
+    assert.equal(built.ok, false);
+    if (!built.ok) assert.equal(built.reason, "graph-too-large");
+
+    const packet = buildRavenPacket({ cwd: repo, intent: "review" });
+    assert.equal(packet.ok, true, JSON.stringify(packet));
+    if (!packet.ok) return;
+    const review = packet.data.packet.graph?.review_context as { ok?: boolean; reason?: string; hint?: string };
+    const impact = packet.data.packet.graph?.impact_radius as { ok?: boolean; reason?: string; hint?: string };
+    assert.equal(review.ok, false);
+    assert.equal(review.reason, "graph-too-large");
+    assert.match(review.hint ?? "", /graph\.max_snapshot_bytes/);
+    assert.equal(impact.ok, false);
+    assert.equal(impact.reason, "graph-too-large");
   } finally {
     cleanup();
   }

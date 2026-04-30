@@ -42,11 +42,11 @@ export const DEFAULT_CONFIG: Config = {
   },
   graph: {
     enabled: true,
-    max_files: 2_000,
-    hard_max_files: 5_000,
+    max_files: 10_000,
+    hard_max_files: 25_000,
     build_timeout_ms: 30_000,
     max_edges_per_file: 1_000,
-    max_snapshot_bytes: 20_000_000,
+    max_snapshot_bytes: 100_000_000,
     query_budget_bytes: {
       // Build summary is a fixed small payload — 4KB is plenty.
       build_or_update_graph: 4_000,
@@ -87,6 +87,13 @@ export const DEFAULT_CONFIG: Config = {
       "**/*-bundle.js",
       "**/*-bundle.cjs",
       "**/*-bundle.mjs",
+      "**/.next/**",
+      "**/.nuxt/**",
+      "**/.turbo/**",
+      "**/coverage/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/storybook-static/**",
     ],
     auto_refresh_on_read: true,
     async_rebuild: true,

@@ -85,6 +85,7 @@ export interface GraphBuildLogEntry {
   parse_error_count: number;
   duration_ms: number;
   reason?: string;
+  hint?: string;
   skipped_files?: string[];
 }
 
