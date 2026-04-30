@@ -3,6 +3,7 @@ import { resolveRepoId } from "../repo-id.js";
 import type { Edge, Graph, GraphMeta, Node, NodeKind } from "../schema.js";
 import { JsonGraphStore } from "../store.js";
 import { getGraphStaleStatus } from "../stale.js";
+import { readLastGraphBuildFailure } from "../build-log.js";
 import type { FailOpen, QueryResult } from "../types.js";
 
 export interface GraphQueryContext {
@@ -41,7 +42,7 @@ export const loadGraphContext = (
   const store = new JsonGraphStore();
   const graph = store.loadGraph(identity.repoId);
   const meta = store.loadMeta(identity.repoId);
-  if (!graph || !meta) return fail("graph-not-built");
+  if (!graph || !meta) return readLastGraphBuildFailure(identity.repoId) ?? fail("graph-not-built");
 
   let staleFlag: boolean;
   let staleFiles: string[];

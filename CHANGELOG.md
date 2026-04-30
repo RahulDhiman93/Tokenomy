@@ -12,6 +12,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-04-30
+
+### Fixed
+
+- **Production-scale graph defaults.** Raised the graph file cap from
+  5,000 to 25,000 JS/TS files and the local snapshot cap from 20 MB to
+  100 MB so large frontend repos can actually use graph queries instead
+  of falling back to grep.
+- **Compact graph snapshots.** Store graph snapshots as compact JSON
+  instead of pretty-printed JSON. Query responses remain budget-clipped;
+  only local cache size changed.
+- **Generated-output excludes.** Default graph excludes now skip tracked
+  `.next`, `.nuxt`, `.turbo`, `coverage`, `dist`, `build`, and
+  `storybook-static` directories.
+- **Actionable graph failure reporting.** `graph-too-large` now reports
+  actual snapshot bytes and configured `graph.max_snapshot_bytes`, and
+  Raven/status/diagnose surface the last failed build reason instead of
+  masking it as `graph-not-built`.
+
 ## [0.1.5] — 2026-04-29
 
 ### Added
@@ -982,7 +1001,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.6
 [0.1.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.5
 [0.1.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.4
 [0.1.3]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.3

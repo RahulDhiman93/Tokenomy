@@ -10,6 +10,9 @@ export interface GraphStore {
   save(repoId: string, graph: Graph, meta: GraphMeta): void;
 }
 
+export const serializeGraphSnapshot = (graph: Graph): string => `${JSON.stringify(graph)}\n`;
+export const serializeGraphMeta = (meta: GraphMeta): string => `${stableStringify(meta)}\n`;
+
 const isGraph = (value: unknown): value is Graph =>
   !!value &&
   typeof value === "object" &&
@@ -42,7 +45,7 @@ export class JsonGraphStore implements GraphStore {
   }
 
   save(repoId: string, graph: Graph, meta: GraphMeta): void {
-    atomicWrite(graphSnapshotPath(repoId), `${stableStringify(graph)}\n`, false);
-    atomicWrite(graphMetaPath(repoId), `${stableStringify(meta)}\n`, false);
+    atomicWrite(graphSnapshotPath(repoId), serializeGraphSnapshot(graph), false);
+    atomicWrite(graphMetaPath(repoId), serializeGraphMeta(meta), false);
   }
 }

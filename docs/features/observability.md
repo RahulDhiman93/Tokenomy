@@ -92,11 +92,11 @@ tokenomy bench compare <a.json> <b.json>   # per-scenario regressions
 
 ## `tokenomy status-line` (beta.2+)
 
-`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.5 · GOLEM-GRUNT · 4.2k saved · graph fresh · Raven · Kratos]`.
+`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.6 · GOLEM-GRUNT · 4.2k saved · graph fresh · Raven · Kratos]`.
 
 Segments (left-to-right): version + `↑` if an update is available, GOLEM mode (when on), today's saved-tokens count, graph freshness, Raven badge (when enabled), Kratos badge (when continuous shield is on).
 
-After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.5↑`). 0.1.3+: cache TTL is 24h and SessionStart + the statusline (every 3h) auto-spawn `tokenomy update --check --quiet` so a new release surfaces on the next Claude Code restart or within 3h on a long-running session.
+After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.6↑`). 0.1.3+: cache TTL is 24h and SessionStart + the statusline (every 3h) auto-spawn `tokenomy update --check --quiet` so a new release surfaces on the next Claude Code restart or within 3h on a long-running session.
 
 Must return in < 50 ms — uses a bounded read of the log and no external I/O. Fails open: missing config or parse error → empty string → Claude Code renders nothing.
 
@@ -118,8 +118,8 @@ Single-command self-update.
 ```bash
 tokenomy update              # install latest + re-stage hook
 tokenomy update --check      # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.5 # npm-style pin
-tokenomy update --version=0.1.5
+tokenomy update@0.1.6 # npm-style pin
+tokenomy update --version=0.1.6
 tokenomy update --tag=beta   # opt into a non-default dist-tag
 ```
 

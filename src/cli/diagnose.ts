@@ -6,6 +6,7 @@ import { loadConfig } from "../core/config.js";
 import {
   feedbackLogPath,
   graphDirtySentinelPath,
+  graphBuildLogPath,
   graphMetaPath,
   graphRebuildLockPath,
   graphSnapshotPath,
@@ -14,6 +15,7 @@ import {
   updateCachePath,
 } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import { readLastGraphBuildFailure, readLastGraphBuildLog } from "../graph/build-log.js";
 import { commandExists } from "./agents/common.js";
 import { runDoctor } from "./doctor.js";
 
@@ -108,18 +110,38 @@ const sectionGraph = (): SectionResult => {
     const { repoId, repoPath } = resolveRepoId(process.cwd());
     const meta = graphMetaPath(repoId);
     const snapshot = graphSnapshotPath(repoId);
+    const buildLog = graphBuildLogPath(repoId);
     const dirty = graphDirtySentinelPath(repoId);
     const lock = graphRebuildLockPath(repoId);
     const built = existsSync(meta) && existsSync(snapshot);
+    const lastBuild = readLastGraphBuildLog(repoId);
+    const lastFailure = readLastGraphBuildFailure(repoId);
     const out: SectionResult = {
       ok: built,
       repo_id: repoId,
       repo_path: repoPath,
       meta_present: existsSync(meta),
       snapshot_present: existsSync(snapshot),
+      build_log_present: existsSync(buildLog),
       dirty_sentinel_present: existsSync(dirty),
       rebuild_in_progress: existsSync(lock),
     };
+    if (lastBuild) {
+      out.last_build = {
+        ts: lastBuild.ts,
+        built: lastBuild.built,
+        reason: lastBuild.reason,
+        hint: lastBuild.hint,
+        node_count: lastBuild.node_count,
+        edge_count: lastBuild.edge_count,
+        parse_error_count: lastBuild.parse_error_count,
+        duration_ms: lastBuild.duration_ms,
+      };
+      if (!built && !lastBuild.built && lastBuild.reason) {
+        out.reason = lastBuild.reason;
+        if (lastFailure?.hint) out.hint = lastFailure.hint;
+      }
+    }
     if (existsSync(snapshot)) {
       try {
         const st = statSync(snapshot);

@@ -45,6 +45,25 @@ test("enumerate: config exclude filters files (git mode)", () => {
   });
 });
 
+test("enumerate: default exclude skips tracked generated directories", () => {
+  return withTmpRepo((dir) => {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    mkdirSync(join(dir, ".next", "server"), { recursive: true });
+    writeFileSync(join(dir, "src", "app.ts"), "export const app = 1;\n");
+    writeFileSync(join(dir, "dist", "bundle.js"), "var x = 1;\n");
+    writeFileSync(join(dir, ".next", "server", "page.js"), "var y = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
+
+    const result = enumerateGraphFiles(dir, DEFAULT_CONFIG);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.files, ["src/app.ts"]);
+    assert.deepEqual(result.skipped_files, [".next/server/page.js", "dist/bundle.js"]);
+  });
+});
+
 test("enumerate: exclude filter runs BEFORE hard_max_files cap", () => {
   // 10 excluded vendor files + 2 real source files. hard_max_files=3.
   // Without in-loop filtering the vendor files would trip repo-too-large

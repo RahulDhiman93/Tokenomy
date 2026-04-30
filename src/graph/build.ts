@@ -2,7 +2,6 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statS
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import { graphBuildLogPath, graphDirtySentinelPath, graphLockPath } from "../core/paths.js";
-import { stableStringify } from "../util/json.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
@@ -20,7 +19,8 @@ import {
   type Node,
 } from "./schema.js";
 import { getGraphStaleStatus } from "./stale.js";
-import { JsonGraphStore } from "./store.js";
+import { JsonGraphStore, serializeGraphSnapshot } from "./store.js";
+import { readLastGraphBuildFailure } from "./build-log.js";
 import type { BuildGraphResult, FailOpen } from "./types.js";
 import { loadTypescript } from "../parsers/ts/loader.js";
 import { extractTsFileGraph } from "../parsers/ts/extract.js";
@@ -48,7 +48,7 @@ const logGraphBuild = (
     edge_count: result.ok ? result.data.edge_count : 0,
     parse_error_count: result.ok ? result.data.parse_error_count : 0,
     duration_ms: result.ok ? result.data.duration_ms : 0,
-    ...(result.ok ? { skipped_files: result.data.skipped_files } : { reason: result.reason }),
+    ...(result.ok ? { skipped_files: result.data.skipped_files } : { reason: result.reason, hint: result.hint }),
   });
 };
 
@@ -182,10 +182,13 @@ const deltaBuildFromSnapshot = async (
       edges: [...keptEdges, ...addedEdges],
       parse_errors: [...keptParseErrors, ...addedErrors],
     });
-    const serialized = `${stableStringify(graph)}\n`;
+    const serialized = serializeGraphSnapshot(graph);
     const snapshotBytes = Buffer.byteLength(serialized, "utf8");
     if (snapshotBytes > cfg.graph.max_snapshot_bytes) {
-      return fail("graph-too-large", "Snapshot exceeded graph.max_snapshot_bytes");
+      return fail(
+        "graph-too-large",
+        `Snapshot was ${snapshotBytes} bytes, exceeding graph.max_snapshot_bytes=${cfg.graph.max_snapshot_bytes}. Raise graph.max_snapshot_bytes or exclude generated/large files.`,
+      );
     }
 
     const tsconfigFingerprint = computeTsconfigFingerprint(
@@ -312,10 +315,13 @@ const buildGraphFromFiles = async (
     edges,
     parse_errors,
   });
-  const serialized = `${stableStringify(graph)}\n`;
+  const serialized = serializeGraphSnapshot(graph);
   const snapshotBytes = Buffer.byteLength(serialized, "utf8");
   if (snapshotBytes > cfg.graph.max_snapshot_bytes) {
-    return fail("graph-too-large", "Snapshot exceeded graph.max_snapshot_bytes");
+    return fail(
+      "graph-too-large",
+      `Snapshot was ${snapshotBytes} bytes, exceeding graph.max_snapshot_bytes=${cfg.graph.max_snapshot_bytes}. Raise graph.max_snapshot_bytes or exclude generated/large files.`,
+    );
   }
 
   const meta: GraphMeta = {
@@ -482,7 +488,7 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
   const store = new JsonGraphStore();
   const meta = store.loadMeta(identity.repoId);
   const graph = store.loadGraph(identity.repoId);
-  if (!meta || !graph) return fail("graph-not-built");
+  if (!meta || !graph) return readLastGraphBuildFailure(identity.repoId) ?? fail("graph-not-built");
 
   const stale = getGraphStaleStatus(identity.repoPath, meta, config);
   if (!stale.ok) return stale;
