@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnUpdateCheck } from "../../src/cli/update-check-spawn.js";
+import { updateCachePath } from "../../src/core/paths.js";
 import {
   shouldRefreshUpdateCache,
   updateCacheAgeMs,
@@ -88,5 +90,29 @@ test("updateCacheAgeMs: returns positive ms when fetched_at is in the past", () 
     assert.ok(age! >= 7 * 60 * 1000 - 1000);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("spawnUpdateCheck writes a throttle cache marker before detached spawn", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-update-cache-home-"));
+  const bin = join(home, "bin");
+  const prevHome = process.env["HOME"];
+  const prevPath = process.env["PATH"];
+  try {
+    mkdirSync(bin, { recursive: true });
+    process.env["HOME"] = home;
+    process.env["PATH"] = bin;
+    spawnUpdateCheck();
+    assert.equal(existsSync(updateCachePath()), true);
+    const cache = JSON.parse(readFileSync(updateCachePath(), "utf8"));
+    assert.equal(typeof cache.fetched_at, "string");
+    assert.equal(shouldRefreshUpdateCache(updateCachePath()), false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    if (prevHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prevHome;
+    if (prevPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = prevPath;
+    rmSync(home, { recursive: true, force: true });
   }
 });

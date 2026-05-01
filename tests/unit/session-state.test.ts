@@ -56,6 +56,38 @@ test("updateSessionState: append-only ledger never loses increments (race-safe)"
   }
 });
 
+test("readSessionState: tail-only read on a >256KB ledger", () => {
+  const h = setupHome();
+  try {
+    const sid = "huge-sid";
+    const path = sessionStatePath(sid);
+    mkdirSync(sessionStateDir(), { recursive: true });
+    // Build ~1 MB of valid JSONL entries — readLedger should tail-read
+    // the last 256 KB only and still produce a sensible aggregate.
+    const lines: string[] = [];
+    for (let i = 0; i < 12_000; i++) {
+      lines.push(JSON.stringify({ ts: `2026-04-30T00:00:${(i % 60).toString().padStart(2, "0")}Z`, tool: "Bash", tokens: 1 }));
+    }
+    writeFileSync(path, lines.join("\n") + "\n", "utf8");
+    const state = readSessionState(sid);
+    assert.ok(state);
+    // Tail-only read: total reflects the ~last-N entries that fit in 256KB.
+    assert.ok(state!.running_estimated_tokens > 0);
+    assert.ok(state!.running_estimated_tokens < 12_000, "tail read must drop earlier entries");
+  } finally {
+    h.restore();
+  }
+});
+
+test("readSessionState: missing file returns null", () => {
+  const h = setupHome();
+  try {
+    assert.equal(readSessionState("never-touched-sid"), null);
+  } finally {
+    h.restore();
+  }
+});
+
 test("updateSessionState: prunes files older than TTL", () => {
   const h = setupHome();
   try {

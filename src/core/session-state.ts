@@ -1,8 +1,11 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   statSync,
   unlinkSync,
@@ -41,9 +44,56 @@ const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48h
 // the disk. If total > cap, the oldest files are deleted until under cap.
 const SESSION_DIR_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
 
+// 0.1.7+: bounded tail read. Pre-0.1.7 readLedger slurped the entire
+// ledger on every Bash PreToolUse — a long session's 25 MB file was
+// re-parsed line-by-line on every call, regularly tripping the 1s hook
+// watchdog. Now we read only the last 256 KB and parse from the first
+// newline forward (drop any partial leading line). Budget-rule totals
+// are advisory; an off-by-some-old-entries undercount on very long
+// sessions is fine for an advisory rule.
+const SESSION_LEDGER_TAIL_BYTES = 256 * 1024;
+
 const readLedger = (path: string): SessionStateEntry[] => {
   if (!existsSync(path)) return [];
-  const lines = readFileSync(path, "utf8").split("\n");
+  let buf: Buffer;
+  let tailed = false;
+  try {
+    const st = statSync(path);
+    if (st.size <= SESSION_LEDGER_TAIL_BYTES) {
+      buf = readFileSync(path);
+    } else {
+      tailed = true;
+      const fd = openSync(path, "r");
+      try {
+        buf = Buffer.alloc(SESSION_LEDGER_TAIL_BYTES);
+        readSync(fd, buf, 0, SESSION_LEDGER_TAIL_BYTES, st.size - SESSION_LEDGER_TAIL_BYTES);
+      } finally {
+        closeSync(fd);
+      }
+    }
+  } catch {
+    return [];
+  }
+  const text = buf.toString("utf8");
+  // When we tailed past a partial line, drop everything before the first
+  // newline so we never feed a partial JSON line to safeParse. Track
+  // `tailed` from the file size — comparing buf.length to the cap was
+  // wrong when a non-tailed file happened to be exactly the cap size,
+  // and didn't handle the no-newline-in-tail case (codex round 1).
+  if (tailed) {
+    const nl = text.indexOf("\n");
+    if (nl < 0) return [];
+    const lines = text.slice(nl + 1).split("\n");
+    const out: SessionStateEntry[] = [];
+    for (const line of lines) {
+      if (!line) continue;
+      const e = safeParse<SessionStateEntry>(line);
+      if (!e || typeof e.tokens !== "number") continue;
+      out.push(e);
+    }
+    return out;
+  }
+  const lines = text.split("\n");
   const out: SessionStateEntry[] = [];
   for (const line of lines) {
     if (!line) continue;

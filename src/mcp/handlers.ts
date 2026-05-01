@@ -1,4 +1,4 @@
-import { existsSync, statSync as fsStatSync } from "node:fs";
+import { existsSync, realpathSync, statSync as fsStatSync } from "node:fs";
 import { join, resolve as pathResolve } from "node:path";
 import { loadConfig } from "../core/config.js";
 import type { Config, GraphQueryBudgetConfig, OssSearchEcosystem } from "../core/types.js";
@@ -86,6 +86,14 @@ const validatePathArg = (raw: string): { ok: true; absolute: string } | { ok: fa
   }
   if (!stat.isDirectory()) {
     return { ok: false, reason: `path arg is not a directory: ${absolute}` };
+  }
+  // 0.1.7+: realpath the resolved path so macOS `/var` ↔ `/private/var`
+  // (and other symlinked roots) don't produce a different `repoId` than
+  // what the user registered via `tokenomy init --graph-path`.
+  try {
+    absolute = realpathSync(absolute);
+  } catch {
+    // best-effort; fall back to the lexically-resolved path
   }
   return { ok: true, absolute };
 };

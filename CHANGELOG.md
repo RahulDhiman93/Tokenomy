@@ -12,6 +12,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-04-30
+
+### Fixed
+
+- **Codex CLI startup compatibility.** `tokenomy init` no longer
+  auto-registers `tokenomy-graph` as a Codex MCP server. Codex can hang
+  while probing user MCP servers through its `codex_apps/mcp_servers`
+  path, so Codex installs now keep Tokenomy hooks enabled and remove any
+  older `tokenomy-graph` Codex MCP entry as a self-healing step.
+- **Fail-open routine paths.** Added hard timeouts to Codex MCP cleanup
+  and PATH detection, made Codex-only init avoid graph build/reporting
+  paths, changed self-update re-init to skip graph rebuilds, throttled
+  detached update checks even when npm/network is down, and made repo
+  search use one end-to-end deadline instead of multiplying timeouts per
+  branch/query.
+- **Hot-path git timeouts.** `resolveRepoId` (called from every MCP
+  graph tool, every PreToolUse Read, and the statusline) now has a 1.5 s
+  timeout + cheap `.git` ancestor gate so a wedged `.git/index.lock`,
+  fsmonitor stall, or NFS hiccup can never hang the agent. Same hardening
+  applied to every Raven `git` call (5 s timeout, 16 MB buffer cap).
+- **Build-lock stale reclaim.** A SIGKILL'd `tokenomy graph build`
+  previously leaked `.lock` and blocked every future build until manual
+  `rm`. Locks now stamp PID + ISO timestamp; conflicts auto-reclaim when
+  the holder PID is dead OR the lock is older than 10 minutes. Legacy
+  empty-file locks reclaim by mtime.
+- **Windows `commandExists`.** Adapter detection on Windows now uses
+  `where.exe` instead of `which`, so `tokenomy init` correctly detects
+  `claude.exe`, `codex.exe`, etc. Pre-0.1.7 every Windows install
+  reported "no agents detected" even with the CLIs on PATH.
+- **Redact-pre size cap.** Edit/Write/Bash content above 1 MB now
+  passthrough the redact rule instead of running ~12 regex passes that
+  could trip the 1 s hook watchdog (and silently drop the redact pass on
+  legitimate big writes).
+- **Bounded session-state read.** The budget rule's per-session ledger
+  is now tail-read at 256 KB instead of slurping the whole file (cap
+  was 25 MB) on every Bash PreToolUse — long sessions no longer trip
+  the hook watchdog.
+- **Init rollback.** `tokenomy init` now restores the settings.json
+  backup on any settings-write failure instead of leaving the user with
+  a half-patched file.
+- **Debug-log secret hygiene.** `~/.tokenomy/debug.jsonl` previewer
+  now redacts `Edit.old_string`, `Edit.new_string`, and `MultiEdit.edits`
+  the same way it already redacts `Write.content`.
+- **macOS path identity.** MCP tools now `realpathSync` the validated
+  `path` arg so `/var/folders/...` (TMPDIR) and `/private/var/...` map
+  to the same `repoId` Tokenomy registered at init time.
+- **Stricter `compareVersions`.** Numeric main components require pure
+  digits; `1.0a` no longer silently parses as `1.0.0`.
+
 ## [0.1.6] — 2026-04-30
 
 ### Fixed
@@ -1001,7 +1050,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7
 [0.1.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.6
 [0.1.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.5
 [0.1.4]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.4

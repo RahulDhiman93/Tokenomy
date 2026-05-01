@@ -1,6 +1,6 @@
 # Cross-agent install
 
-`tokenomy init --graph-path "$PWD"` auto-detects graph-capable agents and registers `tokenomy-graph` where possible.
+`tokenomy init --graph-path "$PWD"` auto-detects graph-capable agents and registers `tokenomy-graph` where compatible. Codex CLI gets hooks only; Tokenomy removes older Codex `tokenomy-graph` MCP entries because Codex can hang while probing user MCP servers.
 
 ```bash
 tokenomy init --list-agents                  # detection table
@@ -13,7 +13,7 @@ tokenomy uninstall --agent cursor
 | Agent | Hooks | Graph MCP | Install target |
 |---|---:|---:|---|
 | Claude Code | full | yes | `~/.claude/settings.json` + `~/.claude.json` |
-| Codex CLI | partial | yes | `codex mcp add tokenomy-graph ...` + `~/.codex/hooks.json` |
+| Codex CLI | partial | no | `~/.codex/hooks.json`; removes older `tokenomy-graph` MCP entry |
 | Cursor | — | yes | `~/.cursor/mcp.json` |
 | Windsurf | — | yes | `~/.codeium/windsurf/mcp_config.json` |
 | Cline | — | yes | `~/.cline/mcp_settings.json` |

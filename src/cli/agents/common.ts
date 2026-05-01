@@ -23,8 +23,21 @@ export interface AgentAdapter {
   uninstall?: (backup: boolean) => AgentInstallResult;
 }
 
-export const commandExists = (cmd: string): boolean =>
-  spawnSync("which", [cmd], { encoding: "utf8" }).status === 0;
+const COMMAND_EXISTS_TIMEOUT_MS = 1_000;
+
+// 0.1.7+: Windows uses `where.exe`, not `which`. Pre-0.1.7 every adapter
+// `detect()` returned false on Windows because `which` doesn't exist on
+// stock cmd/PowerShell, so `tokenomy init` reported "no agents detected"
+// even when codex.exe / claude.exe were on PATH.
+export const commandExists = (cmd: string): boolean => {
+  const probe = process.platform === "win32" ? "where" : "which";
+  return (
+    spawnSync(probe, [cmd], {
+      encoding: "utf8",
+      timeout: COMMAND_EXISTS_TIMEOUT_MS,
+    }).status === 0
+  );
+};
 
 export const homePath = (...parts: string[]): string => join(homedir(), ...parts);
 

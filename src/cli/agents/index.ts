@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AgentAdapter, AgentInstallResult, AgentName } from "./common.js";
 import { commandExists, homePath, patchMcpJson, removeMcpJson } from "./common.js";
 import { hookBinaryPath } from "../../core/paths.js";
@@ -8,16 +10,55 @@ import {
   upsertCodexTokenomyHooks,
 } from "../../util/codex-config.js";
 
-const codexInstall = (graphPath: string, backup: boolean): AgentInstallResult => {
+const CODEX_MCP_REMOVE_TIMEOUT_MS = 2_000;
+
+// 0.1.7+: surgical fallback when `codex mcp remove` times out or exits
+// non-zero. The CLI is the canonical path, but if it hangs we directly
+// edit ~/.codex/config.toml to drop any `[mcp_servers.tokenomy-graph]`
+// table so older installs heal even when Codex itself can't run. Bails
+// when the config contains TOML triple-quoted multi-line strings (codex
+// round 2 catch) — the regex is not TOML-aware so we'd risk matching
+// `[mcp_servers.tokenomy-graph]` literal text inside a heredoc and
+// truncating user content.
+const surgicalRemoveCodexGraphMcp = (): boolean => {
+  try {
+    const path = join(homedir(), ".codex", "config.toml");
+    if (!existsSync(path)) return false;
+    const before = readFileSync(path, "utf8");
+    if (before.includes('"""') || before.includes("'''")) return false;
+    const re = /^\[mcp_servers\.tokenomy-graph\][^\n]*\n(?:(?!^\[)[^\n]*\n?)*/m;
+    if (!re.test(before)) return false;
+    const after = before.replace(re, "");
+    if (after === before) return false;
+    writeFileSync(path, after);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeCodexGraphMcp = (): ReturnType<typeof spawnSync> => {
+  const r = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], {
+    stdio: "ignore",
+    timeout: CODEX_MCP_REMOVE_TIMEOUT_MS,
+  });
+  if (r.status !== 0) {
+    // CLI failed (timeout, hang, non-zero exit). Surgically drop the
+    // table from config.toml so older installs still heal.
+    surgicalRemoveCodexGraphMcp();
+  }
+  return r;
+};
+
+const codexInstall = (_graphPath: string, backup: boolean): AgentInstallResult => {
   if (!commandExists("codex")) {
     return { agent: "codex", installed: false, detail: "codex not on PATH" };
   }
-  spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
-  const add = spawnSync(
-    "codex",
-    ["mcp", "add", "tokenomy-graph", "--", "tokenomy", "graph", "serve", "--path", graphPath],
-    { stdio: "ignore" },
-  );
+  // Codex CLI currently probes configured MCP servers through its
+  // codex_apps/mcp_servers flow. A user-scoped tokenomy-graph stdio server
+  // can make that probe hang, so init heals older installs by removing it
+  // and keeps Codex support to hooks only.
+  const rm = removeCodexGraphMcp();
   let hookDetail = "hooks skipped";
   try {
     const hooks = upsertCodexTokenomyHooks(hookBinaryPath(), backup);
@@ -27,17 +68,17 @@ const codexInstall = (graphPath: string, backup: boolean): AgentInstallResult =>
   }
   return {
     agent: "codex",
-    installed: add.status === 0 && hookDetail !== "hooks failed",
+    installed: hookDetail !== "hooks failed",
     detail:
-      add.status === 0
-        ? `codex mcp add tokenomy-graph; ${hookDetail}`
-        : `codex mcp add failed; ${hookDetail}`,
+      rm.status === 0
+        ? `codex mcp tokenomy-graph removed; graph MCP skipped; ${hookDetail}`
+        : `graph MCP skipped; ${hookDetail}`,
   };
 };
 
 const codexUninstall = (backup: boolean): AgentInstallResult => {
   if (!commandExists("codex")) return { agent: "codex", installed: false, detail: "codex not on PATH" };
-  const rm = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+  const rm = removeCodexGraphMcp();
   let hookDetail = "hooks removed";
   try {
     removeCodexTokenomyHooks(hookBinaryPath(), backup);

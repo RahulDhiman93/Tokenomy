@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { claudeSettingsPath, hookBinaryPath, tokenomyDir } from "../core/paths.js";
 import { atomicWrite } from "../util/atomic.js";
 import { backupFile } from "../util/backup.js";
@@ -10,6 +12,8 @@ import { removeClaudeMcpServer } from "../util/claude-user-config.js";
 import { deleteManifestFile, readManifest, writeManifest, removeEntryByCommand } from "../util/manifest.js";
 import { uninstallAgent } from "./agents/index.js";
 import type { AgentInstallResult, AgentName } from "./agents/common.js";
+
+const CODEX_MCP_REMOVE_TIMEOUT_MS = 2_000;
 
 export interface UninstallOptions {
   purge?: boolean;
@@ -60,10 +64,32 @@ export const runUninstall = (opts: UninstallOptions = {}): {
   }
 
   // Codex CLI registration (if present): remove via its own tool.
+  // 0.1.7+: surgical fallback if the CLI times out / exits non-zero so
+  // an older `[mcp_servers.tokenomy-graph]` entry still gets cleaned.
   try {
-    const which = spawnSync("which", ["codex"], { encoding: "utf8" });
+    const probeCmd = process.platform === "win32" ? "where" : "which";
+    const which = spawnSync(probeCmd, ["codex"], { encoding: "utf8", timeout: 1_000 });
     if (which.status === 0) {
-      spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], { stdio: "ignore" });
+      const r = spawnSync("codex", ["mcp", "remove", "tokenomy-graph"], {
+        stdio: "ignore",
+        timeout: CODEX_MCP_REMOVE_TIMEOUT_MS,
+      });
+      if (r.status !== 0) {
+        try {
+          const cfgPath = join(homedir(), ".codex", "config.toml");
+          if (existsSync(cfgPath)) {
+            const before = readFileSync(cfgPath, "utf8");
+            // Skip when the config has TOML multi-line strings — regex is
+            // not TOML-aware (codex round 2).
+            if (!before.includes('"""') && !before.includes("'''")) {
+              const re = /^\[mcp_servers\.tokenomy-graph\][^\n]*\n(?:(?!^\[)[^\n]*\n?)*/m;
+              if (re.test(before)) writeFileSync(cfgPath, before.replace(re, ""));
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
     }
   } catch {
     // best-effort

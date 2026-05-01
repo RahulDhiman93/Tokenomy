@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 export interface RepoSearchOptions {
   timeoutMs: number;
   maxResults: number;
+  expiresAt?: number;
 }
 
 export interface RepoAlternative {
@@ -82,6 +83,19 @@ const STAGE_ONE_BUFFER = 4_000_000; // ~4 MB of file paths — generous headroom
 // tens of thousands of chars. 8 MB leaves enough headroom to avoid ENOBUFS.
 const STAGE_TWO_BUFFER = 8_000_000;
 
+const withDeadline = (opts: RepoSearchOptions): RepoSearchOptions => ({
+  ...opts,
+  expiresAt: opts.expiresAt ?? Date.now() + opts.timeoutMs,
+});
+
+const remainingTimeoutMs = (opts: RepoSearchOptions): number => {
+  if (opts.expiresAt === undefined) return opts.timeoutMs;
+  return Math.max(0, Math.min(opts.timeoutMs, opts.expiresAt - Date.now()));
+};
+
+const deadlineExpired = (opts: RepoSearchOptions): boolean =>
+  remainingTimeoutMs(opts) <= 0;
+
 // Relevance ranking for Stage 1: score candidate files by how many distinct
 // query tokens they contain. A file matching both `useRuntimeConfig` AND
 // `provider` ranks above a file matching only the common word `provider`.
@@ -100,13 +114,15 @@ const rankFilesByTokenHits = (
   const scores = new Map<string, number>();
   const branchPrefix = branch ? `${branch}:` : null;
   for (const token of tokens) {
+    const timeout = remainingTimeoutMs(opts);
+    if (timeout <= 0) break;
     const args = branch
       ? ["grep", "-l", "-i", "-E", escapeRegex(token), branch]
       : ["grep", "-l", "-i", "-E", escapeRegex(token), "--", "."];
     const r = spawnSync("git", args, {
       cwd,
       encoding: "utf8",
-      timeout: opts.timeoutMs,
+      timeout,
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: STAGE_ONE_BUFFER,
     });
@@ -148,13 +164,15 @@ const currentBranchMatches = (
   if (ranked.length === 0) return [];
   const files = ranked.map((entry) => entry.file);
   const pattern = tokens.map(escapeRegex).join("|");
+  const timeout = remainingTimeoutMs(opts);
+  if (timeout <= 0) return [];
   const r = spawnSync(
     "git",
     ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, "--", ...files],
     {
       cwd,
       encoding: "utf8",
-      timeout: opts.timeoutMs,
+      timeout,
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: STAGE_TWO_BUFFER,
     },
@@ -169,20 +187,24 @@ const currentBranchMatches = (
     .slice(0, opts.maxResults);
 };
 
-const branchNames = (cwd: string, timeoutMs: number): string[] => {
+const branchNames = (cwd: string, opts: RepoSearchOptions): string[] => {
+  const currentTimeout = remainingTimeoutMs(opts);
+  if (currentTimeout <= 0) return [];
   const current = spawnSync("git", ["branch", "--show-current"], {
     cwd,
     encoding: "utf8",
-    timeout: timeoutMs,
+    timeout: currentTimeout,
     stdio: ["ignore", "pipe", "ignore"],
   }).stdout?.trim();
+  const refsTimeout = remainingTimeoutMs(opts);
+  if (refsTimeout <= 0) return [];
   const refs = spawnSync(
     "git",
     ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"],
     {
       cwd,
       encoding: "utf8",
-      timeout: timeoutMs,
+      timeout: refsTimeout,
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 64_000,
     },
@@ -210,18 +232,21 @@ const otherBranchMatches = (
 ): RepoAlternative[] => {
   const out: RepoAlternative[] = [];
   const pattern = tokens.map(escapeRegex).join("|");
-  for (const branch of branchNames(cwd, opts.timeoutMs)) {
+  for (const branch of branchNames(cwd, opts)) {
+    if (deadlineExpired(opts)) break;
     if (out.length + already >= opts.maxResults) break;
     const ranked = rankFilesByTokenHits(cwd, tokens, opts, branch);
     if (ranked.length === 0) continue;
     const files = ranked.map((entry) => entry.file);
+    const timeout = remainingTimeoutMs(opts);
+    if (timeout <= 0) break;
     const r = spawnSync(
       "git",
       ["grep", "-n", "-i", "-E", "--max-count", "3", pattern, branch, "--", ...files],
       {
         cwd,
         encoding: "utf8",
-        timeout: opts.timeoutMs,
+        timeout,
         stdio: ["ignore", "pipe", "ignore"],
         maxBuffer: STAGE_TWO_BUFFER,
       },
@@ -247,11 +272,13 @@ const otherBranchMatches = (
   return out;
 };
 
-const isGitWorktree = (cwd: string, timeoutMs: number): boolean => {
+const isGitWorktree = (cwd: string, opts: RepoSearchOptions): boolean => {
+  const timeout = remainingTimeoutMs(opts);
+  if (timeout <= 0) return false;
   const r = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd,
     encoding: "utf8",
-    timeout: timeoutMs,
+    timeout,
     stdio: ["ignore", "pipe", "ignore"],
   });
   return r.status === 0 && r.stdout?.trim() === "true";
@@ -294,10 +321,9 @@ const walkMatches = (
   const regex = new RegExp(pattern, "i");
   const out: RepoAlternative[] = [];
   const stack: string[] = [cwd];
-  const started = Date.now();
   let filesScanned = 0;
   while (stack.length > 0 && out.length < opts.maxResults) {
-    if (Date.now() - started > opts.timeoutMs) break;
+    if (deadlineExpired(opts)) break;
     if (filesScanned > 2_000) break;
     const dir = stack.pop()!;
     let entries;
@@ -360,6 +386,7 @@ export const repoSearch = (
   query: string,
   opts: RepoSearchOptions,
 ): RepoSearchResult => {
+  const scopedOpts = withDeadline(opts);
   const tokens = queryTokens(query);
   if (tokens.length === 0) {
     return fail("invalid-input", "repo search query has no searchable tokens");
@@ -367,11 +394,11 @@ export const repoSearch = (
   // Non-git worktrees (tmp dirs, pre-init projects) still have source files we
   // should surface — fall back to a filesystem walk so the tool isn't silently
   // empty outside a repo.
-  if (!isGitWorktree(cwd, opts.timeoutMs)) {
+  if (!isGitWorktree(cwd, scopedOpts)) {
     const pattern = tokens.map(escapeRegex).join("|");
-    return { ok: true, results: walkMatches(cwd, pattern, opts) };
+    return { ok: true, results: walkMatches(cwd, pattern, scopedOpts) };
   }
-  const current = currentBranchMatches(cwd, tokens, opts);
-  const other = otherBranchMatches(cwd, tokens, opts, current.length);
-  return { ok: true, results: [...current, ...other].slice(0, opts.maxResults) };
+  const current = currentBranchMatches(cwd, tokens, scopedOpts);
+  const other = otherBranchMatches(cwd, tokens, scopedOpts, current.length);
+  return { ok: true, results: [...current, ...other].slice(0, scopedOpts.maxResults) };
 };

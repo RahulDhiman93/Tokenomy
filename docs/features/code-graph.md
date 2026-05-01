@@ -25,13 +25,13 @@ All outputs are budget-clipped per tool. Read-only graph tools are LRU-cached on
 ## Setup
 
 ```bash
-tokenomy init --graph-path "$PWD"   # registers in every detected agent + builds the graph
+tokenomy init --graph-path "$PWD"   # registers graph MCP where compatible + builds the graph
 ```
 
 | Agent | Install target |
 |---|---|
 | Claude Code | `~/.claude/settings.json` + `~/.claude.json` |
-| Codex CLI | `codex mcp add tokenomy-graph ...` + `~/.codex/hooks.json` |
+| Codex CLI | `~/.codex/hooks.json` only; Codex MCP auto-registration is skipped |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | Cline | `~/.cline/mcp_settings.json` |

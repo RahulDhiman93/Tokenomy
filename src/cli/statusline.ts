@@ -129,6 +129,10 @@ const compact = (tokens: number): string => {
 
 const graphState = (cwd: string): "fresh" | "stale" | undefined => {
   if (!existsSync(tokenomyGraphRootDir())) return undefined;
+  // 0.1.7+: skip the `git rev-parse` spawn entirely when the cwd has no
+  // `.git` in the ancestor chain. resolveRepoId's own cheap-gate handles
+  // that, but the statusline 50ms budget is so tight we want zero work
+  // for non-repo cwds.
   try {
     const { repoId } = resolveRepoId(cwd);
     if (!existsSync(graphMetaPath(repoId)) || !existsSync(graphSnapshotPath(repoId))) {

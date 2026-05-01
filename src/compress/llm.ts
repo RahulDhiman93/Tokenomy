@@ -21,7 +21,8 @@ File:
 `;
 
 export const compressWithLocalClaude = (text: string): LlmCompressResult => {
-  const probe = spawnSync("which", ["claude"], { encoding: "utf8" });
+  const probeCmd = process.platform === "win32" ? "where" : "which";
+  const probe = spawnSync(probeCmd, ["claude"], { encoding: "utf8", timeout: 1_000 });
   if (probe.status !== 0) return { ok: false, text, reason: "claude-cli-not-found" };
 
   const result = spawnSync("claude", ["--print"], {

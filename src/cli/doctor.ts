@@ -129,8 +129,20 @@ const smokeSpawnCheck = async (): Promise<CheckResult> => {
   };
   const start = Date.now();
   const child = spawn(p, [], { stdio: ["pipe", "pipe", "pipe"] });
+  // 0.1.7+: a hook that exits before reading stdin can race the
+  // `child.stdin.end()` write below and propagate EPIPE as an uncaught
+  // exception. Swallow stream errors — the smoke check only cares about
+  // the child's exit code, not whether stdin was consumed.
+  child.stdin.on("error", () => {});
+  child.stdout.on("error", () => {});
+  child.stderr.on("error", () => {});
+  child.on("error", () => {});
   const timer = setTimeout(() => child.kill("SIGKILL"), 1_000);
-  child.stdin.end(JSON.stringify(sample));
+  try {
+    child.stdin.end(JSON.stringify(sample));
+  } catch {
+    // best-effort
+  }
   const chunks: Buffer[] = [];
   child.stdout.on("data", (c: Buffer) => chunks.push(c));
   const [code] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
