@@ -153,7 +153,7 @@ test("doctor: malformed graph entry, overlap mcp hook, missing PreToolUse", asyn
     mkdirSync(dirname(sp), { recursive: true });
     const hook = hookBinaryPath();
     mkdirSync(dirname(hook), { recursive: true });
-    writeFileSync(hook, "#!/bin/sh\nexit 0\n", "utf8");
+    writeFileSync(hook, "#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n", "utf8");
     chmodSync(hook, 0o755);
     const command = `"${hook}"`;
     writeFileSync(
@@ -269,7 +269,7 @@ test("doctorFix: re-init when entries missing", async () => {
   try {
     const hook = hookBinaryPath();
     mkdirSync(dirname(hook), { recursive: true });
-    writeFileSync(hook, "#!/bin/sh\nexit 0\n", "utf8");
+    writeFileSync(hook, "#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n", "utf8");
     chmodSync(hook, 0o755);
     const sp = claudeSettingsPath();
     mkdirSync(dirname(sp), { recursive: true });
@@ -1136,7 +1136,7 @@ test("uninstall: surgical codex MCP removal when CLI exits non-zero", async () =
     // Pre-create the manifest + hook so runUninstall has work
     const hook = hookBinaryPath();
     mkdirSync(dirname(hook), { recursive: true });
-    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    writeFileSync(hook, "#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n");
     chmodSync(hook, 0o755);
     const { runUninstall } = await import("../../src/cli/uninstall.js");
     runUninstall({ purge: false, backup: false });
