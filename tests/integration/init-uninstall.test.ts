@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
@@ -176,6 +177,70 @@ test("init --graph-path registers tokenomy-graph in ~/.claude.json and uninstall
     const afterClaudeJson = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
     assert.equal(afterClaudeJson.mcpServers, undefined);
   } finally {
+    h.restore();
+  }
+});
+
+test("init --agent codex removes tokenomy-graph MCP and keeps Codex hooks", () => {
+  const h = setupHome();
+  const prevPath = process.env["PATH"];
+  try {
+    const bin = join(h.home, "bin");
+    const repo = join(h.home, "repo");
+    const log = join(h.home, "codex-args.log");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const codex = join(bin, "codex");
+    writeFileSync(
+      codex,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`,
+    );
+    chmodSync(codex, 0o755);
+    process.env["PATH"] = `${bin}:${prevPath ?? ""}`;
+
+    const result = runInit({ agent: "codex", graphPath: repo, backup: false });
+    assert.equal(result.agentResults.length, 1);
+    assert.equal(result.agentResults[0]?.agent, "codex");
+    assert.equal(result.agentResults[0]?.installed, true);
+    assert.match(result.agentResults[0]?.detail ?? "", /graph MCP skipped/);
+
+    const calls = readFileSync(log, "utf8");
+    assert.match(calls, /mcp remove tokenomy-graph/);
+    assert.doesNotMatch(calls, /mcp add tokenomy-graph/);
+
+    const hooks = JSON.parse(readFileSync(join(h.home, ".codex", "hooks.json"), "utf8"));
+    assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, result.hookPath);
+    assert.equal(hooks.hooks.UserPromptSubmit[0].hooks[0].command, result.hookPath);
+  } finally {
+    if (prevPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = prevPath;
+    h.restore();
+  }
+});
+
+test("init --agent codex without graph path does not report graph server path", () => {
+  const h = setupHome();
+  const prevPath = process.env["PATH"];
+  try {
+    const bin = join(h.home, "bin");
+    const log = join(h.home, "codex-args.log");
+    mkdirSync(bin, { recursive: true });
+    const codex = join(bin, "codex");
+    writeFileSync(
+      codex,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`,
+    );
+    chmodSync(codex, 0o755);
+    process.env["PATH"] = `${bin}:${prevPath ?? ""}`;
+
+    const result = runInit({ agent: "codex", backup: false });
+    assert.equal(result.graphServerPath, null);
+    assert.equal(result.agentResults[0]?.agent, "codex");
+    assert.equal(result.agentResults[0]?.installed, true);
+    assert.equal(existsSync(join(h.home, ".codex", "hooks.json")), true);
+  } finally {
+    if (prevPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = prevPath;
     h.restore();
   }
 });

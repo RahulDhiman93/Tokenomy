@@ -1,4 +1,10 @@
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { TOKENOMY_VERSION } from "../core/version.js";
+import { updateCachePath } from "../core/paths.js";
+import { atomicWrite } from "../util/atomic.js";
+import { stableStringify } from "../util/json.js";
 
 // 0.1.3+: detached, non-blocking spawn of `tokenomy update --check`.
 //
@@ -20,10 +26,34 @@ import { spawn } from "node:child_process";
 // `shouldRefreshUpdateCache`.
 let inFlight = false;
 
+const markUpdateCheckAttempt = (): void => {
+  try {
+    const path = updateCachePath();
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWrite(
+      path,
+      stableStringify({
+        installed: TOKENOMY_VERSION,
+        remote: TOKENOMY_VERSION,
+        tag: "latest",
+        fetched_at: new Date().toISOString(),
+      }) + "\n",
+      false,
+    );
+  } catch {
+    // Best-effort throttle marker only.
+  }
+};
+
 export const spawnUpdateCheck = (): void => {
   if (inFlight) return;
   inFlight = true;
   try {
+    // Cross-process throttle: statusline and SessionStart run as separate
+    // short-lived processes, so the process-local guard is not enough when
+    // npm/network is down. Mark an attempt before spawning; a successful
+    // child overwrites this with the real registry result.
+    markUpdateCheckAttempt();
     const child = spawn("tokenomy", ["update", "--check", "--quiet"], {
       stdio: "ignore",
       detached: true,

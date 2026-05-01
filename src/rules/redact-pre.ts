@@ -112,6 +112,18 @@ const redactInText = (
   return redactSecrets(text, patterns);
 };
 
+// 0.1.7+: skip redact when the input content is huge (≥ 1 MB UTF-8 bytes).
+// Pre-0.1.7 running ~12 regex passes over a multi-MB minified bundle would
+// frequently trip the 1s hook watchdog, silently dropping the redact pass
+// entirely. Now we passthrough above the cap so the Write/Edit always
+// lands; the risk of a leaked secret in 1MB+ generated content is a
+// worse-case rare vs. blocking legit big writes. Cap is measured in
+// UTF-8 bytes — `string.length` (UTF-16 units) under-counts for
+// non-ASCII content; codex round 1 catch.
+const REDACT_PRE_MAX_INPUT_BYTES = 1_000_000;
+const overByteCap = (s: string): boolean =>
+  Buffer.byteLength(s, "utf8") > REDACT_PRE_MAX_INPUT_BYTES;
+
 export const redactPreRule = (
   toolName: string,
   toolInput: Record<string, unknown>,
@@ -124,12 +136,14 @@ export const redactPreRule = (
     if (toolName === "Bash") {
       const command = toolInput["command"];
       if (typeof command !== "string" || command.length < 8) return { kind: "passthrough" };
+      if (overByteCap(command)) return { kind: "passthrough" };
       return redactInBash(command, cfg);
     }
 
     if (toolName === "Write") {
       const content = toolInput["content"];
       if (typeof content !== "string" || content.length === 0) return { kind: "passthrough" };
+      if (overByteCap(content)) return { kind: "passthrough" };
       const r = redactInText(content, cfg);
       if (r.total === 0) return { kind: "passthrough" };
       return {
@@ -146,6 +160,7 @@ export const redactPreRule = (
     if (toolName === "Edit") {
       const ns = toolInput["new_string"];
       if (typeof ns !== "string" || ns.length === 0) return { kind: "passthrough" };
+      if (overByteCap(ns)) return { kind: "passthrough" };
       const r = redactInText(ns, cfg);
       if (r.total === 0) return { kind: "passthrough" };
       return {

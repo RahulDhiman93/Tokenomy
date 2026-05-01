@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import { graphBuildLogPath, graphDirtySentinelPath, graphLockPath } from "../core/paths.js";
@@ -98,6 +98,7 @@ const deltaBuildFromSnapshot = async (
   cfg: Config,
 ): Promise<BuildGraphResult> => {
   try {
+    const deadline = Date.now() + cfg.graph.build_timeout_ms;
     const tsLoaded = await loadTypescript(repoPath);
     if (!tsLoaded.ok) return tsLoaded;
 
@@ -158,6 +159,7 @@ const deltaBuildFromSnapshot = async (
     const addedEdges: Edge[] = [];
     const addedErrors: Graph["parse_errors"] = [];
     for (const file of expanded) {
+      if (Date.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
       const st = statSync(absPath);
       file_hashes[file] = sha256FileSync(absPath);
@@ -239,16 +241,74 @@ const suggestExcludeGlob = (file: string): string => {
   return `${file.slice(0, slash)}/**`;
 };
 
+// 0.1.7+: stale-lock reclaim. Pre-0.1.7 a SIGKILL during build (OOM,
+// watchdog, user kill -9) leaked the `.lock` sentinel forever, so every
+// future build returned `build-in-progress` until the user manually rm'd
+// it. Now we stamp PID + ISO timestamp into the lock, and on conflict
+// we reclaim if the holder PID is dead OR the lock is older than 10
+// minutes (any healthy build finishes in well under that).
+const BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
+
+const isPidAlive = (pid: number): boolean => {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM means the process exists but we can't signal it — still alive.
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+const isStaleLock = (path: string): boolean => {
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as { pid?: unknown; ts?: unknown };
+    const pid = typeof parsed.pid === "number" ? parsed.pid : NaN;
+    const ts = typeof parsed.ts === "string" ? Date.parse(parsed.ts) : NaN;
+    if (Number.isFinite(ts) && Date.now() - ts > BUILD_LOCK_STALE_MS) return true;
+    if (Number.isFinite(pid) && !isPidAlive(pid)) return true;
+    return false;
+  } catch {
+    // Lock file is missing or unparseable — treat as stale so we can
+    // reclaim. Pre-0.1.7 locks were empty files; this path catches them.
+    try {
+      const st = statSync(path);
+      if (Date.now() - st.mtimeMs > BUILD_LOCK_STALE_MS) return true;
+    } catch {
+      return true;
+    }
+    return false;
+  }
+};
+
 const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
   const path = graphLockPath(repoId);
   mkdirSync(dirname(path), { recursive: true });
+  const stamp = (fd: number): void => {
+    writeSync(fd, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
+  };
   try {
     const fd = openSync(path, "wx");
+    stamp(fd);
     return () => {
       closeSync(fd);
       rmSync(path, { force: true });
     };
   } catch {
+    if (isStaleLock(path)) {
+      try {
+        rmSync(path, { force: true });
+        const fd = openSync(path, "wx");
+        stamp(fd);
+        return () => {
+          closeSync(fd);
+          rmSync(path, { force: true });
+        };
+      } catch {
+        return fail("build-in-progress");
+      }
+    }
     return fail("build-in-progress");
   }
 };

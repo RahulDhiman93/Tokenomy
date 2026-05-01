@@ -181,10 +181,10 @@ export const compareVersions = (a: string, b: string): number => {
     // Strip build metadata after `+` (ignored for precedence per semver).
     const stripped = v.split("+", 1)[0] ?? v;
     const [mainStr, preStr] = stripped.split("-", 2) as [string, string | undefined];
-    const main = mainStr
-      .split(".")
-      .map((x) => Number(x))
-      .map((x) => (Number.isFinite(x) ? x : 0));
+    // 0.1.7+: strict numeric parse — pre-0.1.7 `Number("1.0a")` returned
+    // NaN → coerced to 0 silently, treating typos as zero. Now we require
+    // all-digit components; anything else falls back to 0 explicitly.
+    const main = mainStr.split(".").map((x) => (/^\d+$/.test(x) ? Number(x) : 0));
     const pre = preStr && preStr.length > 0 ? preStr.split(".") : [];
     return { main, pre };
   };
@@ -328,15 +328,16 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
   //
   // If the user previously registered `tokenomy-graph` (detectable via
   // ~/.claude.json), forward the same --graph-path to `tokenomy init` so
-  // the MCP registration stays in sync and the graph is refreshed under
-  // the new binary's schema. Skipped silently when no graph is registered.
+  // the MCP registration stays in sync. Use --no-build so a self-update
+  // never surprises the user with a long repo scan; graph reads can
+  // refresh on demand under the new binary.
   const existingGraphPath = previouslyRegisteredGraphPath();
   const initArgs = existingGraphPath
-    ? ["init", `--graph-path=${existingGraphPath}`]
+    ? ["init", `--graph-path=${existingGraphPath}`, "--no-build"]
     : ["init"];
   process.stdout.write(
     existingGraphPath
-      ? `\nRe-staging hook + config + graph (${existingGraphPath})…\n`
+      ? `\nRe-staging hook + config + graph registration (${existingGraphPath})…\n`
       : "\nRe-staging hook + config…\n",
   );
   const reinit = spawnSync("tokenomy", initArgs, { stdio: "inherit" });

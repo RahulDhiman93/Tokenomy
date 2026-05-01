@@ -788,9 +788,10 @@ test("update source command uses fake npm and preserves graph init path", async 
       process.env["FAKE_NPM_VERSION"] = "9.9.9";
       const updated = await captureOut(() => runUpdate({ force: true, tag: "latest" }));
       assert.equal(updated.value, 0);
-      assert.match(updated.out, /Re-staging hook \+ config \+ graph/);
+      assert.match(updated.out, /Re-staging hook \+ config \+ graph registration/);
       assert.match(readFileSync(npmArgsFile, "utf8"), /install -g tokenomy@latest/);
       assert.match(readFileSync(tokenomyArgsFile, "utf8"), new RegExp(`init --graph-path=${graphPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      assert.match(readFileSync(tokenomyArgsFile, "utf8"), /--no-build/);
     } finally {
       if (prevPath === undefined) delete process.env["PATH"];
       else process.env["PATH"] = prevPath;

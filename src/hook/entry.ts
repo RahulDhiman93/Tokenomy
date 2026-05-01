@@ -19,6 +19,10 @@ import type {
 
 // Returns a shallow, size-capped snapshot of the tool_input for diagnostics.
 // Strings longer than 200 chars are truncated; unknown types are stringified.
+// 0.1.7+: also redact Edit.old_string / Edit.new_string and MultiEdit.edits
+// — those carry full file contents the agent is about to write, same blast
+// radius as Write.content. Pre-0.1.7 they landed plaintext in debug.jsonl,
+// leaking any secret the agent was processing.
 const previewToolInput = (
   input: Record<string, unknown> | undefined,
   toolName?: string,
@@ -28,6 +32,14 @@ const previewToolInput = (
   for (const [k, v] of Object.entries(input)) {
     if (toolName === "Write" && k === "content") {
       out[k] = "<redacted: Write content>";
+      continue;
+    }
+    if (toolName === "Edit" && (k === "old_string" || k === "new_string")) {
+      out[k] = `<redacted: Edit ${k}>`;
+      continue;
+    }
+    if (toolName === "MultiEdit" && k === "edits") {
+      out[k] = "<redacted: MultiEdit edits>";
       continue;
     }
     if (typeof v === "string") {

@@ -154,14 +154,39 @@ export const runInit = (opts: InitOptions = {}): {
     settings = addHook(settings, "SessionStart", hookPath, "", TIMEOUT_SECONDS);
     settings = upsertStatusLine(settings, "tokenomy status-line");
 
-    atomicWrite(settingsPath, stableStringify(settings) + "\n");
+    // 0.1.7+: rollback on failure. Pre-0.1.7 a throw between backup and
+    // any subsequent step left the user with broken hooks and no clear
+    // path to recover. Now we restore the backup on any settings/MCP/
+    // manifest write failure inside this block.
+    try {
+      atomicWrite(settingsPath, stableStringify(settings) + "\n");
+    } catch (e) {
+      if (backupPath && existsSync(backupPath)) {
+        try {
+          const restored = readFileSync(backupPath);
+          atomicWrite(settingsPath, restored.toString("utf8"));
+        } catch {
+          // best-effort
+        }
+      }
+      throw e;
+    }
   }
 
-  const graphServerPath = opts.graphPath
-    ? resolve(opts.graphPath)
-    : opts.agent && opts.agent !== "claude-code"
-      ? resolve(process.cwd())
-      : null;
+  // Codex installs are hooks-only (0.1.7+) — never report graphServerPath
+  // or trigger the post-init graph build, even when the user passes
+  // --graph-path explicitly. The agent install path still uses the cwd
+  // so the codex install branch sees a valid working dir.
+  const isCodexOnly = opts.agent === "codex";
+  const graphServerPath = isCodexOnly
+    ? null
+    : opts.graphPath
+      ? resolve(opts.graphPath)
+      : opts.agent && opts.agent !== "claude-code"
+        ? resolve(process.cwd())
+        : null;
+  const agentInstallPath =
+    graphServerPath ?? (isCodexOnly ? resolve(opts.graphPath ?? process.cwd()) : null);
 
   // Claude Code 2.1+ reads MCP registrations from ~/.claude.json (not
   // ~/.claude/settings.json). Writing to the settings file we just patched
@@ -176,8 +201,8 @@ export const runInit = (opts: InitOptions = {}): {
     }
   }
 
-  const agentResults = graphServerPath
-    ? installDetectedAgents(graphServerPath, opts.backup !== false, opts.agent)
+  const agentResults = agentInstallPath
+    ? installDetectedAgents(agentInstallPath, opts.backup !== false, opts.agent)
     : [];
 
   if (hookPath && installClaude) {

@@ -18,6 +18,9 @@ const IGNORED_DIRS = new Set([
   "node_modules",
 ]);
 
+const GIT_LS_FILES_TIMEOUT_MS = 5_000;
+const GIT_LS_FILES_MAX_BUFFER = 32 * 1024 * 1024;
+
 export interface EnumerateFilesOk {
   ok: true;
   files: string[];
@@ -47,7 +50,13 @@ const enumerateViaGit = (repoPath: string): string[] | null => {
     const out = execFileSync(
       "git",
       ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { cwd: repoPath, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] },
+      {
+        cwd: repoPath,
+        encoding: "buffer",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: GIT_LS_FILES_TIMEOUT_MS,
+        maxBuffer: GIT_LS_FILES_MAX_BUFFER,
+      },
     );
     return out
       .toString("utf8")

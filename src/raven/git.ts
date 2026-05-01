@@ -25,11 +25,20 @@ export interface RavenGitState {
   stats: RavenFileStat[];
 }
 
+// 0.1.7+: hard timeout on every Raven git call. Raven runs from MCP tool
+// dispatch (no hook watchdog) — a wedged `.git/index.lock` would otherwise
+// pin `create_handoff_packet` / `pr-check` indefinitely.
+const RAVEN_GIT_TIMEOUT_MS = 5_000;
+const RAVEN_GIT_MAX_BUFFER = 16 * 1024 * 1024;
+
 const git = (cwd: string, args: string[]): string | null => {
   const out = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: RAVEN_GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    maxBuffer: RAVEN_GIT_MAX_BUFFER,
   });
   if (out.status !== 0) return null;
   return out.stdout.trimEnd();

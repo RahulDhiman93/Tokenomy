@@ -209,3 +209,16 @@ test("repoSearch: survives >64 KB of git-grep output (large-repo regression)", (
     assert.equal(result.results[0]?.source, "current-branch");
   });
 });
+
+test("repoSearch: honors an already-expired global deadline", () => {
+  withGitRepo((repo) => {
+    const result = repoSearch(repo, "retry backoff helper", {
+      timeoutMs: 5_000,
+      maxResults: 5,
+      expiresAt: Date.now() - 1,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    if (!result.ok) return;
+    assert.deepEqual(result.results, []);
+  });
+});
