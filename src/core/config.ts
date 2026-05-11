@@ -97,7 +97,12 @@ export const DEFAULT_CONFIG: Config = {
     ],
     auto_refresh_on_read: true,
     async_rebuild: true,
-    incremental: false,
+    // 0.1.8+: delta rebuilds default ON. Pre-0.1.8 default was off, so
+    // every save full-rebuilt the snapshot (~500ms on 3k files, 5-10s on
+    // larger repos). Delta path re-parses only stale files + direct
+    // importers; full rebuild still fires when tsconfig or exclude
+    // fingerprints shift, or when >40 % of files turned stale.
+    incremental: true,
     tsconfig: {
       enabled: true,
     },

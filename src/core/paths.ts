@@ -60,6 +60,13 @@ export const graphDirtySentinelPath = (repoId: string): string =>
 // Same dir as the snapshot so it's atomic-safe with rmSync recursive.
 export const graphRebuildLockPath = (repoId: string): string =>
   join(graphDir(repoId), ".rebuilding");
+// 0.1.8+: last async-rebuild failure recorded by the read-side
+// `startBackgroundRebuild` so the next MCP query can surface it inline
+// (`last_build_failure` on every cacheable response). Cleared by a
+// successful rebuild. Pre-0.1.8 background failures were silently
+// swallowed — agents kept asking a hostage graph for answers.
+export const graphAsyncFailurePath = (repoId: string): string =>
+  join(graphDir(repoId), ".last-async-failure.json");
 
 export const claudeSettingsPath = (): string =>
   join(homedir(), ".claude", "settings.json");

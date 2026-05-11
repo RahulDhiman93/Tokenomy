@@ -158,6 +158,7 @@ const deltaBuildFromSnapshot = async (
     const addedNodes: Node[] = [];
     const addedEdges: Edge[] = [];
     const addedErrors: Graph["parse_errors"] = [];
+    const localSkipped: string[] = [];
     for (const file of expanded) {
       if (Date.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
@@ -165,17 +166,32 @@ const deltaBuildFromSnapshot = async (
       file_hashes[file] = sha256FileSync(absPath);
       file_mtimes[file] = st.mtimeMs;
       const source = readFileSync(absPath, "utf8");
-      const extracted = extractTsFileGraph(file, source, allFileSet, tsLoaded.ts, tsconfigResolver);
+      // 0.1.8+: per-file extraction is best-effort. A single bad file
+      // (parser crash, malformed source) must not abort the whole delta.
+      let extracted: ReturnType<typeof extractTsFileGraph>;
+      try {
+        extracted = extractTsFileGraph(file, source, allFileSet, tsLoaded.ts, tsconfigResolver);
+      } catch (e) {
+        addedErrors.push({ file, message: `parser threw: ${(e as Error).message}` });
+        continue;
+      }
+      // 0.1.8+: per-file edge-cap was a build-abort signal; now it skips
+      // the offending file with an actionable parse_error and continues.
+      // Aborting the whole graph for one overgrown generated file (e.g.
+      // a 1000-line test fixture) silently broke every MCP query.
       if (extracted.edges.length > cfg.graph.max_edges_per_file) {
-        return fail(
-          "graph-too-large",
-          `Edge cap exceeded in ${file} — add it to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
-        );
+        localSkipped.push(file);
+        addedErrors.push({
+          file,
+          message: `skipped: edge cap exceeded (${extracted.edges.length} > ${cfg.graph.max_edges_per_file}) — add to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
+        });
+        continue;
       }
       addedNodes.push(...extracted.nodes);
       addedEdges.push(...extracted.edges);
       addedErrors.push(...extracted.parse_errors);
     }
+    const mergedSkipped = [...skipped_files, ...localSkipped];
 
     const graph = normalizeGraph({
       schema_version: GRAPH_SCHEMA_VERSION,
@@ -211,7 +227,7 @@ const deltaBuildFromSnapshot = async (
       soft_cap: cfg.graph.max_files,
       hard_cap: cfg.graph.hard_max_files,
       parse_error_count: graph.parse_errors.length,
-      skipped_files,
+      skipped_files: mergedSkipped,
       exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
       tsconfig_fingerprint: tsconfigFingerprint,
     };
@@ -227,7 +243,7 @@ const deltaBuildFromSnapshot = async (
         edge_count: graph.edges.length,
         parse_error_count: graph.parse_errors.length,
         duration_ms: 0,
-        skipped_files,
+        skipped_files: mergedSkipped,
       },
     };
   } catch (error) {
@@ -349,24 +365,55 @@ const buildGraphFromFiles = async (
     cfg.graph.tsconfig.enabled,
   );
 
+  const localSkipped: string[] = [];
   for (const file of files) {
     if (Date.now() > deadline) return fail("timeout");
     const absPath = join(repoPath, ...file.split("/"));
-    const st = statSync(absPath);
+    let st;
+    try {
+      st = statSync(absPath);
+    } catch (e) {
+      // 0.1.8+: file enumerated but vanished mid-build (rebase, rm). Don't
+      // abort the whole graph — record + continue.
+      parse_errors.push({ file, message: `stat failed: ${(e as Error).message}` });
+      continue;
+    }
     file_hashes[file] = sha256FileSync(absPath);
     file_mtimes[file] = st.mtimeMs;
-    const source = readFileSync(absPath, "utf8");
-    const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts, tsconfigResolver);
+    let source: string;
+    try {
+      source = readFileSync(absPath, "utf8");
+    } catch (e) {
+      parse_errors.push({ file, message: `read failed: ${(e as Error).message}` });
+      continue;
+    }
+    // 0.1.8+: per-file extraction is best-effort. Single bad file (parser
+    // crash, malformed source) must not abort the whole build.
+    let extracted: ReturnType<typeof extractTsFileGraph>;
+    try {
+      extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts, tsconfigResolver);
+    } catch (e) {
+      parse_errors.push({ file, message: `parser threw: ${(e as Error).message}` });
+      continue;
+    }
+    // 0.1.8+: per-file edge-cap skips the file rather than aborting the
+    // whole graph. Pre-0.1.8 a single overgrown generated file (e.g. a
+    // long test fixture with N×N references) made every MCP query return
+    // graph-too-large indefinitely. Now we record the skip + continue so
+    // the remaining 99% of the graph is still queryable.
     if (extracted.edges.length > cfg.graph.max_edges_per_file) {
-      return fail(
-        "graph-too-large",
-        `Edge cap exceeded in ${file} — add it to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
-      );
+      localSkipped.push(file);
+      parse_errors.push({
+        file,
+        message: `skipped: edge cap exceeded (${extracted.edges.length} > ${cfg.graph.max_edges_per_file}) — add to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
+      });
+      continue;
     }
     nodes.push(...extracted.nodes);
     edges.push(...extracted.edges);
     parse_errors.push(...extracted.parse_errors);
   }
+  const mergedSkipped = [...skipped_files, ...localSkipped];
 
   const graph = normalizeGraph({
     schema_version: GRAPH_SCHEMA_VERSION,
@@ -397,7 +444,7 @@ const buildGraphFromFiles = async (
     soft_cap: cfg.graph.max_files,
     hard_cap: cfg.graph.hard_max_files,
     parse_error_count: graph.parse_errors.length,
-    skipped_files,
+    skipped_files: mergedSkipped,
     exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
     tsconfig_fingerprint: tsconfigFingerprint,
   };
@@ -414,7 +461,7 @@ const buildGraphFromFiles = async (
       edge_count: graph.edges.length,
       parse_error_count: graph.parse_errors.length,
       duration_ms: 0,
-      skipped_files,
+      skipped_files: mergedSkipped,
     },
   };
 };
@@ -553,6 +600,13 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
   const stale = getGraphStaleStatus(identity.repoPath, meta, config);
   if (!stale.ok) return stale;
 
+  // 0.1.8+: surface the last build failure (e.g. from a background
+  // rebuild) on success so users see it in `tokenomy graph status`
+  // without having to call `tokenomy diagnose`. The graph is still
+  // ok — agent can still query — but the user gets to learn the
+  // updates haven't been landing.
+  const lastFailure = readLastGraphBuildFailure(identity.repoId);
+
   return {
     ok: true,
     stale: stale.stale,
@@ -566,6 +620,7 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
       edge_count: meta.edge_count,
       parse_error_count: meta.parse_error_count,
       skipped_files: meta.skipped_files ?? [],
+      ...(lastFailure ? { last_build_failure: { reason: lastFailure.reason, hint: lastFailure.hint } } : {}),
     },
   };
 };

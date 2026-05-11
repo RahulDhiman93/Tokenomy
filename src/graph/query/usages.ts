@@ -85,19 +85,35 @@ export const findUsages = (
     const fileNodeId = `file:${target.file}`;
     const fileIncoming = index.incoming.get(fileNodeId) ?? [];
 
-    // Pass 1: walk imported-symbol nodes matching focal.original_name and
-    // collect their real callers (functions / files that invoke the import).
+    // 0.1.8+: build the set of accepted export names for this focal.
+    // Always includes the target's own name. Additionally, if the file
+    // has an `exp:<file>::default` node pointing at the target via an
+    // `exports` edge, accept "default" too — that's how `export default
+    // function foo() {}` becomes reachable from `import foo from "./mod"`
+    // (whose imported-symbol carries original_name="default").
+    const acceptedExportNames = new Set<string>([target.name]);
+    for (const e of index.incoming.get(target.id) ?? []) {
+      if (e.kind !== "exports") continue;
+      const exportNode = index.nodesById.get(e.from);
+      if (exportNode?.kind === "exported-symbol" && exportNode.name === "default") {
+        acceptedExportNames.add("default");
+      }
+    }
+
+    // Pass 1: walk imported-symbol nodes matching any accepted export name
+    // and collect their real callers (functions / files that invoke the import).
     for (const importEdge of fileIncoming) {
       if (importEdge.kind !== "imports") continue;
       const source = index.nodesById.get(importEdge.from);
       if (!source || source.kind !== "imported-symbol") continue;
-      // Match STRICTLY on original export name (set by extractor for named
-      // imports only — default/namespace/ImportEquals/CJS have no original_name
-      // and are correctly skipped to avoid name-collision false positives).
-      // Legacy graphs (alpha.14 and earlier) lack original_name and fall
-      // through here; users who need correctness should rebuild with --force.
+      // 0.1.8+: match against the accepted-export-names set. Pre-0.1.8
+      // only named imports tagged with original_name were considered;
+      // default imports (`import foo from "./mod"`) and CJS interop
+      // (`const x = require("./mod")`) were silently skipped because
+      // they had no original_name set. Now they carry "default" and
+      // the focal correlates via its `exports`-from-`default` edge.
       if (!source.original_name) continue;
-      if (source.original_name !== target.name) continue;
+      if (!acceptedExportNames.has(source.original_name)) continue;
       const callerEdges = index.incoming.get(source.id) ?? [];
       for (const callerEdge of callerEdges) {
         if (callerEdge.kind !== "calls" && callerEdge.kind !== "references") continue;

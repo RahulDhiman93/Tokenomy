@@ -295,7 +295,14 @@ const processImportDeclaration = (state: ExtractionState, node: TS.ImportDeclara
     return;
   }
 
-  if (importClause?.name) addImportSymbol(state, importClause.name.text, line, specifier, "definite");
+  // 0.1.8+: tag default + namespace imports with their export "original
+  // name" so find_usages can correlate them. Pre-0.1.8 only NAMED imports
+  // were tagged; default-export hooks (extremely common in React/Next)
+  // returned empty find_usages results because the cross-module pass
+  // skipped them.
+  if (importClause?.name) {
+    addImportSymbol(state, importClause.name.text, line, specifier, "definite", "default");
+  }
   if (importClause?.namedBindings && state.ts.isNamespaceImport(importClause.namedBindings)) {
     addImportSymbol(
       state,
@@ -303,6 +310,7 @@ const processImportDeclaration = (state: ExtractionState, node: TS.ImportDeclara
       line,
       specifier,
       "definite",
+      "*",
     );
   }
   if (importClause?.namedBindings && state.ts.isNamedImports(importClause.namedBindings)) {
@@ -324,12 +332,15 @@ const processImportEqualsDeclaration = (
 ): void => {
   if (!state.ts.isExternalModuleReference(node.moduleReference)) return;
   if (!isStringLiteralLike(node.moduleReference.expression, state.ts)) return;
+  // 0.1.8+: `import foo = require("./mod")` is a CJS interop default;
+  // tag it as "default" so find_usages cross-module pass matches it.
   addImportSymbol(
     state,
     node.name.text,
     lineOf(state.sourceFile, node),
     node.moduleReference.expression.text,
     "inferred",
+    "default",
   );
 };
 
@@ -607,12 +618,16 @@ const walkSemantic = (
         isStringLiteralLike(specifierArg, state.ts) &&
         !state.importedByName.has(localName)
       ) {
+        // 0.1.8+: tag CJS `const x = require("./mod")` as "default" so
+        // the find_usages cross-module pass treats it like a default
+        // import — these are the same shape semantically.
         addImportSymbol(
           state,
           localName,
           localNameLine,
           specifierArg.text,
           "inferred",
+          "default",
         );
       } else if (specifierArg && isStringLiteralLike(specifierArg, state.ts)) {
         addFileImportEdge(state, specifierArg.text, "inferred");

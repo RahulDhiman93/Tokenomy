@@ -11,6 +11,11 @@ import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import {
+  clearAsyncBuildFailure,
+  readAsyncBuildFailure,
+  writeAsyncBuildFailure,
+} from "../graph/build-log.js";
 import { npmSearch, registrySearch } from "../nudge/npm-search.js";
 import { repoSearch } from "../nudge/repo-search.js";
 import { createAndSaveRavenPacket } from "../raven/brief.js";
@@ -271,12 +276,30 @@ const startBackgroundRebuild = (cwd: string, cfg: Config): void => {
   if (inFlightRebuilds.has(repoId)) return;
   inFlightRebuilds.add(repoId);
   // Fire-and-forget. Errors are logged via buildGraph's own log path.
+  // 0.1.8+: persist any non-ok result to `.last-async-failure.json` so
+  // the next cacheable read-side response can embed it. Pre-0.1.8 these
+  // failures were swallowed silently — agents kept hitting a hostage
+  // graph without learning why.
   void buildGraph({ cwd, config: cfg, force: false })
     .then((result) => {
-      if (result.ok && result.data.built) queryCache.invalidate();
+      if (result.ok) {
+        if (result.data.built) queryCache.invalidate();
+        clearAsyncBuildFailure(repoId);
+      } else {
+        writeAsyncBuildFailure(repoId, {
+          ts: new Date().toISOString(),
+          reason: result.reason,
+          ...(result.hint ? { hint: result.hint } : {}),
+        });
+      }
     })
-    .catch(() => {
-      // buildGraph is meant to be non-throwing; swallow anyway.
+    .catch((e) => {
+      // buildGraph is meant to be non-throwing; record anyway.
+      writeAsyncBuildFailure(repoId, {
+        ts: new Date().toISOString(),
+        reason: "io-error",
+        hint: (e as Error).message,
+      });
     })
     .finally(() => {
       inFlightRebuilds.delete(repoId);
@@ -310,6 +333,13 @@ const ensureFreshGraph = async (
     const result = await buildGraph({ cwd, config: cfg, force: false });
     if (result.ok) {
       if (result.data.built) queryCache.invalidate();
+      // 0.1.8+: synchronous success clears any stale async-failure
+      // record left by a prior background attempt.
+      try {
+        clearAsyncBuildFailure(resolveRepoId(cwd).repoId);
+      } catch {
+        // best-effort
+      }
       return {
         stale: result.stale ?? false,
         stale_files: result.stale_files ?? [],
@@ -496,6 +526,25 @@ export const dispatchGraphTool = async (
 
   const result = await dispatchGraphToolUncached(name, args, effectiveCwd, precomputedStale);
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
+  // 0.1.8+: when the previous async rebuild failed (graph-too-large in a
+  // generated file, typescript missing, timeout, etc.), pin the failure
+  // onto every cacheable read-side response so the agent actually learns
+  // about it instead of consuming stale data forever. The successful
+  // primary result still wins — we only annotate.
+  if (CACHEABLE_TOOLS.has(name) && result.ok) {
+    let asyncFailRepoId: string | null = null;
+    try {
+      asyncFailRepoId = resolveRepoId(effectiveCwd).repoId;
+    } catch {
+      // ignore — best-effort surface
+    }
+    if (asyncFailRepoId) {
+      const lastAsync = readAsyncBuildFailure(asyncFailRepoId);
+      if (lastAsync) {
+        (result.data as Record<string, unknown>).last_build_failure = lastAsync;
+      }
+    }
+  }
   return result;
 };
 

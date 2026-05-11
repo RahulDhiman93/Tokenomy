@@ -12,6 +12,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-05-11
+
+### Fixed (graph stability + usefulness)
+
+- **Skip-and-continue on per-file edge-cap.** Pre-0.1.8 a single
+  overgrown file (long test fixture, generated bundle, etc.) returning
+  more than `graph.max_edges_per_file` aborted the entire build, leaving
+  the agent with a hostage 0-node graph. Now the offending file is
+  pushed to `skipped_files` with an actionable `parse_error` and the
+  remaining 99% of the repo builds normally. Same treatment for files
+  that vanish mid-build or fail to parse.
+- **Async-rebuild failures now surface.** The MCP read-side
+  `auto_refresh_on_read` path fires `buildGraph` in the background and
+  pre-0.1.8 silently swallowed any non-ok result — agents kept hitting
+  a stale snapshot for days. 0.1.8+ persists the failure to
+  `~/.tokenomy/graphs/<repoId>/.last-async-failure.json` and embeds it
+  as `last_build_failure` on every cacheable read-side response and in
+  `tokenomy graph status`.
+- **Hot-path git timeout already shipped in 0.1.7**, but the
+  cheap-gate now walks all the way to filesystem root instead of
+  capping at 10 ancestors — deep monorepo cwds were silently missing
+  their `.git` and falling through to a non-repo `repoId`.
+- **Default-import find_usages.** Default imports
+  (`import foo from "./mod"`), namespace imports (`import * as ns from
+  "./mod"`), `import = require()`, and CJS `const x = require("./mod")`
+  now carry `original_name` so the cross-module pass surfaces their
+  callers. Pre-0.1.8 React/Next codebases with default-export hooks
+  returned near-empty results.
+- **Priority BFS for `get_minimal_context`.** The 64-node visit budget
+  now fills with importers + references + calls FIRST and only then
+  contains-children. Pre-0.1.8 a hub file's own methods crowded out the
+  importers — `get_minimal_context` on a barrel returned its members,
+  not its callers.
+- **Hint catalog.** Every known failure reason
+  (`graph-too-large`, `repo-too-large`, `typescript-not-installed`,
+  `no-files`, `timeout`, `io-error`, `build-in-progress`,
+  `graph-disabled`, `graph-not-built`, `git-resolve-failed`) now has
+  an actionable hint surfaced in `tokenomy diagnose`, `graph status`,
+  and the MCP `last_build_failure` field.
+- **Incremental rebuilds on by default.** `graph.incremental: true`
+  is the new default. Delta path re-parses only stale files + direct
+  importers and falls back to a full rebuild when tsconfig / exclude
+  fingerprints shift or > 40% of files changed.
+- **Memoized graph index.** `buildGraphIndex` is now WeakMap-cached
+  on the graph reference instead of being rebuilt for every query.
+  `resolveTargetNode` uses the index too — pre-0.1.8 a `find_usages`
+  on a 3k-file graph did two O(N) linear scans of `graph.nodes` per
+  call.
+
 ## [0.1.7] — 2026-04-30
 
 ### Fixed
@@ -1050,7 +1099,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.8
 [0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7
 [0.1.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.6
 [0.1.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.5

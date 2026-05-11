@@ -45,7 +45,7 @@ tokenomy doctor                     # all checks passing
 
 Codex CLI hooks plus Cursor, Windsurf, Cline, and Gemini graph MCP configs are auto-detected when each is on PATH. Force one target with `--agent <name>`; inspect first with `tokenomy init --list-agents`.
 
-> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.7`. Upgrade: `tokenomy update`.
+> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.8`. Upgrade: `tokenomy update`.
 
 ---
 
@@ -246,7 +246,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool + Write context nudge.
 - [x] **Phase 5.** Polish — Golem output mode, statusline, prompt-classifier, `compress`, `bench`, cross-agent installers.
 - [x] **Phase 5.5.** Codex hook foothold — user-scoped `SessionStart` + `UserPromptSubmit` hooks for Golem and prompt-classifier nudges.
-- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4), `tokenomy diagnose` + production-hardening pass + RECON v2 (0.1.5), production-scale graph defaults (0.1.6), Codex MCP startup hotfix + hot-path git timeouts + build-lock stale reclaim + Windows `commandExists` + init rollback + redact-pre size cap + bounded session-state read + debug-log secret hygiene + realpath identity (0.1.7).
+- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4), `tokenomy diagnose` + production-hardening pass + RECON v2 (0.1.5), production-scale graph defaults (0.1.6), Codex MCP startup hotfix + hot-path git timeouts + build-lock stale reclaim + Windows `commandExists` + init rollback + redact-pre size cap + bounded session-state read + debug-log secret hygiene + realpath identity (0.1.7), graph stability pass — skip-and-continue on per-file edge-cap, async-rebuild failure persistence + surface, default-import find_usages, priority BFS, exhaustive hint catalog, incremental rebuilds default-on, memoized graph index (0.1.8).
 - [ ] **Phase 7.** Language breadth — Python parser plugin, richer benchmark fixtures, npm publish at 1.0.
 - [ ] **Phase 8.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, team-ready reports. See [docs/NEXT_FEATURES.md](./docs/NEXT_FEATURES.md).
 
