@@ -235,7 +235,16 @@ const withGraphContext = <T>(
   run: (config: Config, graphContext: GraphQueryContext) => QueryResult<T>,
   precomputedStale?: PrecomputedStale,
 ): QueryResult<T> => {
-  const config = loadConfig(cwd);
+  // 0.1.8+ codex round 8: load cfg from resolved repo root so a subdir
+  // `path` arg honors the project-root `.tokenomy.json` (e.g.
+  // `graph.location: "home"`). Fall back to cwd-load when not in a repo.
+  let cfgPath = cwd;
+  try {
+    cfgPath = resolveRepoId(cwd).repoPath;
+  } catch {
+    // best-effort
+  }
+  const config = loadConfig(cfgPath);
   const loadOptions: LoadGraphContextOptions = precomputedStale
     ? { skipStaleCheck: true, precomputedStale }
     : {};
