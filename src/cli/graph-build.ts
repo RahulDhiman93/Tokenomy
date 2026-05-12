@@ -1,6 +1,7 @@
 import { stableStringify } from "../util/json.js";
 import { buildGraph } from "../graph/build.js";
 import { loadConfig } from "../core/config.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import type { Config } from "../core/types.js";
 
 export const runGraphBuild = async (opts: {
@@ -10,7 +11,10 @@ export const runGraphBuild = async (opts: {
   exclude?: string[];
 }): Promise<number> => {
   const target = opts.path ?? opts.cwd;
-  const cfg = loadConfig(target);
+  // 0.1.8+ codex round 7: load cfg from resolved repo root so subdir
+  // invocations pick up `.tokenomy.json` at the project root.
+  const identity = resolveRepoId(target);
+  const cfg = loadConfig(identity.repoPath);
   const cliExcludes = opts.exclude ?? [];
   // Shallow-clone graph + construct a fresh exclude array so we never mutate
   // DEFAULT_CONFIG.graph.exclude (which loadConfig shallow-spreads by reference).

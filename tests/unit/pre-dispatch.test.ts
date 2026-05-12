@@ -18,8 +18,8 @@ test("preDispatch: appends graph-aware hint when a local graph snapshot exists",
     const largeFile = join(repo, "large.ts");
     writeFileSync(largeFile, "x".repeat(60_000));
 
-    const { repoId } = resolveRepoId(repo);
-    const metaPath = graphMetaPath(repoId);
+    const identity = resolveRepoId(repo);
+    const metaPath = graphMetaPath(identity, DEFAULT_CONFIG.graph);
     mkdirSync(dirname(metaPath), { recursive: true });
     writeFileSync(metaPath, "{}\n");
 

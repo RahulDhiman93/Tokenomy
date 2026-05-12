@@ -54,9 +54,24 @@ tokenomy config set graph.max_snapshot_bytes 200000000
 tokenomy graph build --path "$PWD" --exclude '**/generated/**'
 ```
 
-## Incremental updates (beta.3+)
+## In-repo storage (0.1.8+)
 
-`cfg.graph.incremental: true` enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or > 40 % of files changed. Opt-in.
+Graph snapshot/meta/build-log/sentinels now live at `<repoRoot>/.tokenomy-graph/`. Raven artifacts at `<repoRoot>/.tokenomy-raven/`. Both are auto-added to `.gitignore` on first write. Benefits:
+
+- Visible to the user; clean up with `rm -rf .tokenomy-graph/`.
+- Survives `mv repo other-name/` — no rebuild needed.
+- Git worktrees get independent snapshots automatically.
+- CI cache-by-path captures graph state.
+
+**Auto-migration** of legacy `~/.tokenomy/{graphs,raven}/<repoId>/` fires once per repo on the first build / `raven enable` after upgrade. Manual: `tokenomy graph migrate [--apply]` and `tokenomy raven migrate [--apply]`. Default is dry-run.
+
+**Project registry** at `~/.tokenomy/projects.json` (JSONL) tracks every repo with built state. Drives `graph purge --all`, `raven clean --all`, `doctor --all-repos`, `diagnose --all-repos`.
+
+**Escape hatch:** `tokenomy config set graph.location home` (and same for `raven`) keeps the legacy `~/.tokenomy/{graphs,raven}/<repoId>/` layout — useful on read-only checkouts or CI immutable mounts.
+
+## Incremental updates (0.1.8+ default)
+
+`cfg.graph.incremental: true` (the default since 0.1.8) enables delta rebuilds that re-parse only stale files + direct importers. Falls back to full rebuild if tsconfig/exclude fingerprints shift or > 40 % of files changed.
 
 ## Live freshness (0.1.3+)
 
@@ -64,7 +79,7 @@ Pre-0.1.3 the graph snapshot only refreshed when the agent invoked a graph MCP t
 
 0.1.3+ wires three layers:
 
-1. **Dirty sentinel.** PostToolUse on those edit tools touches `~/.tokenomy/graphs/<repo-id>/.dirty` with the changed file path. Cost per edit: one `existsSync` + one small append (~50 B). Skipped when no graph dir exists for the repo (no graph built yet).
+1. **Dirty sentinel.** PostToolUse on those edit tools touches `<repoRoot>/.tokenomy-graph/.dirty` with the changed file path. Cost per edit: one `existsSync` + one small append (~50 B). Skipped when no graph dir exists for the repo (no graph built yet).
 2. **Cheap-stale short-circuit.** `isGraphStaleCheap` returns `{ stale: true }` immediately when the sentinel exists — saves the full enumerate-and-stat repo walk on every read-side MCP query. O(repo) → O(1).
 3. **Async rebuild.** When the snapshot is stale-but-cached, the read-side serves the cached snapshot AND fires the rebuild in the background (process-local lockset prevents pile-up across rapid agent calls). Caller still receives `stale: true` in the response. The build clears the sentinel on success.
 
@@ -77,3 +92,5 @@ The MCP server's startup cwd was previously baked into every tool call. When the
 0.1.3+ adds an optional `path` arg to every tool's input schema. Pass `path: "$PWD"` (or any absolute repo root) and Tokenomy resolves the per-repo graph + Raven store from that path. Default falls back to the server's startup cwd, so single-repo workflows are unchanged.
 
 Recommended: run `tokenomy init --graph-path "$PWD"` in EACH repo so each Claude Code project window registers its own MCP server bound to its own repo.
+
+0.1.8+: subdir invocations of any CLI/MCP command resolve to the repo root first, so a project-root `.tokenomy.json` (with overrides like `graph.location` or `raven.location`) is honored even when you `cd src/some/deep/dir` first.

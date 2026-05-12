@@ -1,5 +1,6 @@
 import { configGet, configSet } from "./config-cmd.js";
 import { loadConfig } from "../core/config.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import {
   buildGolemSessionContext,
   buildGolemTurnReminder,
@@ -27,7 +28,14 @@ const parseModeFlag = (argv: string[]): string | null => {
 };
 
 const writeStatus = (): number => {
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
+  let cfgPath = process.cwd();
+  try {
+    cfgPath = resolveRepoId(process.cwd()).repoPath;
+  } catch {
+    // best-effort
+  }
+  const cfg = loadConfig(cfgPath);
   const g = cfg.golem;
   const status = g.enabled ? "ENABLED" : "disabled";
   process.stdout.write(`Golem: ${status}\n`);
@@ -78,7 +86,14 @@ export const runGolem = (argv: string[]): number => {
       configSet("golem.mode", mode);
     }
     configSet("golem.enabled", "true");
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 10: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // best-effort
+    }
+    const cfg = loadConfig(cfgPath);
     process.stdout.write(
       `✓ Golem enabled in ${cfg.golem.mode.toUpperCase()} mode. ` +
         `Safety gates: ${cfg.golem.safety_gates ? "on" : "off"}.\n`,

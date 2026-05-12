@@ -35,6 +35,10 @@ export interface GraphStatusData {
   edge_count: number;
   parse_error_count: number;
   skipped_files: string[];
+  // 0.1.8+: present when a prior build (foreground or background async)
+  // failed since the snapshot was built. The current snapshot is still
+  // queryable; this just tells the user updates have been failing.
+  last_build_failure?: { reason: string; hint?: string };
 }
 
 export interface MinimalContextInput {

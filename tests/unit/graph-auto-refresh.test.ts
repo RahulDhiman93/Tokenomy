@@ -183,8 +183,9 @@ test("read-side auto-refresh: recovers from a corrupt snapshot by triggering a r
     // stale check returns "fresh", but loadGraphContext will fail parsing.
     const { graphSnapshotPath } = await import("../../src/core/paths.js");
     const { resolveRepoId } = await import("../../src/graph/repo-id.js");
-    const { repoId } = resolveRepoId(repo);
-    writeFileSync(graphSnapshotPath(repoId), "{ not valid json");
+    const { DEFAULT_CONFIG } = await import("../../src/core/config.js");
+    const identity = resolveRepoId(repo);
+    writeFileSync(graphSnapshotPath(identity, DEFAULT_CONFIG.graph), "{ not valid json");
 
     // Read-side should detect the corruption via loadGraphContext and
     // retry with a full rebuild instead of surfacing graph-not-built.

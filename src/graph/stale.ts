@@ -109,13 +109,13 @@ export const isGraphStaleCheap = (
 ): CheapStaleStatus => {
   const identity = resolveRepoId(cwd);
   const store = new JsonGraphStore();
-  const meta = store.loadMeta(identity.repoId);
+  const meta = store.loadMeta(identity, cfg.graph);
   if (!meta) return { missing: true, stale: true, stale_files: [] };
   // meta.json alone isn't enough — the read-side query also needs the graph
   // snapshot. If it's been deleted (or never written), treat as missing so
   // ensureFreshGraph triggers a rebuild instead of letting downstream queries
-  // fail with graph-not-built. Codex round 1 review catch.
-  if (!existsSync(graphSnapshotPath(identity.repoId))) {
+  // fail with graph-not-built.
+  if (!existsSync(graphSnapshotPath(identity, cfg.graph))) {
     return { missing: true, stale: true, stale_files: [] };
   }
 
@@ -125,7 +125,7 @@ export const isGraphStaleCheap = (
   // walk on every read-side MCP query. The actual rebuild path picks up the
   // SHA-256 verification, so a false positive (file touched but content
   // unchanged) still short-circuits cheaply downstream.
-  if (existsSync(graphDirtySentinelPath(identity.repoId))) {
+  if (existsSync(graphDirtySentinelPath(identity, cfg.graph))) {
     return { missing: false, stale: true, stale_files: [] };
   }
 

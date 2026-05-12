@@ -52,8 +52,8 @@ test("e2e: find_usages surfaces aliased imports through tsconfig.paths", async (
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
 
-    const { repoId } = resolveRepoId(repo);
-    const graph = new JsonGraphStore().loadGraph(repoId);
+    const identity = resolveRepoId(repo);
+    const graph = new JsonGraphStore().loadGraph(identity);
     assert.ok(graph);
     if (!graph) return;
 

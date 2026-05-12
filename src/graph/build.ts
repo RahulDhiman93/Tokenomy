@@ -1,7 +1,14 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
-import { graphBuildLogPath, graphDirtySentinelPath, graphLockPath } from "../core/paths.js";
+import {
+  graphAsyncFailurePath,
+  graphBuildLogPath,
+  graphDirtySentinelPath,
+  graphLockPath,
+  type RepoIdentityLike,
+  type StorageLocationConfig,
+} from "../core/paths.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
@@ -20,11 +27,14 @@ import {
 } from "./schema.js";
 import { getGraphStaleStatus } from "./stale.js";
 import { JsonGraphStore, serializeGraphSnapshot } from "./store.js";
-import { readLastGraphBuildFailure } from "./build-log.js";
+import { readAsyncBuildFailure, readLastGraphBuildFailure } from "./build-log.js";
 import type { BuildGraphResult, FailOpen } from "./types.js";
 import { loadTypescript } from "../parsers/ts/loader.js";
 import { extractTsFileGraph } from "../parsers/ts/extract.js";
 import { appendGraphBuildLog } from "../core/log.js";
+import { appendGitignoreLine } from "../util/gitignore.js";
+import { registerProject } from "../util/projects-registry.js";
+import { tryMigrateOne } from "../util/migrate-storage.js";
 
 export interface BuildGraphOptions {
   cwd: string;
@@ -35,14 +45,14 @@ export interface BuildGraphOptions {
 const fail = (reason: string, hint?: string): FailOpen => ({ ok: false, reason, hint });
 
 const logGraphBuild = (
-  repoId: string,
-  repoPath: string,
+  identity: RepoIdentityLike,
   result: BuildGraphResult,
+  cfg: StorageLocationConfig,
 ): void => {
-  appendGraphBuildLog(graphBuildLogPath(repoId), {
+  appendGraphBuildLog(graphBuildLogPath(identity, cfg), {
     ts: new Date().toISOString(),
-    repo_id: repoId,
-    repo_path: repoPath,
+    repo_id: identity.repoId,
+    repo_path: identity.repoPath,
     built: result.ok ? result.data.built : false,
     node_count: result.ok ? result.data.node_count : 0,
     edge_count: result.ok ? result.data.edge_count : 0,
@@ -88,8 +98,7 @@ const expandStaleWithImporters = (
 };
 
 const deltaBuildFromSnapshot = async (
-  repoId: string,
-  repoPath: string,
+  identity: RepoIdentityLike,
   prevMeta: GraphMeta,
   prevGraph: Graph,
   allFiles: string[],
@@ -97,6 +106,8 @@ const deltaBuildFromSnapshot = async (
   staleFiles: string[],
   cfg: Config,
 ): Promise<BuildGraphResult> => {
+  const repoId = identity.repoId;
+  const repoPath = identity.repoPath;
   try {
     const deadline = Date.now() + cfg.graph.build_timeout_ms;
     const tsLoaded = await loadTypescript(repoPath);
@@ -158,24 +169,70 @@ const deltaBuildFromSnapshot = async (
     const addedNodes: Node[] = [];
     const addedEdges: Edge[] = [];
     const addedErrors: Graph["parse_errors"] = [];
+    const localSkipped: string[] = [];
     for (const file of expanded) {
       if (Date.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
-      const st = statSync(absPath);
-      file_hashes[file] = sha256FileSync(absPath);
+      // 0.1.8+: every per-file IO step is now best-effort. Pre-0.1.8 a
+      // mid-build rebase/rm would throw out of statSync/sha256/read and
+      // abort the whole delta. Codex round 1 catch.
+      let st;
+      try {
+        st = statSync(absPath);
+      } catch (e) {
+        addedErrors.push({ file, message: `stat failed: ${(e as Error).message}` });
+        continue;
+      }
+      try {
+        file_hashes[file] = sha256FileSync(absPath);
+      } catch (e) {
+        addedErrors.push({ file, message: `hash failed: ${(e as Error).message}` });
+        continue;
+      }
       file_mtimes[file] = st.mtimeMs;
-      const source = readFileSync(absPath, "utf8");
-      const extracted = extractTsFileGraph(file, source, allFileSet, tsLoaded.ts, tsconfigResolver);
+      let source: string;
+      try {
+        source = readFileSync(absPath, "utf8");
+      } catch (e) {
+        addedErrors.push({ file, message: `read failed: ${(e as Error).message}` });
+        continue;
+      }
+      // 0.1.8+: per-file extraction is best-effort. A single bad file
+      // (parser crash, malformed source) must not abort the whole delta.
+      let extracted: ReturnType<typeof extractTsFileGraph>;
+      try {
+        extracted = extractTsFileGraph(file, source, allFileSet, tsLoaded.ts, tsconfigResolver);
+      } catch (e) {
+        addedErrors.push({ file, message: `parser threw: ${(e as Error).message}` });
+        continue;
+      }
+      // 0.1.8+: per-file edge-cap was a build-abort signal; now it skips
+      // the offending file with an actionable parse_error and continues.
+      // Aborting the whole graph for one overgrown generated file (e.g.
+      // a 1000-line test fixture) silently broke every MCP query.
       if (extracted.edges.length > cfg.graph.max_edges_per_file) {
-        return fail(
-          "graph-too-large",
-          `Edge cap exceeded in ${file} — add it to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
-        );
+        localSkipped.push(file);
+        addedErrors.push({
+          file,
+          message: `skipped: edge cap exceeded (${extracted.edges.length} > ${cfg.graph.max_edges_per_file}) — add to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
+        });
+        continue;
       }
       addedNodes.push(...extracted.nodes);
       addedEdges.push(...extracted.edges);
       addedErrors.push(...extracted.parse_errors);
     }
+    // 0.1.8+: carry forward prevMeta.skipped_files for entries that
+    // (a) still exist in current enumeration, AND (b) weren't re-parsed
+    // this delta (so we didn't get a chance to clear or re-skip them).
+    // Pre-0.1.8 the delta path silently dropped them, lying to the user
+    // about the graph's completeness. Codex round 1 catch.
+    const carriedSkipped = (prevMeta.skipped_files ?? []).filter(
+      (f) => allFileSet.has(f) && !expanded.has(f),
+    );
+    const mergedSkipped = Array.from(
+      new Set([...skipped_files, ...carriedSkipped, ...localSkipped]),
+    ).sort();
 
     const graph = normalizeGraph({
       schema_version: GRAPH_SCHEMA_VERSION,
@@ -211,11 +268,19 @@ const deltaBuildFromSnapshot = async (
       soft_cap: cfg.graph.max_files,
       hard_cap: cfg.graph.hard_max_files,
       parse_error_count: graph.parse_errors.length,
-      skipped_files,
+      skipped_files: mergedSkipped,
       exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
       tsconfig_fingerprint: tsconfigFingerprint,
     };
-    new JsonGraphStore().save(repoId, graph, meta);
+    try {
+      new JsonGraphStore().save(identity, graph, meta, cfg.graph);
+    } catch (e) {
+      const msg = (e as NodeJS.ErrnoException).code;
+      if (msg === "EACCES" || msg === "EROFS" || msg === "EPERM") {
+        return fail("read-only-repo", `Cannot write ${join(repoPath, ".tokenomy-graph")} (${msg}).`);
+      }
+      return fail("io-error", (e as Error).message);
+    }
     return {
       ok: true,
       stale: false,
@@ -227,7 +292,7 @@ const deltaBuildFromSnapshot = async (
         edge_count: graph.edges.length,
         parse_error_count: graph.parse_errors.length,
         duration_ms: 0,
-        skipped_files,
+        skipped_files: mergedSkipped,
       },
     };
   } catch (error) {
@@ -282,9 +347,20 @@ const isStaleLock = (path: string): boolean => {
   }
 };
 
-const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
-  const path = graphLockPath(repoId);
-  mkdirSync(dirname(path), { recursive: true });
+const acquireBuildLock = (
+  identity: RepoIdentityLike,
+  cfg: StorageLocationConfig,
+): (() => void) | FailOpen => {
+  const path = graphLockPath(identity, cfg);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EROFS" || code === "EPERM") {
+      return fail("read-only-repo", `Cannot create ${dirname(path)} (${code}).`);
+    }
+    return fail("io-error", (e as Error).message);
+  }
   const stamp = (fd: number): void => {
     writeSync(fd, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
   };
@@ -295,7 +371,11 @@ const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
       closeSync(fd);
       rmSync(path, { force: true });
     };
-  } catch {
+  } catch (firstErr) {
+    const firstCode = (firstErr as NodeJS.ErrnoException).code;
+    if (firstCode === "EACCES" || firstCode === "EROFS" || firstCode === "EPERM") {
+      return fail("read-only-repo", `Cannot write ${path} (${firstCode}).`);
+    }
     if (isStaleLock(path)) {
       try {
         rmSync(path, { force: true });
@@ -314,12 +394,13 @@ const acquireBuildLock = (repoId: string): (() => void) | FailOpen => {
 };
 
 const buildGraphFromFiles = async (
-  repoId: string,
-  repoPath: string,
+  identity: RepoIdentityLike,
   files: string[],
   skipped_files: string[],
   cfg: Config,
 ): Promise<BuildGraphResult> => {
+  const repoId = identity.repoId;
+  const repoPath = identity.repoPath;
   const tsLoaded = await loadTypescript(repoPath);
   if (!tsLoaded.ok) return tsLoaded;
 
@@ -349,24 +430,63 @@ const buildGraphFromFiles = async (
     cfg.graph.tsconfig.enabled,
   );
 
+  const localSkipped: string[] = [];
   for (const file of files) {
     if (Date.now() > deadline) return fail("timeout");
     const absPath = join(repoPath, ...file.split("/"));
-    const st = statSync(absPath);
-    file_hashes[file] = sha256FileSync(absPath);
+    let st;
+    try {
+      st = statSync(absPath);
+    } catch (e) {
+      // 0.1.8+: file enumerated but vanished mid-build (rebase, rm). Don't
+      // abort the whole graph — record + continue.
+      parse_errors.push({ file, message: `stat failed: ${(e as Error).message}` });
+      continue;
+    }
+    try {
+      file_hashes[file] = sha256FileSync(absPath);
+    } catch (e) {
+      // 0.1.8+ codex round 2: same per-file resilience as delta path.
+      parse_errors.push({ file, message: `hash failed: ${(e as Error).message}` });
+      continue;
+    }
     file_mtimes[file] = st.mtimeMs;
-    const source = readFileSync(absPath, "utf8");
-    const extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts, tsconfigResolver);
+    let source: string;
+    try {
+      source = readFileSync(absPath, "utf8");
+    } catch (e) {
+      parse_errors.push({ file, message: `read failed: ${(e as Error).message}` });
+      continue;
+    }
+    // 0.1.8+: per-file extraction is best-effort. Single bad file (parser
+    // crash, malformed source) must not abort the whole build.
+    let extracted: ReturnType<typeof extractTsFileGraph>;
+    try {
+      extracted = extractTsFileGraph(file, source, fileSet, tsLoaded.ts, tsconfigResolver);
+    } catch (e) {
+      parse_errors.push({ file, message: `parser threw: ${(e as Error).message}` });
+      continue;
+    }
+    // 0.1.8+: per-file edge-cap skips the file rather than aborting the
+    // whole graph. Pre-0.1.8 a single overgrown generated file (e.g. a
+    // long test fixture with N×N references) made every MCP query return
+    // graph-too-large indefinitely. Now we record the skip + continue so
+    // the remaining 99% of the graph is still queryable.
     if (extracted.edges.length > cfg.graph.max_edges_per_file) {
-      return fail(
-        "graph-too-large",
-        `Edge cap exceeded in ${file} — add it to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
-      );
+      localSkipped.push(file);
+      parse_errors.push({
+        file,
+        message: `skipped: edge cap exceeded (${extracted.edges.length} > ${cfg.graph.max_edges_per_file}) — add to graph.exclude or pass --exclude '${suggestExcludeGlob(file)}'`,
+      });
+      continue;
     }
     nodes.push(...extracted.nodes);
     edges.push(...extracted.edges);
     parse_errors.push(...extracted.parse_errors);
   }
+  const mergedSkipped = Array.from(
+    new Set([...skipped_files, ...localSkipped]),
+  ).sort();
 
   const graph = normalizeGraph({
     schema_version: GRAPH_SCHEMA_VERSION,
@@ -397,11 +517,19 @@ const buildGraphFromFiles = async (
     soft_cap: cfg.graph.max_files,
     hard_cap: cfg.graph.hard_max_files,
     parse_error_count: graph.parse_errors.length,
-    skipped_files,
+    skipped_files: mergedSkipped,
     exclude_fingerprint: fingerprintExcludes(cfg.graph.exclude),
     tsconfig_fingerprint: tsconfigFingerprint,
   };
-  new JsonGraphStore().save(repoId, graph, meta);
+  try {
+    new JsonGraphStore().save(identity, graph, meta, cfg.graph);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EROFS" || code === "EPERM") {
+      return fail("read-only-repo", `Cannot write ${join(repoPath, ".tokenomy-graph")} (${code}).`);
+    }
+    return fail("io-error", (e as Error).message);
+  }
 
   return {
     ok: true,
@@ -414,9 +542,59 @@ const buildGraphFromFiles = async (
       edge_count: graph.edges.length,
       parse_error_count: graph.parse_errors.length,
       duration_ms: 0,
-      skipped_files,
+      skipped_files: mergedSkipped,
     },
   };
+};
+
+// 0.1.8+: post-success housekeeping. Runs after a successful build:
+//   1. auto-migrate legacy `~/.tokenomy/graphs/<repoId>/` (one-time, no-op
+//      after the first run);
+//   2. patch `<repoRoot>/.gitignore` with `.tokenomy-graph/` (idempotent);
+//   3. register the project in `~/.tokenomy/projects.json` (idempotent).
+// All best-effort — none of these failures must break the build itself.
+const postBuildHousekeeping = (
+  identity: RepoIdentityLike,
+  cfg: Config,
+): void => {
+  const inRepo = (cfg.graph.location ?? "in-repo") === "in-repo";
+  if (inRepo && cfg.graph.auto_gitignore !== false) {
+    appendGitignoreLine(join(identity.repoPath, ".gitignore"), ".tokenomy-graph/");
+  }
+  try {
+    registerProject({
+      repoRoot: identity.repoPath,
+      repoId: identity.repoId,
+      last_built_at: new Date().toISOString(),
+    });
+  } catch {
+    // best-effort
+  }
+};
+
+// 0.1.8+ codex round 2: shared post-success cleanup. Runs on every
+// successful path (cached-fresh / delta / full). Pre-fix only the full
+// rebuild cleared `.dirty`; with `incremental:true` default, the delta
+// path returned BEFORE that clear, so every subsequent read saw the
+// sentinel and kicked off another rebuild. Same fix surfaces async
+// failure clearing on direct `tokenomy graph build` calls.
+const postBuildSuccess = (
+  identity: RepoIdentityLike,
+  cfg: Config,
+): void => {
+  postBuildHousekeeping(identity, cfg);
+  try {
+    const dirty = graphDirtySentinelPath(identity, cfg.graph);
+    if (existsSync(dirty)) rmSync(dirty, { force: true });
+  } catch {
+    // best-effort
+  }
+  try {
+    const async = graphAsyncFailurePath(identity, cfg.graph);
+    if (existsSync(async)) rmSync(async, { force: true });
+  } catch {
+    // best-effort
+  }
 };
 
 export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraphResult> => {
@@ -424,26 +602,56 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
   const identity = resolveRepoId(options.cwd);
   const store = new JsonGraphStore();
 
+  // 0.1.8+ codex round 12: patch `.gitignore` BEFORE any write to
+  // `<repoRoot>/.tokenomy-graph/` so even failure paths (graph-disabled,
+  // no-files, repo-too-large, build-in-progress) don't leave an
+  // untracked `?? .tokenomy-graph/` in `git status`. Idempotent.
+  if (
+    (options.config.graph.location ?? "in-repo") === "in-repo" &&
+    options.config.graph.auto_gitignore !== false
+  ) {
+    appendGitignoreLine(join(identity.repoPath, ".gitignore"), ".tokenomy-graph/");
+  }
+
   if (!options.config.graph.enabled) {
     const result = fail("graph-disabled");
-    logGraphBuild(identity.repoId, identity.repoPath, result);
+    logGraphBuild(identity, result, options.config.graph);
     return result;
   }
 
-  const unlock = acquireBuildLock(identity.repoId);
+  // 0.1.8+: auto-migrate legacy `~/.tokenomy/graphs/<repoId>/` to in-repo
+  // BEFORE we attempt to load existing meta/snapshot. One-time per repo;
+  // skipped when already migrated or destination dir exists. Best-effort.
+  if (
+    (options.config.graph.location ?? "in-repo") === "in-repo" &&
+    options.config.graph.auto_migrate !== false
+  ) {
+    try {
+      const result = tryMigrateOne("graph", identity);
+      if (result.status === "moved") {
+        process.stderr.write(
+          `[tokenomy] migrated graph from ${result.from} → ${result.to}\n`,
+        );
+      }
+    } catch {
+      // never break the build on a failed migration attempt
+    }
+  }
+
+  const unlock = acquireBuildLock(identity, options.config.graph);
   if (typeof unlock !== "function") {
-    logGraphBuild(identity.repoId, identity.repoPath, unlock);
+    logGraphBuild(identity, unlock, options.config.graph);
     return unlock;
   }
 
   try {
     if (!options.force) {
-      const existingMeta = store.loadMeta(identity.repoId);
-      const existingGraph = store.loadGraph(identity.repoId);
+      const existingMeta = store.loadMeta(identity, options.config.graph);
+      const existingGraph = store.loadGraph(identity, options.config.graph);
       if (existingMeta && existingGraph) {
         const stale = getGraphStaleStatus(identity.repoPath, existingMeta, options.config);
         if (!stale.ok) {
-          logGraphBuild(identity.repoId, identity.repoPath, stale);
+          logGraphBuild(identity, stale, options.config.graph);
           return stale;
         }
         if (!stale.stale) {
@@ -461,7 +669,10 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               skipped_files: existingMeta.skipped_files ?? [],
             },
           };
-          logGraphBuild(identity.repoId, identity.repoPath, result);
+          logGraphBuild(identity, result, options.config.graph);
+          // 0.1.8+ codex round 1+2: shared cleanup on every success
+          // path — housekeeping + `.dirty` clear + async-failure clear.
+          postBuildSuccess(identity, options.config);
           return result;
         }
         // Incremental (beta-3): re-parse only stale files + their direct
@@ -477,8 +688,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
             const ratio = stale.stale_files.length / enumerated.files.length;
             if (ratio <= DELTA_MAX_RATIO) {
               const delta = await deltaBuildFromSnapshot(
-                identity.repoId,
-                identity.repoPath,
+                identity,
                 existingMeta,
                 existingGraph,
                 enumerated.files,
@@ -488,7 +698,12 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               );
               if (delta.ok) {
                 delta.data.duration_ms = Date.now() - start;
-                logGraphBuild(identity.repoId, identity.repoPath, delta);
+                logGraphBuild(identity, delta, options.config.graph);
+                // 0.1.8+ codex round 2: clear `.dirty` + async-failure
+                // here too. Pre-fix the delta path returned BEFORE the
+                // post-build `.dirty` clear, so every read kicked off
+                // another rebuild forever.
+                postBuildSuccess(identity, options.config);
                 return delta;
               }
               // Fall through to full rebuild if delta couldn't complete.
@@ -500,42 +715,34 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
 
     const enumerated = enumerateGraphFiles(identity.repoPath, options.config);
     if (!enumerated.ok) {
-      logGraphBuild(identity.repoId, identity.repoPath, enumerated);
+      logGraphBuild(identity, enumerated, options.config.graph);
       return enumerated;
     }
     if (enumerated.files.length === 0) {
       const result = fail("no-files");
-      logGraphBuild(identity.repoId, identity.repoPath, result);
+      logGraphBuild(identity, result, options.config.graph);
       return result;
     }
 
     const built = await buildGraphFromFiles(
-      identity.repoId,
-      identity.repoPath,
+      identity,
       enumerated.files,
       enumerated.skipped_files,
       options.config,
     );
     if (!built.ok) {
-      logGraphBuild(identity.repoId, identity.repoPath, built);
+      logGraphBuild(identity, built, options.config.graph);
       return built;
     }
     built.data.duration_ms = Date.now() - start;
-    logGraphBuild(identity.repoId, identity.repoPath, built);
-    // 0.1.3+: clear the dirty sentinel after a successful rebuild so the
-    // next isGraphStaleCheap call falls back to its normal mtime walk
-    // instead of short-circuiting to "stale". Best-effort; missing-file
-    // is the desired post-state anyway.
-    try {
-      const dirty = graphDirtySentinelPath(identity.repoId);
-      if (existsSync(dirty)) rmSync(dirty, { force: true });
-    } catch {
-      // ignore
-    }
+    logGraphBuild(identity, built, options.config.graph);
+    // 0.1.8+: shared post-success cleanup (housekeeping + `.dirty` +
+    // async-failure clear). See postBuildSuccess.
+    postBuildSuccess(identity, options.config);
     return built;
   } catch (error) {
     const result = fail("io-error", (error as Error).message);
-    logGraphBuild(identity.repoId, identity.repoPath, result);
+    logGraphBuild(identity, result, options.config.graph);
     return result;
   } finally {
     unlock();
@@ -546,12 +753,25 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
   if (!config.graph.enabled) return fail("graph-disabled");
   const identity = resolveRepoId(cwd);
   const store = new JsonGraphStore();
-  const meta = store.loadMeta(identity.repoId);
-  const graph = store.loadGraph(identity.repoId);
-  if (!meta || !graph) return readLastGraphBuildFailure(identity.repoId) ?? fail("graph-not-built");
+  const meta = store.loadMeta(identity, config.graph);
+  const graph = store.loadGraph(identity, config.graph);
+  if (!meta || !graph) return readLastGraphBuildFailure(identity, config.graph) ?? fail("graph-not-built");
 
   const stale = getGraphStaleStatus(identity.repoPath, meta, config);
   if (!stale.ok) return stale;
+
+  // 0.1.8+: surface the last build failure (e.g. from a background
+  // rebuild) on success so users see it in `tokenomy graph status`
+  // without having to call `tokenomy diagnose`. The graph is still
+  // ok — agent can still query — but the user gets to learn the
+  // updates haven't been landing. Prefer the async-failure sentinel
+  // (freshest, written by handlers.ts startBackgroundRebuild) over the
+  // build log; the build log is the truncatable fallback. Codex round 1
+  // P2 catch.
+  const async = readAsyncBuildFailure(identity, config.graph);
+  const lastFailure: { reason: string; hint?: string } | null = async
+    ? { reason: async.reason, ...(async.hint ? { hint: async.hint } : {}) }
+    : readLastGraphBuildFailure(identity, config.graph);
 
   return {
     ok: true,
@@ -566,6 +786,7 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
       edge_count: meta.edge_count,
       parse_error_count: meta.parse_error_count,
       skipped_files: meta.skipped_files ?? [],
+      ...(lastFailure ? { last_build_failure: { reason: lastFailure.reason, hint: lastFailure.hint } } : {}),
     },
   };
 };

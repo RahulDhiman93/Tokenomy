@@ -39,8 +39,8 @@ const stage = (dir: string): void => {
 };
 
 const loadGraph = (repo: string): Graph => {
-  const { repoId } = resolveRepoId(repo);
-  const graph = new JsonGraphStore().loadGraph(repoId);
+  const identity = resolveRepoId(repo);
+  const graph = new JsonGraphStore().loadGraph(identity);
   if (!graph) throw new Error("graph not built");
   return graph;
 };

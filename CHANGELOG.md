@@ -12,6 +12,139 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-05-11
+
+### Fixed (graph stability + usefulness)
+
+- **Skip-and-continue on per-file edge-cap.** Pre-0.1.8 a single
+  overgrown file (long test fixture, generated bundle, etc.) returning
+  more than `graph.max_edges_per_file` aborted the entire build, leaving
+  the agent with a hostage 0-node graph. Now the offending file is
+  pushed to `skipped_files` with an actionable `parse_error` and the
+  remaining 99% of the repo builds normally. Same treatment for files
+  that vanish mid-build or fail to parse.
+- **Async-rebuild failures now surface.** The MCP read-side
+  `auto_refresh_on_read` path fires `buildGraph` in the background and
+  pre-0.1.8 silently swallowed any non-ok result — agents kept hitting
+  a stale snapshot for days. 0.1.8+ persists the failure to
+  `~/.tokenomy/graphs/<repoId>/.last-async-failure.json` and embeds it
+  as `last_build_failure` on every cacheable read-side response and in
+  `tokenomy graph status`.
+- **Hot-path git timeout already shipped in 0.1.7**, but the
+  cheap-gate now walks all the way to filesystem root instead of
+  capping at 10 ancestors — deep monorepo cwds were silently missing
+  their `.git` and falling through to a non-repo `repoId`.
+- **Default-import find_usages.** Default imports
+  (`import foo from "./mod"`), namespace imports (`import * as ns from
+  "./mod"`), `import = require()`, and CJS `const x = require("./mod")`
+  now carry `original_name` so the cross-module pass surfaces their
+  callers. Pre-0.1.8 React/Next codebases with default-export hooks
+  returned near-empty results.
+- **Priority BFS for `get_minimal_context`.** The 64-node visit budget
+  now fills with importers + references + calls FIRST and only then
+  contains-children. Pre-0.1.8 a hub file's own methods crowded out the
+  importers — `get_minimal_context` on a barrel returned its members,
+  not its callers.
+- **Hint catalog.** Every known failure reason
+  (`graph-too-large`, `repo-too-large`, `typescript-not-installed`,
+  `no-files`, `timeout`, `io-error`, `build-in-progress`,
+  `graph-disabled`, `graph-not-built`, `git-resolve-failed`) now has
+  an actionable hint surfaced in `tokenomy diagnose`, `graph status`,
+  and the MCP `last_build_failure` field.
+- **Incremental rebuilds on by default.** `graph.incremental: true`
+  is the new default. Delta path re-parses only stale files + direct
+  importers and falls back to a full rebuild when tsconfig / exclude
+  fingerprints shift or > 40% of files changed.
+- **Memoized graph index.** `buildGraphIndex` is now WeakMap-cached
+  on the graph reference instead of being rebuilt for every query.
+  `resolveTargetNode` uses the index too — pre-0.1.8 a `find_usages`
+  on a 3k-file graph did two O(N) linear scans of `graph.nodes` per
+  call.
+
+### Changed (in-repo storage — biggest layout change in 0.1.x)
+
+- **Per-repo state now lives IN the repo.** Pre-0.1.8 graph snapshots
+  and Raven artifacts were keyed on a path-hash and stored under
+  `~/.tokenomy/{graphs,raven}/<repoId>/`. That scheme broke when the
+  repo was moved on disk, collided across git worktrees of the same
+  repo, hid the artifact from the user, and lost CI cache-by-path
+  semantics.
+  - **New defaults:** `<repoRoot>/.tokenomy-graph/` + `<repoRoot>/.tokenomy-raven/`.
+  - Worktrees get independent state automatically (one of the
+    longest-standing correctness bugs in 0.1.x).
+  - `mv repo other-name/` survives — no rebuild needed.
+  - `.gitignore` is auto-patched with `.tokenomy-graph/` and
+    `.tokenomy-raven/` on first successful build / `raven enable`.
+    Disable with `tokenomy config set graph.auto_gitignore false`
+    (and same for `raven`).
+  - **Auto-migration** of legacy `~/.tokenomy/{graphs,raven}/<repoId>/`
+    fires once per repo on the first build / `raven enable` after
+    upgrade. Manual migration: `tokenomy graph migrate [--apply]` and
+    `tokenomy raven migrate [--apply]`. Default is dry-run.
+  - **Escape hatch:** `cfg.graph.location: "home"` (and `raven.location`)
+    keeps the legacy `~/.tokenomy/{graphs,raven}/<repoId>/` layout for
+    read-only-repo / CI immutable-mount workflows.
+
+- **New project registry.** `~/.tokenomy/projects.json` (JSONL,
+  append-only, latest-wins on read) tracks every repo with built
+  state. Drives the new cross-repo commands.
+
+- **New CLI commands.**
+  - `tokenomy graph migrate [--apply]` — relocate legacy graph data.
+  - `tokenomy raven migrate [--apply]` — relocate legacy raven data.
+  - `tokenomy graph purge --all` — walks the registry to drop every
+    repo's `.tokenomy-graph/` plus the legacy root.
+  - `tokenomy doctor --all-repos` and `tokenomy diagnose --all-repos`
+    — opt-in cross-repo health walk. Default is cwd-scoped, faster.
+
+### Fixed (codex 13-round review pass)
+
+- **Hot-path event-loop safety.** Sync `git rev-parse` calls in the
+  hook entry could stall ~1.5 s on a wedged `.git`. Hook path now uses
+  a non-spawning ancestor `.git` walk (`resolveRepoIdSync`) so the 1 s
+  watchdog can always fire.
+- **Subdir config resolution.** Every CLI/MCP/hook entry that loads
+  `.tokenomy.json` now resolves to the repo root first, then loads —
+  so a user running any subcommand from a subdir of a repo with a
+  root-level `.tokenomy.json` honors those overrides. Affected:
+  graph build/status/query/purge, raven enable/status/clean/brief,
+  MCP `build_or_update_graph` + cacheable read tools + annotate-after-
+  cache, diagnose sections (config/graph/raven/kratos/golem), report,
+  golem-cmd, kratos-cmd, hook entry.
+- **`.gitignore` patched up-front.** Patch now fires at the top of
+  `buildGraph` (before any `.tokenomy-graph/` write) so failure paths
+  (graph-disabled, no-files, build-in-progress) don't leave an
+  untracked dir in `git status`.
+- **Cross-fs migration safety.** `migrate-storage` `moveDir` now
+  copies to a `<dst>.migrating-<pid>-<ts>` sibling, then atomic-
+  renames into place, then removes the legacy src. Mid-copy crash
+  no longer leaves a partial `.tokenomy-graph/` visible.
+- **Raven brief auto-housekeeping.** `tokenomy raven brief` (and MCP
+  `create_handoff_packet`) was the user's first raven touch when they
+  hadn't run `raven enable`. Now mirrors enable's housekeeping (auto-
+  migrate + `.gitignore` + register) so users don't get a fresh
+  `?? .tokenomy-raven/` in `git status` on their next commit.
+- **`.dirty` sentinel clear on every success path.** Pre-fix the
+  cached-fresh and delta paths returned BEFORE the sentinel clear,
+  so with `incremental: true` (the new default) every read kicked off
+  another rebuild forever. New `postBuildSuccess` runs on cached-fresh,
+  delta, and full success.
+- **`.last-async-failure.json` cleared on direct `tokenomy graph build`
+  success.** Pre-fix a successful manual build kept surfacing the old
+  failure on subsequent MCP responses.
+- **`raven.stats` per-project location.** Cross-repo aggregation now
+  loads each registered project's own `cfg.raven.location` and tallies
+  whichever layout it actually uses (in-repo OR home). Pre-fix a repo
+  set to `location: "home"` showed zero in the cross-repo rollup.
+
+### Verified
+
+- Tests: 772 pass, coverage 92.02 %, typecheck clean.
+- 13 rounds of `codex review` reached consensus.
+- Self-test on Tokenomy: in-repo `.tokenomy-graph/` written with 3 268
+  nodes / 9 647 edges; `.gitignore` patched; `~/.tokenomy/projects.json`
+  populated; `diagnose --json` reports `location: "in-repo"`.
+
 ## [0.1.7] — 2026-04-30
 
 ### Fixed
@@ -1050,7 +1183,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.8
 [0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7
 [0.1.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.6
 [0.1.5]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.5

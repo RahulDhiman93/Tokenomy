@@ -116,7 +116,7 @@ export const summarize = (
     by_reason: reasonRanking,
     by_day: dayRanking,
     window: { first_ts: first, last_ts: last },
-    raven: opts.raven ?? collectRavenStats(undefined, false),
+    raven: opts.raven ?? collectRavenStats(false),
   };
 };
 
@@ -248,8 +248,15 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
   const entries = readEntries(logPath, opts.since);
   const pricePerMillion = opts.pricePerMillion ?? readConfigPrice();
   let ravenEnabled = false;
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
   try {
-    ravenEnabled = loadConfig(process.cwd()).raven.enabled;
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // best-effort
+    }
+    ravenEnabled = loadConfig(cfgPath).raven.enabled;
   } catch {
     // Config unreadable — render Raven as "disabled" rather than failing the report.
   }
@@ -257,15 +264,17 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
   // `allRepos: true` (driven by `--all-repos` from the CLI) to roll up
   // every registered Raven store. Pre-0.1.3 always aggregated globally,
   // which inflated counters and confused agents working in one repo.
-  let repoId: string | undefined;
+  // 0.1.8+: scope Raven aggregation to the current repo by default (in-repo
+  // storage). With `--all-repos`, walk the project registry instead.
+  let identity: { repoId: string; repoPath: string } | undefined;
   if (!opts.allRepos) {
     try {
-      repoId = resolveRepoId(process.cwd()).repoId;
+      identity = resolveRepoId(process.cwd());
     } catch {
-      // Non-git or not-a-repo cwd → fall through to global aggregate.
+      // Non-git cwd → cross-repo aggregate via registry.
     }
   }
-  const raven = collectRavenStats(undefined, ravenEnabled, repoId ? { repoId } : {});
+  const raven = collectRavenStats(ravenEnabled, identity ? { identity } : {});
   const summary = summarize(entries, { top: opts.top, pricePerMillion, raven });
   const html = renderHtml(summary);
   const tui = renderTui(summary);

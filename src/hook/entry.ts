@@ -9,6 +9,7 @@ import {
 } from "./pre-dispatch.js";
 import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
+import { resolveRepoIdSync } from "../graph/repo-id.js";
 import { markGraphDirty } from "../rules/graph-dirty.js";
 import type {
   HookInput,
@@ -155,7 +156,14 @@ const main = async (): Promise<void> => {
       return;
     }
 
-    const cfg = loadConfig(parsed?.cwd ?? process.cwd());
+    // 0.1.8+ codex round 12: use the non-spawning `resolveRepoIdSync`
+    // so we never block the event loop on a slow `git rev-parse` (which
+    // would defeat the 1s watchdog that's scheduled via setTimeout).
+    // Ancestor `.git` walk is sub-ms and identifies repoPath for the
+    // `.tokenomy.json` lookup. Falls back to raw cwd on non-repo.
+    const rawCwd = parsed?.cwd ?? process.cwd();
+    const cfgPath = resolveRepoIdSync(rawCwd).repoPath;
+    const cfg = loadConfig(cfgPath);
 
     if (parsed?.hook_event_name === "SessionStart") {
       const sessionInput = parsed as SessionStartHookInput;

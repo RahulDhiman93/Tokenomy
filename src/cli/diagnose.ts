@@ -10,12 +10,13 @@ import {
   graphMetaPath,
   graphRebuildLockPath,
   graphSnapshotPath,
-  ravenRootDir,
+  ravenRepoDir,
   tokenomyDir,
   updateCachePath,
 } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { readLastGraphBuildFailure, readLastGraphBuildLog } from "../graph/build-log.js";
+import { collectRavenStats } from "../raven/stats.js";
 import { commandExists } from "./agents/common.js";
 import { runDoctor } from "./doctor.js";
 
@@ -88,7 +89,14 @@ const sectionAgents = () =>
 
 const sectionConfig = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       log_path: cfg.log_path,
@@ -107,19 +115,22 @@ const sectionConfig = (): SectionResult => {
 
 const sectionGraph = (): SectionResult => {
   try {
-    const { repoId, repoPath } = resolveRepoId(process.cwd());
-    const meta = graphMetaPath(repoId);
-    const snapshot = graphSnapshotPath(repoId);
-    const buildLog = graphBuildLogPath(repoId);
-    const dirty = graphDirtySentinelPath(repoId);
-    const lock = graphRebuildLockPath(repoId);
+    const identity = resolveRepoId(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    const cfg = loadConfig(identity.repoPath);
+    const meta = graphMetaPath(identity, cfg.graph);
+    const snapshot = graphSnapshotPath(identity, cfg.graph);
+    const buildLog = graphBuildLogPath(identity, cfg.graph);
+    const dirty = graphDirtySentinelPath(identity, cfg.graph);
+    const lock = graphRebuildLockPath(identity, cfg.graph);
     const built = existsSync(meta) && existsSync(snapshot);
-    const lastBuild = readLastGraphBuildLog(repoId);
-    const lastFailure = readLastGraphBuildFailure(repoId);
+    const lastBuild = readLastGraphBuildLog(identity, cfg.graph);
+    const lastFailure = readLastGraphBuildFailure(identity, cfg.graph);
     const out: SectionResult = {
       ok: built,
-      repo_id: repoId,
-      repo_path: repoPath,
+      repo_id: identity.repoId,
+      repo_path: identity.repoPath,
+      location: cfg.graph.location ?? "in-repo",
       meta_present: existsSync(meta),
       snapshot_present: existsSync(snapshot),
       build_log_present: existsSync(buildLog),
@@ -158,33 +169,58 @@ const sectionGraph = (): SectionResult => {
   }
 };
 
-const sectionRaven = (): SectionResult => {
+const sectionRaven = (allRepos = false): SectionResult => {
   try {
-    const root = ravenRootDir();
-    if (!existsSync(root)) return { ok: true, repos: 0, root, present: false };
-    const repos = readdirSync(root).filter((name) => {
-      try {
-        return statSync(join(root, name)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    // 0.1.8+: default to cwd-scoped tally; `allRepos:true` uses the
+    // collectRavenStats path which walks the project registry +
+    // legacy-fallback for unmigrated repos.
+    if (allRepos) {
+      const stats = collectRavenStats(true);
+      return {
+        ok: true,
+        scope: "all-repos",
+        repos: stats.repos,
+        packets: stats.packets,
+        reviews: stats.reviews,
+        comparisons: stats.comparisons,
+        decisions: stats.decisions,
+        last_activity: stats.last_activity,
+      };
+    }
+    const identity = resolveRepoId(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    const cfg = loadConfig(identity.repoPath);
+    const root = ravenRepoDir(identity, cfg.raven);
+    if (!existsSync(root)) {
+      return {
+        ok: true,
+        scope: "cwd",
+        repos: 0,
+        root,
+        present: false,
+        location: cfg.raven.location ?? "in-repo",
+      };
+    }
     let totalBytes = 0;
-    for (const repo of repos) {
-      const repoDir = join(root, repo);
-      for (const sub of ["packets", "reviews", "comparisons", "decisions"]) {
-        const dir = join(repoDir, sub);
-        if (!existsSync(dir)) continue;
-        for (const name of readdirSync(dir)) {
-          try {
-            totalBytes += statSync(join(dir, name)).size;
-          } catch {
-            // skip
-          }
+    for (const sub of ["packets", "reviews", "comparisons", "decisions"]) {
+      const dir = join(root, sub);
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        try {
+          totalBytes += statSync(join(dir, name)).size;
+        } catch {
+          // skip
         }
       }
     }
-    return { ok: true, root, repos: repos.length, total_bytes: totalBytes };
+    return {
+      ok: true,
+      scope: "cwd",
+      root,
+      repos: 1,
+      total_bytes: totalBytes,
+      location: cfg.raven.location ?? "in-repo",
+    };
   } catch (e) {
     return { ok: false, reason: (e as Error).message };
   }
@@ -192,7 +228,14 @@ const sectionRaven = (): SectionResult => {
 
 const sectionKratos = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       enabled: cfg.kratos.enabled,
@@ -207,7 +250,14 @@ const sectionKratos = (): SectionResult => {
 
 const sectionGolem = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       enabled: cfg.golem.enabled,
@@ -249,13 +299,21 @@ const sectionFeedback = (): SectionResult => {
   }
 };
 
-export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
+export interface BuildDiagnoseOptions {
+  // 0.1.8+: when true, dirty-age + raven-size checks (in doctor) and the
+  // raven section walk every registered project. Default false (cwd only).
+  allRepos?: boolean;
+}
+
+export const buildDiagnoseReport = async (
+  opts: BuildDiagnoseOptions = {},
+): Promise<DiagnoseReport> => {
   // 0.1.5+: never let runDoctor's failure abort the whole report. If it
   // throws, surface a `doctor: { ok: false, reason }` block and force
   // `worst: "error"`. Codex audit catch.
   let doctor: SectionResult;
   try {
-    const doctorChecks = await runDoctor();
+    const doctorChecks = await runDoctor({ allRepos: opts.allRepos });
     const failures = doctorChecks.filter((c) => !c.ok);
     doctor = {
       ok: failures.length === 0,
@@ -268,7 +326,7 @@ export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
   }
   const sections = {
     graph: sectionGraph(),
-    raven: sectionRaven(),
+    raven: sectionRaven(opts.allRepos),
     kratos: sectionKratos(),
     golem: sectionGolem(),
     update: sectionUpdate(),
@@ -293,7 +351,8 @@ export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
 
 export const runDiagnose = async (argv: string[]): Promise<number> => {
   const json = argv.includes("--json");
-  const report = await buildDiagnoseReport();
+  const allRepos = argv.includes("--all-repos");
+  const report = await buildDiagnoseReport({ allRepos });
   if (json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {

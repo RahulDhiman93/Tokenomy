@@ -185,8 +185,8 @@ test("buildGraph: pre-upgrade meta without exclude_fingerprint triggers one free
     // Simulate a pre-upgrade meta.json by stripping exclude_fingerprint.
     const { graphMetaPath } = await import("../../src/core/paths.js");
     const { resolveRepoId } = await import("../../src/graph/repo-id.js");
-    const { repoId } = resolveRepoId(dir);
-    const metaPath = graphMetaPath(repoId);
+    const identity = resolveRepoId(dir);
+    const metaPath = graphMetaPath(identity, cfg.graph);
     const meta = JSON.parse(readFileSync(metaPath, "utf8")) as Record<string, unknown>;
     delete meta["exclude_fingerprint"];
     writeFileSync(metaPath, JSON.stringify(meta, null, 2));

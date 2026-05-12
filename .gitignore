@@ -8,3 +8,5 @@ coverage/
 .codex/
 *.cursorrules
 CLAUDE.md
+.tokenomy-graph/
+.tokenomy-raven/

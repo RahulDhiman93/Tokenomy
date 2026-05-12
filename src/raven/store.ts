@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ravenRepoDir } from "../core/paths.js";
+import {
+  ravenRepoDir,
+  type RepoIdentityLike,
+  type StorageLocationConfig,
+} from "../core/paths.js";
 import { atomicWrite } from "../util/atomic.js";
 import { safeParse, stableStringify } from "../util/json.js";
 import type {
@@ -19,8 +23,13 @@ export interface RavenStore {
   decisionsDir: string;
 }
 
-export const ravenStoreForRepo = (repoId: string): RavenStore => {
-  const dir = ravenRepoDir(repoId);
+// 0.1.8+: takes a RepoIdentity + storage cfg (in-repo vs home). Pre-0.1.8
+// took just `repoId` and always wrote under `~/.tokenomy/raven/<repoId>/`.
+export const ravenStoreForRepo = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): RavenStore => {
+  const dir = ravenRepoDir(identity, cfg);
   return {
     dir,
     packetsDir: join(dir, "packets"),

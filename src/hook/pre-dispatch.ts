@@ -28,7 +28,7 @@ import { shouldRefreshUpdateCache } from "../cli/statusline.js";
 import { spawnUpdateCheck } from "../cli/update-check-spawn.js";
 import { estimateTokens } from "../core/gate.js";
 import { appendSavingsLog } from "../core/log.js";
-import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
+import { graphMetaPath } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 
 // Resolve tool_input.file_path against the HookInput.cwd before the rule
@@ -48,12 +48,12 @@ const resolveReadPath = (input: PreHookInput): Record<string, unknown> => {
 
 const graphHint = (cwd: string, cfg: Config): string | null => {
   if (!cfg.graph.enabled) return null;
-  // Cheap gate before we pay for resolveRepoId (git subprocess):
-  // if no graphs dir exists at all, bail without spawning git.
-  if (!existsSync(tokenomyGraphRootDir())) return null;
+  // 0.1.8+: per-repo storage. resolveRepoId's `.git` ancestor walk is the
+  // cheap gate — sub-ms and returns the same cwd for non-repos. Then we
+  // existsSync the per-repo meta to decide whether to nudge.
   try {
-    const { repoId } = resolveRepoId(cwd);
-    if (!existsSync(graphMetaPath(repoId))) return null;
+    const identity = resolveRepoId(cwd);
+    if (!existsSync(graphMetaPath(identity, cfg.graph))) return null;
     return (
       "[tokenomy: a local code graph snapshot exists for this repo. " +
       "If the `tokenomy-graph` MCP server is connected, prefer `get_minimal_context`, " +

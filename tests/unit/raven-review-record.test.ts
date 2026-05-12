@@ -55,7 +55,7 @@ test("recordReview: writes a review when packet head matches HEAD", () => {
     const state = collectGitState(repo);
     assert.equal(state.ok, true);
     if (!state.ok) return;
-    const store = ravenStoreForRepo(state.data.repo_id);
+    const store = ravenStoreForRepo({ repoId: state.data.repo_id, repoPath: state.data.root });
     try {
       const packet = buildPacket(head, repo);
       savePacket(store, packet, "# md");
@@ -100,7 +100,7 @@ test("recordReview: refuses stale packet (head sha mismatch)", () => {
     const state = collectGitState(repo);
     assert.equal(state.ok, true);
     if (!state.ok) return;
-    const store = ravenStoreForRepo(state.data.repo_id);
+    const store = ravenStoreForRepo({ repoId: state.data.repo_id, repoPath: state.data.root });
     try {
       // Flip a single hex char so the packet's recorded HEAD no longer matches.
       const stale = head.replace(/.$/, head.endsWith("0") ? "1" : "0");
@@ -133,7 +133,7 @@ test("recordDecision: requires referenced review_ids to exist; otherwise review-
     const state = collectGitState(repo);
     assert.equal(state.ok, true);
     if (!state.ok) return;
-    const store = ravenStoreForRepo(state.data.repo_id);
+    const store = ravenStoreForRepo({ repoId: state.data.repo_id, repoPath: state.data.root });
     try {
       const packet = buildPacket(head, repo);
       savePacket(store, packet, "# md");
@@ -166,7 +166,7 @@ test("recordDecision: writes decision when reviews exist + head matches", () => 
     const state = collectGitState(repo);
     assert.equal(state.ok, true);
     if (!state.ok) return;
-    const store = ravenStoreForRepo(state.data.repo_id);
+    const store = ravenStoreForRepo({ repoId: state.data.repo_id, repoPath: state.data.root });
     try {
       const packet = buildPacket(head, repo);
       savePacket(store, packet, "# md");

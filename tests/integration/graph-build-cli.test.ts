@@ -71,8 +71,8 @@ test("graph build cli: writes snapshot/meta and reuses fresh graph on second bui
     assert.ok(parsed1.data.node_count >= 25);
     assert.ok(parsed1.data.edge_count >= 23);
 
-    const { repoId } = resolveRepoId(setup.repo);
-    const snapshot = graphSnapshotPath(repoId);
+    const identity = resolveRepoId(setup.repo);
+    const snapshot = graphSnapshotPath(identity);
     assert.equal(existsSync(snapshot), true);
     const before = readFileSync(snapshot, "utf8");
 

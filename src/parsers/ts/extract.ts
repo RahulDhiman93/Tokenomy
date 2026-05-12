@@ -295,7 +295,14 @@ const processImportDeclaration = (state: ExtractionState, node: TS.ImportDeclara
     return;
   }
 
-  if (importClause?.name) addImportSymbol(state, importClause.name.text, line, specifier, "definite");
+  // 0.1.8+: tag default + namespace imports with their export "original
+  // name" so find_usages can correlate them. Pre-0.1.8 only NAMED imports
+  // were tagged; default-export hooks (extremely common in React/Next)
+  // returned empty find_usages results because the cross-module pass
+  // skipped them.
+  if (importClause?.name) {
+    addImportSymbol(state, importClause.name.text, line, specifier, "definite", "default");
+  }
   if (importClause?.namedBindings && state.ts.isNamespaceImport(importClause.namedBindings)) {
     addImportSymbol(
       state,
@@ -303,6 +310,7 @@ const processImportDeclaration = (state: ExtractionState, node: TS.ImportDeclara
       line,
       specifier,
       "definite",
+      "*",
     );
   }
   if (importClause?.namedBindings && state.ts.isNamedImports(importClause.namedBindings)) {
@@ -324,12 +332,15 @@ const processImportEqualsDeclaration = (
 ): void => {
   if (!state.ts.isExternalModuleReference(node.moduleReference)) return;
   if (!isStringLiteralLike(node.moduleReference.expression, state.ts)) return;
+  // 0.1.8+: `import foo = require("./mod")` is a CJS interop default;
+  // tag it as "default" so find_usages cross-module pass matches it.
   addImportSymbol(
     state,
     node.name.text,
     lineOf(state.sourceFile, node),
     node.moduleReference.expression.text,
     "inferred",
+    "default",
   );
 };
 
@@ -376,10 +387,34 @@ const processTopLevelDeclaration = (
   state: ExtractionState,
   stmt: TS.Statement,
 ): void => {
+  // 0.1.8+: anonymous default function/class — `export default function() {}`
+  // and `export default class {}` — have no `stmt.name` so the named
+  // branches below skip. Emit a bare `exp:default` exports edge to the
+  // file itself so default-import find_usages can correlate. Codex
+  // round 2 catch.
+  if (
+    (state.ts.isFunctionDeclaration(stmt) || state.ts.isClassDeclaration(stmt)) &&
+    !stmt.name &&
+    hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword) &&
+    hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword)
+  ) {
+    const expId = addExportSymbol(state, "default");
+    addEdge(state, expId, state.fileNodeId, "exports", "definite");
+    return;
+  }
+
   if (state.ts.isFunctionDeclaration(stmt) && stmt.name) {
     const fnId = addTopLevelFunction(state, stmt, stmt.name.text);
     if (hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword)) {
-      const expId = addExportSymbol(state, stmt.name.text);
+      // 0.1.8+: `export default function foo()` is two modifiers
+      // (Export + Default). Emit `exp:default` AND `exp:foo` so both
+      // `import foo from "./mod"` and named `import { foo }`
+      // (rare but valid) can correlate. Pre-0.1.8 only `exp:foo`
+      // was emitted, so default-import find_usages couldn't link.
+      // Codex round 1 catch.
+      const isDefault = hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword);
+      const expName = isDefault ? "default" : stmt.name.text;
+      const expId = addExportSymbol(state, expName);
       addEdge(state, expId, fnId, "exports", "definite");
     }
     return;
@@ -394,7 +429,9 @@ const processTopLevelDeclaration = (
       }
     }
     if (hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword)) {
-      const expId = addExportSymbol(state, className);
+      const isDefault = hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword);
+      const expName = isDefault ? "default" : className;
+      const expId = addExportSymbol(state, expName);
       addEdge(state, expId, classId, "exports", "definite");
     }
     return;
@@ -607,12 +644,16 @@ const walkSemantic = (
         isStringLiteralLike(specifierArg, state.ts) &&
         !state.importedByName.has(localName)
       ) {
+        // 0.1.8+: tag CJS `const x = require("./mod")` as "default" so
+        // the find_usages cross-module pass treats it like a default
+        // import — these are the same shape semantically.
         addImportSymbol(
           state,
           localName,
           localNameLine,
           specifierArg.text,
           "inferred",
+          "default",
         );
       } else if (specifierArg && isStringLiteralLike(specifierArg, state.ts)) {
         addFileImportEdge(state, specifierArg.text, "inferred");

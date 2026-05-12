@@ -97,7 +97,19 @@ export const DEFAULT_CONFIG: Config = {
     ],
     auto_refresh_on_read: true,
     async_rebuild: true,
-    incremental: false,
+    // 0.1.8+: delta rebuilds default ON. Pre-0.1.8 default was off, so
+    // every save full-rebuilt the snapshot (~500ms on 3k files, 5-10s on
+    // larger repos). Delta path re-parses only stale files + direct
+    // importers; full rebuild still fires when tsconfig or exclude
+    // fingerprints shift, or when >40 % of files turned stale.
+    incremental: true,
+    // 0.1.8+: storage layout — `<repoRoot>/.tokenomy-graph/` by default.
+    // Visible to user, gitignored, isolates worktrees, survives repo
+    // moves, plays well with CI cache-by-path. Set to "home" for the
+    // read-only-repo / immutable-mount escape hatch.
+    location: "in-repo",
+    auto_gitignore: true,
+    auto_migrate: true,
     tsconfig: {
       enabled: true,
     },
@@ -131,6 +143,11 @@ export const DEFAULT_CONFIG: Config = {
   },
   raven: {
     enabled: false,
+    // 0.1.8+: storage layout matches graph — `<repoRoot>/.tokenomy-raven/`
+    // by default.
+    location: "in-repo",
+    auto_gitignore: true,
+    auto_migrate: true,
     requires_codex: true,
     auto_brief: true,
     auto_nudge: true,

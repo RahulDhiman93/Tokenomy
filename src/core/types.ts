@@ -216,6 +216,20 @@ export interface GraphQueryBudgetConfig {
 
 export interface GraphConfig {
   enabled: boolean;
+  // 0.1.8+: where snapshot/meta/build-log/sentinels live.
+  // - "in-repo" (default): `<repoRoot>/.tokenomy-graph/` — visible to user,
+  //   gitignored, isolates worktrees, survives repo moves, CI cache-by-path.
+  // - "home": `~/.tokenomy/graphs/<repoId>/` — legacy escape hatch for
+  //   read-only repos / immutable CI mounts where in-repo writes fail.
+  location?: "in-repo" | "home";
+  // 0.1.8+: when true (default), `tokenomy graph build` appends
+  // `.tokenomy-graph/` to `<repoRoot>/.gitignore` (idempotent).
+  // Has no effect in "home" location mode.
+  auto_gitignore?: boolean;
+  // 0.1.8+: when true (default), buildGraph auto-relocates any legacy
+  // `~/.tokenomy/graphs/<repoId>/` for the current repo into the new
+  // `<repoRoot>/.tokenomy-graph/` location on the first build after upgrade.
+  auto_migrate?: boolean;
   max_files: number;
   hard_max_files: number;
   build_timeout_ms: number;
@@ -345,6 +359,12 @@ export interface GolemConfig {
 
 export interface RavenConfig {
   enabled: boolean;
+  // 0.1.8+: storage location, matches GraphConfig.location semantics.
+  location?: "in-repo" | "home";
+  // 0.1.8+: append `.tokenomy-raven/` to `<repoRoot>/.gitignore` on enable.
+  auto_gitignore?: boolean;
+  // 0.1.8+: auto-relocate legacy `~/.tokenomy/raven/<repoId>/` on enable.
+  auto_migrate?: boolean;
   requires_codex: boolean;
   auto_brief: boolean;
   auto_nudge: boolean;

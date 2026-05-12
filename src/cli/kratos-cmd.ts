@@ -1,5 +1,6 @@
 import { configSet } from "./config-cmd.js";
 import { loadConfig } from "../core/config.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import { formatKratosScan, runKratosScan } from "../kratos/scan.js";
 import { evaluatePrompt } from "../kratos/prompt-rule.js";
 
@@ -12,7 +13,14 @@ import { evaluatePrompt } from "../kratos/prompt-rule.js";
 //                 Useful for testing before enabling continuous mode.
 
 const writeStatus = (): number => {
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
+  let cfgPath = process.cwd();
+  try {
+    cfgPath = resolveRepoId(process.cwd()).repoPath;
+  } catch {
+    // best-effort
+  }
+  const cfg = loadConfig(cfgPath);
   const k = cfg.kratos;
   process.stdout.write(`Kratos: ${k.enabled ? "ENABLED" : "disabled"}\n`);
   process.stdout.write(`  continuous:           ${k.continuous}\n`);
@@ -33,7 +41,14 @@ const writeStatus = (): number => {
 };
 
 const runScan = (argv: string[]): number => {
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
+  let cfgPath = process.cwd();
+  try {
+    cfgPath = resolveRepoId(process.cwd()).repoPath;
+  } catch {
+    // best-effort
+  }
+  const cfg = loadConfig(cfgPath);
   const json = argv.includes("--json");
   // Pass the configured category toggles so users who silenced a noisy
   // category (e.g. `tokenomy config set kratos.categories.transcript-leak false`)
@@ -51,7 +66,14 @@ const runScan = (argv: string[]): number => {
 };
 
 const runCheck = (argv: string[]): number => {
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
+  let cfgPath = process.cwd();
+  try {
+    cfgPath = resolveRepoId(process.cwd()).repoPath;
+  } catch {
+    // best-effort
+  }
+  const cfg = loadConfig(cfgPath);
   const prompt = argv.join(" ");
   if (prompt.length === 0) {
     process.stderr.write("usage: tokenomy kratos check <prompt text>\n");
