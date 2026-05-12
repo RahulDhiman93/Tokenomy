@@ -132,8 +132,8 @@ test("isGraphStaleCheap: missing snapshot (meta survives) is treated as missing"
 
     const { graphSnapshotPath } = await import("../../src/core/paths.js");
     const { resolveRepoId } = await import("../../src/graph/repo-id.js");
-    const { repoId } = resolveRepoId(dir);
-    rmSync(graphSnapshotPath(repoId));
+    const identity = resolveRepoId(dir);
+    rmSync(graphSnapshotPath(identity, DEFAULT_CONFIG.graph));
 
     const result = isGraphStaleCheap(dir, DEFAULT_CONFIG);
     assert.equal(result.missing, true);
@@ -267,9 +267,9 @@ test("isGraphStaleCheap: pre-alpha.17 meta (no tsconfig_fingerprint) is stale", 
     // Strip tsconfig_fingerprint from meta to simulate pre-alpha.17 state.
     const { graphMetaPath } = await import("../../src/core/paths.js");
     const { resolveRepoId } = await import("../../src/graph/repo-id.js");
-    const { repoId } = resolveRepoId(dir);
+    const identity = resolveRepoId(dir);
     const { readFileSync, writeFileSync: wfs } = await import("node:fs");
-    const metaPath = graphMetaPath(repoId);
+    const metaPath = graphMetaPath(identity, DEFAULT_CONFIG.graph);
     const meta = JSON.parse(readFileSync(metaPath, "utf8")) as Record<string, unknown>;
     delete meta["tsconfig_fingerprint"];
     wfs(metaPath, JSON.stringify(meta, null, 2));

@@ -40,9 +40,9 @@ export const loadGraphContext = (
   if (!config.graph.enabled) return fail("graph-disabled");
   const identity = resolveRepoId(cwd);
   const store = new JsonGraphStore();
-  const graph = store.loadGraph(identity.repoId);
-  const meta = store.loadMeta(identity.repoId);
-  if (!graph || !meta) return readLastGraphBuildFailure(identity.repoId) ?? fail("graph-not-built");
+  const graph = store.loadGraph(identity, config.graph);
+  const meta = store.loadMeta(identity, config.graph);
+  if (!graph || !meta) return readLastGraphBuildFailure(identity, config.graph) ?? fail("graph-not-built");
 
   let staleFlag: boolean;
   let staleFiles: string[];

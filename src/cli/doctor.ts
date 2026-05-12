@@ -8,11 +8,13 @@ import {
   graphDirtySentinelPath,
   hookBinaryPath,
   manifestPath,
-  ravenRootDir,
+  ravenRepoDir,
   tokenomyDir,
-  tokenomyGraphRootDir,
   updateCachePath,
 } from "../core/paths.js";
+import { listProjects } from "../util/projects-registry.js";
+import { resolveRepoId } from "../graph/repo-id.js";
+import { loadConfig } from "../core/config.js";
 import { safeParse } from "../util/json.js";
 import {
   countHooksForPath,
@@ -394,7 +396,13 @@ const mcpSdkCheck = async (): Promise<CheckResult> => {
   }
 };
 
-export const runDoctor = async (): Promise<CheckResult[]> => {
+export interface RunDoctorOptions {
+  // 0.1.8+: when true, dirty-age + raven-store-size checks walk the project
+  // registry instead of just the current cwd.
+  allRepos?: boolean;
+}
+
+export const runDoctor = async (opts: RunDoctorOptions = {}): Promise<CheckResult[]> => {
   const out: CheckResult[] = [];
   out.push(nodeVersionCheck());
   const s = settingsParseCheck();
@@ -417,8 +425,8 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
   out.push(await mcpSdkCheck());
   out.push(hookPerfCheck(cfgRaw));
   // 0.1.5+ additions
-  out.push(graphDirtyAgeCheck());
-  out.push(ravenStoreSizeCheck());
+  out.push(graphDirtyAgeCheck(opts.allRepos));
+  out.push(ravenStoreSizeCheck(opts.allRepos));
   out.push(savingsLogSizeCheck(cfgRaw));
   out.push(updateCacheAgeCheck());
   return out;
@@ -428,25 +436,33 @@ export const runDoctor = async (): Promise<CheckResult[]> => {
 // without a successful rebuild — indicates the read-side async rebuild is
 // failing (or no MCP graph tool has fired since the edits).
 //
-// All four 0.1.5 hardening checks use static imports (the project is ESM;
-// `require()` was unavailable at runtime in earlier 0.1.5 drafts — codex
-// audit catch).
-const graphDirtyAgeCheck = (): CheckResult => {
+// 0.1.8+: storage moved to per-repo `.tokenomy-graph/`. Default-scope is now
+// the current cwd. With `allRepos`, walk the registry to cover migrated
+// projects in addition to the current cwd.
+const graphDirtyAgeCheck = (allRepos = false): CheckResult => {
   try {
-    const root = tokenomyGraphRootDir();
-    if (!existsSync(root)) {
-      return { name: "Graph dirty sentinel age", ok: true, detail: "no graphs registered" };
+    const oneHour = 60 * 60 * 1000;
+    const candidates: Array<{ repoId: string; repoPath: string }> = [];
+    if (allRepos) {
+      for (const p of listProjects()) candidates.push({ repoId: p.repoId, repoPath: p.repoRoot });
+    } else {
+      try {
+        candidates.push(resolveRepoId(process.cwd()));
+      } catch {
+        // not a git repo / no .git — skip cleanly
+      }
     }
     let oldestMs = 0;
     let oldestRepo = "";
-    for (const repoId of readdirSync(root)) {
-      const dirty = graphDirtySentinelPath(repoId);
+    for (const identity of candidates) {
+      const cfg = loadConfig(identity.repoPath);
+      const dirty = graphDirtySentinelPath(identity, cfg.graph);
       if (!existsSync(dirty)) continue;
       try {
         const ageMs = Date.now() - statSync(dirty).mtimeMs;
         if (ageMs > oldestMs) {
           oldestMs = ageMs;
-          oldestRepo = repoId;
+          oldestRepo = identity.repoPath;
         }
       } catch {
         // skip
@@ -455,12 +471,11 @@ const graphDirtyAgeCheck = (): CheckResult => {
     if (oldestMs === 0) {
       return { name: "Graph dirty sentinel age", ok: true, detail: "no pending sentinel" };
     }
-    const oneHour = 60 * 60 * 1000;
     const ok = oldestMs < oneHour;
     return {
       name: "Graph dirty sentinel age",
       ok,
-      detail: `oldest .dirty: ${Math.round(oldestMs / 60_000)}min (repo ${oldestRepo.slice(0, 12)}…)`,
+      detail: `oldest .dirty: ${Math.round(oldestMs / 60_000)}min (repo ${oldestRepo})`,
       ...(ok
         ? {}
         : {
@@ -473,32 +488,46 @@ const graphDirtyAgeCheck = (): CheckResult => {
   }
 };
 
-const ravenStoreSizeCheck = (): CheckResult => {
+const ravenStoreSizeCheck = (allRepos = false): CheckResult => {
   try {
-    const root = ravenRootDir();
-    if (!existsSync(root)) return { name: "Raven store size", ok: true, detail: "no Raven store" };
+    const candidates: Array<{ repoId: string; repoPath: string }> = [];
+    if (allRepos) {
+      for (const p of listProjects()) candidates.push({ repoId: p.repoId, repoPath: p.repoRoot });
+    } else {
+      try {
+        candidates.push(resolveRepoId(process.cwd()));
+      } catch {
+        // not a git repo — return no-store
+        return { name: "Raven store size", ok: true, detail: "no Raven store" };
+      }
+    }
     let total = 0;
-    const stack: string[] = [root];
     let scanned = 0;
     const CAP = 50_000;
-    while (stack.length > 0 && scanned < CAP) {
-      const dir = stack.pop()!;
-      let entries: string[];
-      try {
-        entries = readdirSync(dir);
-      } catch {
-        continue;
-      }
-      for (const name of entries) {
-        scanned++;
-        if (scanned >= CAP) break;
-        const full = join(dir, name);
+    for (const identity of candidates) {
+      const cfg = loadConfig(identity.repoPath);
+      const root = ravenRepoDir(identity, cfg.raven);
+      if (!existsSync(root)) continue;
+      const stack: string[] = [root];
+      while (stack.length > 0 && scanned < CAP) {
+        const dir = stack.pop()!;
+        let entries: string[];
         try {
-          const st = statSync(full);
-          if (st.isDirectory()) stack.push(full);
-          else total += st.size;
+          entries = readdirSync(dir);
         } catch {
-          // skip
+          continue;
+        }
+        for (const name of entries) {
+          scanned++;
+          if (scanned >= CAP) break;
+          const full = join(dir, name);
+          try {
+            const st = statSync(full);
+            if (st.isDirectory()) stack.push(full);
+            else total += st.size;
+          } catch {
+            // skip
+          }
         }
       }
     }

@@ -1,6 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { graphAsyncFailurePath, graphBuildLogPath } from "../core/paths.js";
+import {
+  graphAsyncFailurePath,
+  graphBuildLogPath,
+  type RepoIdentityLike,
+  type StorageLocationConfig,
+} from "../core/paths.js";
 import { safeParse } from "../util/json.js";
 import type { GraphBuildLogEntry } from "./schema.js";
 import type { FailOpen } from "./types.js";
@@ -13,8 +18,11 @@ const isGraphBuildLogEntry = (value: unknown): value is GraphBuildLogEntry =>
   typeof (value as { repo_path?: unknown }).repo_path === "string" &&
   typeof (value as { built?: unknown }).built === "boolean";
 
-export const readLastGraphBuildLog = (repoId: string): GraphBuildLogEntry | null => {
-  const path = graphBuildLogPath(repoId);
+export const readLastGraphBuildLog = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): GraphBuildLogEntry | null => {
+  const path = graphBuildLogPath(identity, cfg);
   if (!existsSync(path)) return null;
   try {
     const lines = readFileSync(path, "utf8").trimEnd().split("\n");
@@ -53,7 +61,7 @@ const fallbackHint = (reason: string): string | undefined => {
     return "Filesystem error during build. Check the repo isn't on a transient mount (NFS, network share) and that the user has read access to every TS/JS file.";
   }
   if (reason === "build-in-progress") {
-    return "Another `tokenomy graph build` is in flight. Wait, or if the lock is truly stale, `rm ~/.tokenomy/graphs/<repoId>/.lock` and retry.";
+    return "Another `tokenomy graph build` is in flight. Wait, or if the lock is truly stale, `rm <repo>/.tokenomy-graph/.build.lock` and retry.";
   }
   if (reason === "graph-disabled") {
     return "Graph is turned off. Enable with `tokenomy config set graph.enabled true`.";
@@ -64,11 +72,17 @@ const fallbackHint = (reason: string): string | undefined => {
   if (reason === "git-resolve-failed") {
     return "`git rev-parse` could not locate the repo root. Confirm `git status` works from the cwd.";
   }
+  if (reason === "read-only-repo") {
+    return "`<repoRoot>/.tokenomy-graph/` is not writable. Make the checkout writable, run on a writable bind-mount, or switch to legacy layout with `tokenomy config set graph.location home`.";
+  }
   return undefined;
 };
 
-export const readLastGraphBuildFailure = (repoId: string): FailOpen | null => {
-  const last = readLastGraphBuildLog(repoId);
+export const readLastGraphBuildFailure = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): FailOpen | null => {
+  const last = readLastGraphBuildLog(identity, cfg);
   if (!last || last.built || !last.reason) return null;
   const hint = last.hint ?? fallbackHint(last.reason);
   return {
@@ -92,11 +106,12 @@ export interface AsyncBuildFailureRecord {
 }
 
 export const writeAsyncBuildFailure = (
-  repoId: string,
+  identity: RepoIdentityLike,
   record: AsyncBuildFailureRecord,
+  cfg?: StorageLocationConfig,
 ): void => {
   try {
-    const path = graphAsyncFailurePath(repoId);
+    const path = graphAsyncFailurePath(identity, cfg);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(record));
   } catch {
@@ -104,9 +119,12 @@ export const writeAsyncBuildFailure = (
   }
 };
 
-export const clearAsyncBuildFailure = (repoId: string): void => {
+export const clearAsyncBuildFailure = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): void => {
   try {
-    const path = graphAsyncFailurePath(repoId);
+    const path = graphAsyncFailurePath(identity, cfg);
     if (existsSync(path)) rmSync(path, { force: true });
   } catch {
     // diagnostic only
@@ -114,9 +132,10 @@ export const clearAsyncBuildFailure = (repoId: string): void => {
 };
 
 export const readAsyncBuildFailure = (
-  repoId: string,
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
 ): AsyncBuildFailureRecord | null => {
-  const path = graphAsyncFailurePath(repoId);
+  const path = graphAsyncFailurePath(identity, cfg);
   if (!existsSync(path)) return null;
   try {
     const parsed = safeParse<AsyncBuildFailureRecord>(readFileSync(path, "utf8"));
@@ -125,7 +144,6 @@ export const readAsyncBuildFailure = (
     }
     // 0.1.8+: when the record was written without a hint, fill it from
     // the fallback catalog so callers always see actionable text.
-    // Codex round 1 catch.
     if (!parsed.hint) {
       const hint = fallbackHint(parsed.reason);
       if (hint) return { ...parsed, hint };

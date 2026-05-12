@@ -123,11 +123,11 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
     tokenizer_name: tokenizer.name,
     tokenizer_approximate: tokenizer.approximate,
     raven_enabled: cfg.raven?.enabled === true,
-    raven_repo_id: opts.allRepos
+    raven_identity: opts.allRepos
       ? undefined
       : (() => {
           try {
-            return resolveRepoId(process.cwd()).repoId;
+            return resolveRepoId(process.cwd());
           } catch {
             return undefined;
           }

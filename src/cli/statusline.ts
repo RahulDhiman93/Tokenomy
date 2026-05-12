@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import type { Config } from "../core/types.js";
 import { loadConfig } from "../core/config.js";
-import { graphMetaPath, graphSnapshotPath, tokenomyGraphRootDir, updateCachePath } from "../core/paths.js";
+import { graphDir, graphMetaPath, graphSnapshotPath, updateCachePath } from "../core/paths.js";
 import type { SavingsLogEntry } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { compareVersions } from "./update.js";
@@ -127,18 +128,18 @@ const compact = (tokens: number): string => {
   return `${Math.round(tokens)}`;
 };
 
-const graphState = (cwd: string): "fresh" | "stale" | undefined => {
-  if (!existsSync(tokenomyGraphRootDir())) return undefined;
+const graphState = (cwd: string, cfg: Config): "fresh" | "stale" | undefined => {
   // 0.1.7+: skip the `git rev-parse` spawn entirely when the cwd has no
-  // `.git` in the ancestor chain. resolveRepoId's own cheap-gate handles
-  // that, but the statusline 50ms budget is so tight we want zero work
-  // for non-repo cwds.
+  // `.git` in the ancestor chain — resolveRepoId's cheap-gate handles
+  // that, so the 50ms statusline budget is preserved on non-repo cwds.
+  // 0.1.8+: storage moved per-repo, so the global-existsSync gate is gone.
   try {
-    const { repoId } = resolveRepoId(cwd);
-    if (!existsSync(graphMetaPath(repoId)) || !existsSync(graphSnapshotPath(repoId))) {
+    const identity = resolveRepoId(cwd);
+    if (!existsSync(graphDir(identity, cfg.graph))) return undefined;
+    if (!existsSync(graphMetaPath(identity, cfg.graph)) || !existsSync(graphSnapshotPath(identity, cfg.graph))) {
       return undefined;
     }
-    const meta = safeParse<{ built_at?: string }>(readFileSync(graphMetaPath(repoId), "utf8"));
+    const meta = safeParse<{ built_at?: string }>(readFileSync(graphMetaPath(identity, cfg.graph), "utf8"));
     if (!meta?.built_at) return "stale";
     const age = Date.now() - new Date(meta.built_at).getTime();
     return Number.isFinite(age) && age < 24 * 60 * 60 * 1000 ? "fresh" : "stale";
@@ -184,7 +185,7 @@ export const runStatusLine = (argv: string[]): number => {
     const state: StatusLineState = {
       active: true,
       tokensToday: sumTodaySavings(cfg.log_path),
-      graph: graphState(process.cwd()),
+      graph: graphState(process.cwd(), cfg),
       golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
       raven: cfg.raven.enabled,
       // 0.1.4+: surface kratos when the continuous prompt-time shield

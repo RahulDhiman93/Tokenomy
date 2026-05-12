@@ -20,8 +20,52 @@ const withTempHome = (fn: (home: string) => void): void => {
   }
 };
 
-test("graph store: saves and loads graph snapshot + meta atomically", () => {
+test("graph store: saves and loads graph snapshot + meta (in-repo location)", () => {
+  withTempHome((home) => {
+    // 0.1.8+: storage lives at `<repoPath>/.tokenomy-graph/`. Use the temp
+    // HOME's tmp dir as a stand-in `repoPath` so the in-repo layout writes
+    // somewhere we control (and clean up).
+    const repoPath = mkdtempSync(join(tmpdir(), "tokenomy-graph-store-repo-"));
+    const identity = { repoId: "repo", repoPath };
+    try {
+      const store = new JsonGraphStore();
+      const graph: Graph = {
+        schema_version: GRAPH_SCHEMA_VERSION,
+        repo_id: "repo",
+        nodes: [{ id: "file:src/a.ts", kind: "file", name: "src/a.ts", file: "src/a.ts" }],
+        edges: [],
+        parse_errors: [],
+      };
+      const meta: GraphMeta = {
+        schema_version: GRAPH_SCHEMA_VERSION,
+        repo_id: "repo",
+        repo_path: repoPath,
+        built_at: "2026-04-17T00:00:00.000Z",
+        tokenomy_version: "0.1.0-alpha.4",
+        node_count: 1,
+        edge_count: 0,
+        file_hashes: { "src/a.ts": "abc" },
+        file_mtimes: { "src/a.ts": 1 },
+        soft_cap: 2_000,
+        hard_cap: 5_000,
+        parse_error_count: 0,
+      };
+
+      store.save(identity, graph, meta);
+      assert.equal(existsSync(graphSnapshotPath(identity)), true);
+      assert.equal(existsSync(graphMetaPath(identity)), true);
+      assert.deepEqual(store.loadGraph(identity), graph);
+      assert.deepEqual(store.loadMeta(identity), meta);
+    } finally {
+      rmSync(repoPath, { recursive: true, force: true });
+    }
+  });
+});
+
+test("graph store: legacy 'home' location still works for escape-hatch users", () => {
   withTempHome(() => {
+    const identity = { repoId: "repo", repoPath: "/tmp/repo" };
+    const cfg = { location: "home" as const };
     const store = new JsonGraphStore();
     const graph: Graph = {
       schema_version: GRAPH_SCHEMA_VERSION,
@@ -44,11 +88,10 @@ test("graph store: saves and loads graph snapshot + meta atomically", () => {
       hard_cap: 5_000,
       parse_error_count: 0,
     };
-
-    store.save("repo", graph, meta);
-    assert.equal(existsSync(graphSnapshotPath("repo")), true);
-    assert.equal(existsSync(graphMetaPath("repo")), true);
-    assert.deepEqual(store.loadGraph("repo"), graph);
-    assert.deepEqual(store.loadMeta("repo"), meta);
+    store.save(identity, graph, meta, cfg);
+    assert.equal(existsSync(graphSnapshotPath(identity, cfg)), true);
+    assert.equal(existsSync(graphMetaPath(identity, cfg)), true);
+    assert.deepEqual(store.loadGraph(identity, cfg), graph);
+    assert.deepEqual(store.loadMeta(identity, cfg), meta);
   });
 });

@@ -1,10 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadConfig } from "../core/config.js";
-import { globalConfigPath, ravenRepoDir } from "../core/paths.js";
+import { globalConfigPath } from "../core/paths.js";
 import { atomicWrite } from "../util/atomic.js";
 import { backupFile } from "../util/backup.js";
 import { safeParse, stableStringify } from "../util/json.js";
+import { appendGitignoreLine } from "../util/gitignore.js";
+import { registerProject } from "../util/projects-registry.js";
+import { migrateAll, tryMigrateOne } from "../util/migrate-storage.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import { commandExists } from "./agents/common.js";
 import { runInit } from "./init.js";
 import { createAndSaveRavenPacket } from "../raven/brief.js";
@@ -22,6 +26,7 @@ const HELP = `Usage:
   tokenomy raven compare [--json]
   tokenomy raven pr-check [--json]
   tokenomy raven clean [--dry-run] [--keep=<N>] [--older-than=<days>]
+  tokenomy raven migrate [--apply]
   tokenomy raven install-commands
 `;
 
@@ -55,14 +60,22 @@ const parseFlag = (argv: string[], name: string): string | undefined => {
   return idx >= 0 ? argv[idx + 1] : undefined;
 };
 
+// 0.1.8+: resolve {git, store} together. Storage cfg flows through so the
+// store dir matches the configured location (in-repo vs home).
 const repoStore = (cwd: string) => {
+  const cfg = loadConfig(cwd);
   const git = collectGitState(cwd);
   if (!git.ok) return git;
-  return { ok: true as const, data: { git: git.data, store: ravenStoreForRepo(git.data.repo_id) } };
+  const identity = { repoId: git.data.repo_id, repoPath: git.data.root };
+  return {
+    ok: true as const,
+    data: { git: git.data, store: ravenStoreForRepo(identity, cfg.raven), identity },
+  };
 };
 
 const runEnable = (): number => {
-  const cfg = loadConfig(process.cwd());
+  const cwd = process.cwd();
+  const cfg = loadConfig(cwd);
   const codexFound = commandExists("codex");
   if (cfg.raven.requires_codex && !codexFound) {
     process.stderr.write(
@@ -75,16 +88,50 @@ const runEnable = (): number => {
     );
     return 1;
   }
-  const init = runInit({ graphPath: process.cwd(), backup: true });
+  const init = runInit({ graphPath: cwd, backup: true });
   const backup = setRavenEnabled(true);
-  const store = repoStore(process.cwd());
-  if (store.ok) ensureRavenStore(store.data.store);
+  // 0.1.8+: auto-migrate legacy ~/.tokenomy/raven/<repoId>/ to in-repo
+  // BEFORE we create the new store. Best-effort.
+  let migrated: { from: string; to: string } | null = null;
+  if (
+    (cfg.raven.location ?? "in-repo") === "in-repo" &&
+    cfg.raven.auto_migrate !== false
+  ) {
+    try {
+      const identity = resolveRepoId(cwd);
+      const r = tryMigrateOne("raven", identity);
+      if (r.status === "moved") migrated = { from: r.from, to: r.to };
+    } catch {
+      // best-effort
+    }
+  }
+  const store = repoStore(cwd);
+  if (store.ok) {
+    ensureRavenStore(store.data.store);
+    // 0.1.8+: in-repo storage → patch `.gitignore` + register project.
+    if (
+      (cfg.raven.location ?? "in-repo") === "in-repo" &&
+      cfg.raven.auto_gitignore !== false
+    ) {
+      appendGitignoreLine(join(store.data.identity.repoPath, ".gitignore"), ".tokenomy-raven/");
+    }
+    try {
+      registerProject({
+        repoRoot: store.data.identity.repoPath,
+        repoId: store.data.identity.repoId,
+        raven_enabled: true,
+      });
+    } catch {
+      // best-effort
+    }
+  }
   process.stdout.write(
     [
       "✓ Raven enabled",
       `  codex:  ${codexFound ? "found" : "not required"}`,
       `  mcp:    tokenomy-graph registered`,
-      `  store:  ${store.ok ? store.data.store.dir : ravenRepoDir("unknown")}`,
+      `  store:  ${store.ok ? store.data.store.dir : "(not a git repo)"}`,
+      ...(migrated ? [`  migrated: ${migrated.from} → ${migrated.to}`] : []),
       `  config: ${globalConfigPath()}`,
       `  backup: ${backup ?? "(none)"}`,
       `  hook:   ${init.hookPath ?? "(not installed)"}`,
@@ -105,6 +152,31 @@ const runDisable = (argv: string[]): number => {
   }
   process.stdout.write(`✓ Raven disabled\n  backup: ${backup ?? "(none)"}\n`);
   return 0;
+};
+
+// 0.1.8+: dry-run + apply raven migration across every registered project.
+// Mirrors `tokenomy graph migrate`.
+const runMigrate = (argv: string[]): number => {
+  const apply = argv.includes("--apply");
+  const results = migrateAll("raven", apply);
+  if (results.length === 0) {
+    process.stdout.write("No projects registered. Run `tokenomy raven enable` in each repo first, then retry.\n");
+    return 0;
+  }
+  let moved = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const r of results) {
+    if (r.status === "moved") moved++;
+    else if (r.status === "failed") failed++;
+    else skipped++;
+    process.stdout.write(`  ${r.status.padEnd(20)} ${r.from} → ${r.to}${r.reason ? ` (${r.reason})` : ""}\n`);
+  }
+  process.stdout.write(
+    `\n${apply ? "Migrated" : "Would migrate"}: ${moved} moved, ${skipped} skipped, ${failed} failed.\n`,
+  );
+  if (!apply) process.stdout.write("Re-run with --apply to perform the moves.\n");
+  return failed > 0 ? 1 : 0;
 };
 
 const runStatus = (): number => {
@@ -249,6 +321,7 @@ export const runRaven = (argv: string[]): number => {
   if (sub === "compare") return runCompare(argv.slice(1));
   if (sub === "pr-check") return runPrCheck(argv.slice(1));
   if (sub === "clean") return runClean(argv.slice(1));
+  if (sub === "migrate") return runMigrate(argv.slice(1));
   if (sub === "install-commands") return runInstallCommands();
   process.stderr.write(HELP);
   return 1;

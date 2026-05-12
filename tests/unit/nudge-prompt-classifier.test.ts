@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { classifyPromptRule } from "../../src/rules/prompt-classifier.js";
 import { DEFAULT_CONFIG } from "../../src/core/config.js";
-import { resolveRepoId } from "../../src/graph/repo-id.js";
 import type { Config } from "../../src/core/types.js";
 
 const cfgWith = (patch: (c: Config) => Config): Config =>
@@ -28,10 +27,12 @@ const withFakeGraph = <T>(fn: (cwd: string) => T): T => {
     spawnSync("git", ["add", "."], { cwd });
     spawnSync("git", ["commit", "-q", "-m", "seed"], { cwd });
 
-    const { repoId } = resolveRepoId(cwd);
-    const graphDir = join(home, ".tokenomy", "graphs", repoId);
+    // 0.1.8+: in-repo storage lives under `<repoRoot>/.tokenomy-graph/`.
+    const graphDir = join(cwd, ".tokenomy-graph");
     mkdirSync(graphDir, { recursive: true });
     writeFileSync(join(graphDir, "meta.json"), "{}");
+    // home var kept for the cleanup branch below.
+    void home;
 
     return fn(cwd);
   } finally {

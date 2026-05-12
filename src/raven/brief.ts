@@ -252,7 +252,12 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
 export const createAndSaveRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packet: RavenPacket; markdown: string; path: string }> => {
   const built = buildRavenPacket(opts);
   if (!built.ok) return built;
-  const store = ravenStoreForRepo(built.data.packet.repo.repo_id);
+  const cfg = loadConfig(opts.cwd);
+  const identity = {
+    repoId: built.data.packet.repo.repo_id,
+    repoPath: built.data.packet.repo.root,
+  };
+  const store = ravenStoreForRepo(identity, cfg.raven);
   savePacket(store, built.data.packet, built.data.markdown);
   return { ok: true, data: { ...built.data, path: store.dir } };
 };

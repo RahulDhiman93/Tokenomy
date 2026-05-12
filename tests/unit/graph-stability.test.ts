@@ -69,7 +69,7 @@ test("buildGraph: per-file edge cap skips file, does not abort whole graph", asy
     assert.ok(result.data.skipped_files.includes("bad.ts"), "bad.ts must be in skipped_files");
     // good.ts must still be in the graph
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(result.data.repo_id);
+    const graph = store.loadGraph({ repoId: result.data.repo_id, repoPath: repo });
     assert.ok(graph);
     assert.ok(graph!.nodes.some((n) => n.id === "file:good.ts"));
     // parse_errors must include an actionable message
@@ -117,25 +117,33 @@ test("buildGraph: parser throwing on one file does not abort", async () => {
 // build-log.ts — async failure read/write/clear cycle + new hint reasons
 // -----------------------------------------------------------------------
 
+// 0.1.8+: storage helper. `location: "home"` keeps the legacy
+// `~/.tokenomy/graphs/<repoId>/` layout so synthetic-repoId tests
+// (no real repo on disk) still work without rewriting fixtures.
+const HOME = { location: "home" as const };
+
 test("async build failure: write + read + clear lifecycle", () => {
   const home = mkdtempSync(join(tmpdir(), "tokenomy-async-fail-"));
   const prev = process.env["HOME"];
   process.env["HOME"] = home;
   try {
-    const repoId = "stab-test-repo-1111111111111111111111111111111111111111";
-    mkdirSync(dirname(graphAsyncFailurePath(repoId)), { recursive: true });
-    assert.equal(readAsyncBuildFailure(repoId), null);
-    writeAsyncBuildFailure(repoId, {
+    const identity = {
+      repoId: "stab-test-repo-1111111111111111111111111111111111111111",
+      repoPath: "/tmp/dummy",
+    };
+    mkdirSync(dirname(graphAsyncFailurePath(identity, HOME)), { recursive: true });
+    assert.equal(readAsyncBuildFailure(identity, HOME), null);
+    writeAsyncBuildFailure(identity, {
       ts: "2026-05-11T10:00:00Z",
       reason: "timeout",
       hint: "raise graph.build_timeout_ms",
-    });
-    assert.ok(existsSync(graphAsyncFailurePath(repoId)));
-    const r = readAsyncBuildFailure(repoId);
+    }, HOME);
+    assert.ok(existsSync(graphAsyncFailurePath(identity, HOME)));
+    const r = readAsyncBuildFailure(identity, HOME);
     assert.equal(r?.reason, "timeout");
     assert.equal(r?.hint, "raise graph.build_timeout_ms");
-    clearAsyncBuildFailure(repoId);
-    assert.equal(readAsyncBuildFailure(repoId), null);
+    clearAsyncBuildFailure(identity, HOME);
+    assert.equal(readAsyncBuildFailure(identity, HOME), null);
   } finally {
     if (prev === undefined) delete process.env["HOME"];
     else process.env["HOME"] = prev;
@@ -148,13 +156,16 @@ test("async build failure: malformed JSON returns null", () => {
   const prev = process.env["HOME"];
   process.env["HOME"] = home;
   try {
-    const repoId = "stab-malformed-repo-22222222222222222222222222222222";
-    const path = graphAsyncFailurePath(repoId);
+    const identity = {
+      repoId: "stab-malformed-repo-22222222222222222222222222222222",
+      repoPath: "/tmp/dummy",
+    };
+    const path = graphAsyncFailurePath(identity, HOME);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "{ not json");
-    assert.equal(readAsyncBuildFailure(repoId), null);
+    assert.equal(readAsyncBuildFailure(identity, HOME), null);
     writeFileSync(path, JSON.stringify({ ts: 123, reason: "x" }));
-    assert.equal(readAsyncBuildFailure(repoId), null);
+    assert.equal(readAsyncBuildFailure(identity, HOME), null);
   } finally {
     if (prev === undefined) delete process.env["HOME"];
     else process.env["HOME"] = prev;
@@ -181,7 +192,8 @@ test("readLastGraphBuildFailure: surfaces hints for every known reason", () => {
     ];
     for (const reason of reasons) {
       const repoId = `stab-hint-${reason.replace(/[^a-z]/g, "")}-${"x".repeat(40)}`.slice(0, 64);
-      const path = graphBuildLogPath(repoId);
+      const identity = { repoId, repoPath: "/tmp/dummy" };
+      const path = graphBuildLogPath(identity, HOME);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(
         path,
@@ -197,7 +209,7 @@ test("readLastGraphBuildFailure: surfaces hints for every known reason", () => {
           duration_ms: 0,
         }) + "\n",
       );
-      const fail = readLastGraphBuildFailure(repoId);
+      const fail = readLastGraphBuildFailure(identity, HOME);
       assert.equal(fail?.reason, reason);
       assert.ok(typeof fail?.hint === "string" && fail!.hint!.length > 0, `missing hint for ${reason}`);
     }
@@ -227,7 +239,7 @@ test("find_usages: default-imported function surfaces caller", async () => {
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const graph = store.loadGraph(resolveRepoId(repo));
     assert.ok(graph);
     const result = findUsages(
       graph!,
@@ -269,7 +281,7 @@ test("minimal: priority BFS prefers imports over contains on hub files", async (
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const graph = store.loadGraph(resolveRepoId(repo));
     assert.ok(graph);
     const result = minimalContext(
       graph!,
@@ -315,10 +327,11 @@ test("readGraphStatus: includes last_build_failure when async sentinel exists", 
     execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
-    const { repoId } = resolveRepoId(repo);
+    const identity = resolveRepoId(repo);
+    const { repoId } = identity;
     // Append a failed entry to the build log so readLastGraphBuildFailure
     // returns non-null.
-    const logPath = graphBuildLogPath(repoId);
+    const logPath = graphBuildLogPath(identity, DEFAULT_CONFIG.graph);
     writeFileSync(
       logPath,
       readFileSync(logPath, "utf8") +
@@ -374,7 +387,7 @@ test("dispatchGraphTool: cached result respects sentinel changes (annotate-after
     execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
-    const { repoId } = resolveRepoId(repo);
+    const identity = resolveRepoId(repo);
     const { dispatchGraphTool, _resetQueryCacheForTests } = await import(
       "../../src/mcp/handlers.js"
     );
@@ -388,7 +401,11 @@ test("dispatchGraphTool: cached result respects sentinel changes (annotate-after
     assert.equal(r1.ok, true);
     assert.equal(r1.data?.last_build_failure, undefined);
     // Seed sentinel; cached UNANNOTATED result must NOW carry annotation.
-    writeAsyncBuildFailure(repoId, { ts: "2026-05-11T11:00:00Z", reason: "timeout" });
+    writeAsyncBuildFailure(
+      identity,
+      { ts: "2026-05-11T11:00:00Z", reason: "timeout" },
+      DEFAULT_CONFIG.graph,
+    );
     const r2 = (await dispatchGraphTool(
       "find_usages",
       { target: { file: "a.ts" }, path: repo },
@@ -397,7 +414,7 @@ test("dispatchGraphTool: cached result respects sentinel changes (annotate-after
     assert.equal(r2.ok, true);
     assert.ok(r2.data?.last_build_failure, "cache hit must annotate on read");
     // Clear sentinel; annotation must disappear on the next read.
-    clearAsyncBuildFailure(repoId);
+    clearAsyncBuildFailure(identity, DEFAULT_CONFIG.graph);
     const r3 = (await dispatchGraphTool(
       "find_usages",
       { target: { file: "a.ts" }, path: repo },
@@ -413,14 +430,17 @@ test("readAsyncBuildFailure: fills hint from fallback catalog when stored hint m
   const prev = process.env["HOME"];
   process.env["HOME"] = home;
   try {
-    const repoId = "stab-fb-hint-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const identity = {
+      repoId: "stab-fb-hint-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      repoPath: "/tmp/dummy",
+    };
     // Write WITHOUT a hint; reader should fill from fallback catalog.
-    mkdirSync(dirname(graphAsyncFailurePath(repoId)), { recursive: true });
+    mkdirSync(dirname(graphAsyncFailurePath(identity, HOME)), { recursive: true });
     writeFileSync(
-      graphAsyncFailurePath(repoId),
+      graphAsyncFailurePath(identity, HOME),
       JSON.stringify({ ts: "2026-05-11T00:00:00Z", reason: "timeout" }),
     );
-    const r = readAsyncBuildFailure(repoId);
+    const r = readAsyncBuildFailure(identity, HOME);
     assert.equal(r?.reason, "timeout");
     assert.ok(typeof r?.hint === "string" && r.hint.length > 0);
   } finally {
@@ -471,7 +491,7 @@ test("extract: anonymous export default function/class emits exp:default", async
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const graph = store.loadGraph(resolveRepoId(repo));
     const fnDef = graph!.nodes.find(
       (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "anon-fn.ts",
     );
@@ -493,7 +513,7 @@ test("extract: export default class emits exp:default", async () => {
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const graph = store.loadGraph(resolveRepoId(repo));
     const defaultExport = graph!.nodes.find(
       (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "lib.ts",
     );
@@ -511,7 +531,7 @@ test("extract: export default function emits exp:default", async () => {
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     const store = new JsonGraphStore();
-    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const graph = store.loadGraph(resolveRepoId(repo));
     assert.ok(graph);
     const defaultExport = graph!.nodes.find(
       (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "lib.ts",
@@ -527,12 +547,16 @@ test("dispatchGraphTool: embeds last_build_failure on cacheable response", async
     const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
     assert.equal(built.ok, true);
     // Pre-seed an async-failure sentinel so the next dispatch surfaces it.
-    const { repoId } = resolveRepoId(repo);
-    writeAsyncBuildFailure(repoId, {
-      ts: "2026-05-11T11:00:00Z",
-      reason: "timeout",
-      hint: "raise graph.build_timeout_ms",
-    });
+    const identity = resolveRepoId(repo);
+    writeAsyncBuildFailure(
+      identity,
+      {
+        ts: "2026-05-11T11:00:00Z",
+        reason: "timeout",
+        hint: "raise graph.build_timeout_ms",
+      },
+      DEFAULT_CONFIG.graph,
+    );
     const { dispatchGraphTool } = await import("../../src/mcp/handlers.js");
     const result = await dispatchGraphTool(
       "find_usages",

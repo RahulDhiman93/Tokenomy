@@ -230,16 +230,22 @@ test("doctor: dirty sentinel age, raven store, savings log size, update cache ag
   const h = setupHome();
   try {
     mkdirSync(join(h.home, ".tokenomy"), { recursive: true });
-    // Stale dirty sentinel
-    const repoId = "stale-repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const graphDir = join(h.home, ".tokenomy", "graphs", repoId);
+    // 0.1.8+: register a project so --all-repos doctor walks it.
+    const repoPath = mkdtempSync(join(tmpdir(), "tokenomy-doctor-repo-"));
+    const { registerProject } = await import("../../src/util/projects-registry.js");
+    registerProject({
+      repoRoot: repoPath,
+      repoId: "stale-repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    // Stale dirty sentinel in the in-repo `.tokenomy-graph/` location.
+    const graphDir = join(repoPath, ".tokenomy-graph");
     mkdirSync(graphDir, { recursive: true });
     const dirty = join(graphDir, ".dirty");
     writeFileSync(dirty, "");
     const oldTime = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
     utimesSync(dirty, oldTime, oldTime);
-    // Raven store with file > 10MB
-    const ravenDir = join(h.home, ".tokenomy", "raven", "repo-x", "packets");
+    // Raven store with file > 10MB at the in-repo location.
+    const ravenDir = join(repoPath, ".tokenomy-raven", "packets");
     mkdirSync(ravenDir, { recursive: true });
     writeFileSync(join(ravenDir, "p.json"), Buffer.alloc(11 * 1024 * 1024));
     // Savings log > 50MB
@@ -250,7 +256,9 @@ test("doctor: dirty sentinel age, raven store, savings log size, update cache ag
     const oldTimeCache = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
     utimesSync(cache, oldTimeCache, oldTimeCache);
 
-    const checks = await runDoctor();
+    // 0.1.8+: scope checks across registered projects so the seeded
+    // pretend-repo's stale state is observable.
+    const checks = await runDoctor({ allRepos: true });
     const dirtyCheck = checks.find((c) => c.name === "Graph dirty sentinel age");
     assert.equal(dirtyCheck?.ok, false);
     const raven = checks.find((c) => c.name === "Raven store size");
@@ -702,8 +710,10 @@ test("diagnose: graph section reports last build failure when no graph", async (
   try {
     process.chdir(cwd);
     spawnSync("git", ["init", "-b", "main"], { cwd });
-    const { repoId } = resolveRepoId(cwd);
-    const buildLog = graphBuildLogPath(repoId);
+    const identity = resolveRepoId(cwd);
+    const { repoId } = identity;
+    const { DEFAULT_CONFIG } = await import("../../src/core/config.js");
+    const buildLog = graphBuildLogPath(identity, DEFAULT_CONFIG.graph);
     mkdirSync(dirname(buildLog), { recursive: true });
     writeFileSync(
       buildLog,
@@ -944,27 +954,32 @@ test("update: compareVersions semver rules", () => {
 // build-log.ts + log.ts
 // ---------------------------------------------------------------------------
 
+const HOME_LOC = { location: "home" as const };
+
 test("build-log: returns null on missing path, parses last failure with hint", () => {
   const h = setupHome();
   try {
-    const repoId = "test-repo-1234567890123456789012345678901234567890";
-    assert.equal(readLastGraphBuildLog(repoId), null);
-    assert.equal(readLastGraphBuildFailure(repoId), null);
+    const identity = {
+      repoId: "test-repo-1234567890123456789012345678901234567890",
+      repoPath: "/tmp/dummy",
+    };
+    assert.equal(readLastGraphBuildLog(identity, HOME_LOC), null);
+    assert.equal(readLastGraphBuildFailure(identity, HOME_LOC), null);
 
-    const path = graphBuildLogPath(repoId);
+    const path = graphBuildLogPath(identity, HOME_LOC);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(
       path,
       [
         "junk line",
         "",
-        JSON.stringify({ ts: "x", repo_id: repoId, repo_path: "/r", built: false, reason: "graph-too-large", node_count: 0, edge_count: 0, parse_error_count: 0, duration_ms: 1 }),
-        JSON.stringify({ ts: "y", repo_id: repoId, repo_path: "/r", built: false, reason: "typescript-not-installed", node_count: 0, edge_count: 0, parse_error_count: 0, duration_ms: 1 }),
+        JSON.stringify({ ts: "x", repo_id: identity.repoId, repo_path: "/r", built: false, reason: "graph-too-large", node_count: 0, edge_count: 0, parse_error_count: 0, duration_ms: 1 }),
+        JSON.stringify({ ts: "y", repo_id: identity.repoId, repo_path: "/r", built: false, reason: "typescript-not-installed", node_count: 0, edge_count: 0, parse_error_count: 0, duration_ms: 1 }),
       ].join("\n") + "\n",
     );
-    const last = readLastGraphBuildLog(repoId);
+    const last = readLastGraphBuildLog(identity, HOME_LOC);
     assert.equal(last?.reason, "typescript-not-installed");
-    const fail = readLastGraphBuildFailure(repoId);
+    const fail = readLastGraphBuildFailure(identity, HOME_LOC);
     assert.equal(fail?.ok, false);
     assert.match(fail?.hint ?? "", /typescript/i);
   } finally {
@@ -975,14 +990,17 @@ test("build-log: returns null on missing path, parses last failure with hint", (
 test("build-log: returns null for built:true entries", () => {
   const h = setupHome();
   try {
-    const repoId = "test-repo-built-22222222222222222222222222222222";
-    const path = graphBuildLogPath(repoId);
+    const identity = {
+      repoId: "test-repo-built-22222222222222222222222222222222",
+      repoPath: "/tmp/dummy",
+    };
+    const path = graphBuildLogPath(identity, HOME_LOC);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(
       path,
-      JSON.stringify({ ts: "x", repo_id: repoId, repo_path: "/r", built: true, node_count: 10, edge_count: 5, parse_error_count: 0, duration_ms: 1 }) + "\n",
+      JSON.stringify({ ts: "x", repo_id: identity.repoId, repo_path: "/r", built: true, node_count: 10, edge_count: 5, parse_error_count: 0, duration_ms: 1 }) + "\n",
     );
-    assert.equal(readLastGraphBuildFailure(repoId), null);
+    assert.equal(readLastGraphBuildFailure(identity, HOME_LOC), null);
   } finally {
     h.restore();
   }
@@ -1015,11 +1033,15 @@ test("statusline: graph state fresh when meta is recent", async () => {
   try {
     process.chdir(cwd);
     spawnSync("git", ["init", "-b", "main"], { cwd });
-    const { repoId } = resolveRepoId(cwd);
+    const identity = resolveRepoId(cwd);
     const { graphMetaPath, graphSnapshotPath } = await import("../../src/core/paths.js");
-    mkdirSync(dirname(graphMetaPath(repoId)), { recursive: true });
-    writeFileSync(graphMetaPath(repoId), JSON.stringify({ built_at: new Date().toISOString() }));
-    writeFileSync(graphSnapshotPath(repoId), "{}");
+    const { DEFAULT_CONFIG } = await import("../../src/core/config.js");
+    mkdirSync(dirname(graphMetaPath(identity, DEFAULT_CONFIG.graph)), { recursive: true });
+    writeFileSync(
+      graphMetaPath(identity, DEFAULT_CONFIG.graph),
+      JSON.stringify({ built_at: new Date().toISOString() }),
+    );
+    writeFileSync(graphSnapshotPath(identity, DEFAULT_CONFIG.graph), "{}");
     mkdirSync(join(h.home, ".tokenomy"), { recursive: true });
     writeFileSync(
       join(h.home, ".tokenomy", "config.json"),
@@ -1244,8 +1266,9 @@ test("buildGraph: reclaims a stale lock from a dead PID", async () => {
     spawnSync("git", ["config", "user.email", "t@t"], { cwd });
     spawnSync("git", ["add", "."], { cwd });
     spawnSync("git", ["commit", "-m", "a"], { cwd });
-    const { repoId } = resolveRepoId(cwd);
-    const lockPath = graphLockPath(repoId);
+    const identity = resolveRepoId(cwd);
+    const cfg2 = loadConfig(cwd);
+    const lockPath = graphLockPath(identity, cfg2.graph);
     mkdirSync(dirname(lockPath), { recursive: true });
     // Stale lock: PID = 1 with very old ts (way past 10min staleness)
     writeFileSync(lockPath, JSON.stringify({ pid: 999999, ts: "2020-01-01T00:00:00Z" }));
@@ -1273,8 +1296,9 @@ test("buildGraph: refuses build when an alive PID holds the lock", async () => {
     spawnSync("git", ["config", "user.email", "t@t"], { cwd });
     spawnSync("git", ["add", "."], { cwd });
     spawnSync("git", ["commit", "-m", "a"], { cwd });
-    const { repoId } = resolveRepoId(cwd);
-    const lockPath = graphLockPath(repoId);
+    const identity = resolveRepoId(cwd);
+    const cfg2 = loadConfig(cwd);
+    const lockPath = graphLockPath(identity, cfg2.graph);
     mkdirSync(dirname(lockPath), { recursive: true });
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, ts: new Date().toISOString() }));
     const cfg = loadConfig(cwd);
@@ -1303,8 +1327,9 @@ test("buildGraph: reclaims a legacy empty-file lock", async () => {
     spawnSync("git", ["config", "user.email", "t@t"], { cwd });
     spawnSync("git", ["add", "."], { cwd });
     spawnSync("git", ["commit", "-m", "a"], { cwd });
-    const { repoId } = resolveRepoId(cwd);
-    const lockPath = graphLockPath(repoId);
+    const identity = resolveRepoId(cwd);
+    const cfg2 = loadConfig(cwd);
+    const lockPath = graphLockPath(identity, cfg2.graph);
     mkdirSync(dirname(lockPath), { recursive: true });
     writeFileSync(lockPath, "");
     const oldTime = (Date.now() - 20 * 60 * 1000) / 1000;

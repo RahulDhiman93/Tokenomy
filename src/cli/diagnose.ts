@@ -10,7 +10,7 @@ import {
   graphMetaPath,
   graphRebuildLockPath,
   graphSnapshotPath,
-  ravenRootDir,
+  ravenRepoDir,
   tokenomyDir,
   updateCachePath,
 } from "../core/paths.js";
@@ -107,19 +107,21 @@ const sectionConfig = (): SectionResult => {
 
 const sectionGraph = (): SectionResult => {
   try {
-    const { repoId, repoPath } = resolveRepoId(process.cwd());
-    const meta = graphMetaPath(repoId);
-    const snapshot = graphSnapshotPath(repoId);
-    const buildLog = graphBuildLogPath(repoId);
-    const dirty = graphDirtySentinelPath(repoId);
-    const lock = graphRebuildLockPath(repoId);
+    const identity = resolveRepoId(process.cwd());
+    const cfg = loadConfig(process.cwd());
+    const meta = graphMetaPath(identity, cfg.graph);
+    const snapshot = graphSnapshotPath(identity, cfg.graph);
+    const buildLog = graphBuildLogPath(identity, cfg.graph);
+    const dirty = graphDirtySentinelPath(identity, cfg.graph);
+    const lock = graphRebuildLockPath(identity, cfg.graph);
     const built = existsSync(meta) && existsSync(snapshot);
-    const lastBuild = readLastGraphBuildLog(repoId);
-    const lastFailure = readLastGraphBuildFailure(repoId);
+    const lastBuild = readLastGraphBuildLog(identity, cfg.graph);
+    const lastFailure = readLastGraphBuildFailure(identity, cfg.graph);
     const out: SectionResult = {
       ok: built,
-      repo_id: repoId,
-      repo_path: repoPath,
+      repo_id: identity.repoId,
+      repo_path: identity.repoPath,
+      location: cfg.graph.location ?? "in-repo",
       meta_present: existsSync(meta),
       snapshot_present: existsSync(snapshot),
       build_log_present: existsSync(buildLog),
@@ -160,31 +162,39 @@ const sectionGraph = (): SectionResult => {
 
 const sectionRaven = (): SectionResult => {
   try {
-    const root = ravenRootDir();
-    if (!existsSync(root)) return { ok: true, repos: 0, root, present: false };
-    const repos = readdirSync(root).filter((name) => {
-      try {
-        return statSync(join(root, name)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    // 0.1.8+: scope to the current repo (in-repo storage) rather than the
+    // legacy global walk. Pre-0.1.8 enumerated every `~/.tokenomy/raven/*`.
+    const identity = resolveRepoId(process.cwd());
+    const cfg = loadConfig(process.cwd());
+    const root = ravenRepoDir(identity, cfg.raven);
+    if (!existsSync(root)) {
+      return {
+        ok: true,
+        repos: 0,
+        root,
+        present: false,
+        location: cfg.raven.location ?? "in-repo",
+      };
+    }
     let totalBytes = 0;
-    for (const repo of repos) {
-      const repoDir = join(root, repo);
-      for (const sub of ["packets", "reviews", "comparisons", "decisions"]) {
-        const dir = join(repoDir, sub);
-        if (!existsSync(dir)) continue;
-        for (const name of readdirSync(dir)) {
-          try {
-            totalBytes += statSync(join(dir, name)).size;
-          } catch {
-            // skip
-          }
+    for (const sub of ["packets", "reviews", "comparisons", "decisions"]) {
+      const dir = join(root, sub);
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        try {
+          totalBytes += statSync(join(dir, name)).size;
+        } catch {
+          // skip
         }
       }
     }
-    return { ok: true, root, repos: repos.length, total_bytes: totalBytes };
+    return {
+      ok: true,
+      root,
+      repos: 1,
+      total_bytes: totalBytes,
+      location: cfg.raven.location ?? "in-repo",
+    };
   } catch (e) {
     return { ok: false, reason: (e as Error).message };
   }

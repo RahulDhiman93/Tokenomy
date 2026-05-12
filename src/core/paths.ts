@@ -1,12 +1,11 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const expandHome = (p: string): string =>
   p.startsWith("~") ? join(homedir(), p.slice(1).replace(/^\/+/, "")) : p;
 
 export const tokenomyDir = (): string => join(homedir(), ".tokenomy");
 export const tokenomyBinDir = (): string => join(tokenomyDir(), "bin");
-export const tokenomyGraphRootDir = (): string => join(tokenomyDir(), "graphs");
 export const hookBinaryPath = (): string => join(tokenomyBinDir(), "tokenomy-hook");
 export const globalConfigPath = (): string => join(tokenomyDir(), "config.json");
 export const manifestPath = (): string => join(tokenomyDir(), "installed.json");
@@ -39,34 +38,120 @@ export const sessionStateSlug = (sessionId: string): string =>
   createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 export const sessionStatePath = (sessionId: string): string =>
   join(sessionStateDir(), `${sessionStateSlug(sessionId)}.ndjson`);
-export const ravenRootDir = (): string => join(tokenomyDir(), "raven");
-export const ravenRepoDir = (repoId: string): string => join(ravenRootDir(), repoId);
-export const graphDir = (repoId: string): string => join(tokenomyGraphRootDir(), repoId);
-export const graphSnapshotPath = (repoId: string): string =>
-  join(graphDir(repoId), "snapshot.json");
-export const graphMetaPath = (repoId: string): string =>
-  join(graphDir(repoId), "meta.json");
-export const graphBuildLogPath = (repoId: string): string =>
-  join(graphDir(repoId), "build.jsonl");
-export const graphLockPath = (repoId: string): string =>
-  join(graphDir(repoId), ".build.lock");
+
+// 0.1.8+: project registry. JSONL append-only at `~/.tokenomy/projects.json`.
+// Each line: { repoRoot, repoId, registered_at, last_built_at?, raven_enabled? }.
+// Drives cross-repo commands (`graph purge --all`, `raven clean --all`,
+// `graph migrate`, `raven migrate`, `doctor --all-repos`). Per-repo storage
+// removed the ability to enumerate via `readdirSync(~/.tokenomy/graphs/)`,
+// so this is the registry that backs every cross-repo operation.
+export const projectsRegistryPath = (): string =>
+  join(tokenomyDir(), "projects.json");
+
+// ---------------------------------------------------------------------------
+// Per-repo storage helpers. 0.1.8+: dual-mode.
+//
+// - `location: "in-repo"` (default):  `<repoRoot>/.tokenomy-graph/...`
+//                                     `<repoRoot>/.tokenomy-raven/...`
+// - `location: "home"`   (escape hatch for read-only/CI mounts):
+//                                     `~/.tokenomy/graphs/<repoId>/...`
+//                                     `~/.tokenomy/raven/<repoId>/...`
+//
+// Every helper takes a `RepoIdentity`-shaped `{repoId, repoPath}` and a
+// `StorageLocationConfig`. Both fields are required so the callsite makes
+// the location decision explicitly — defensive against silent fall-through
+// to the wrong layout.
+// ---------------------------------------------------------------------------
+
+export interface RepoIdentityLike {
+  repoId: string;
+  repoPath: string;
+}
+
+export interface StorageLocationConfig {
+  location?: "in-repo" | "home";
+}
+
+const assertAbsolute = (p: string, label: string): void => {
+  if (!isAbsolute(p)) {
+    throw new Error(`${label} must be absolute, got ${p}`);
+  }
+};
+
+// Legacy root, used only in `home` mode + by registry housekeeping.
+export const legacyGraphRootDir = (): string => join(tokenomyDir(), "graphs");
+// Legacy root, used only in `home` mode + by registry housekeeping.
+export const legacyRavenRootDir = (): string => join(tokenomyDir(), "raven");
+
+// Returns the per-repo graph storage directory under the configured
+// location. Throws on non-absolute repoPath (defensive).
+export const graphDir = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => {
+  const loc = cfg?.location ?? "in-repo";
+  if (loc === "home") {
+    return join(legacyGraphRootDir(), identity.repoId);
+  }
+  assertAbsolute(identity.repoPath, "graphDir repoPath");
+  return join(identity.repoPath, ".tokenomy-graph");
+};
+
+export const graphSnapshotPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), "snapshot.json");
+
+export const graphMetaPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), "meta.json");
+
+export const graphBuildLogPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), "build.jsonl");
+
+export const graphLockPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".build.lock");
+
 // 0.1.3+: PostToolUse Edit/Write/MultiEdit touches this sentinel; cleared
 // by buildGraph after a successful rebuild. Existence = "graph definitely
 // stale, skip the enumerate walk."
-export const graphDirtySentinelPath = (repoId: string): string =>
-  join(graphDir(repoId), ".dirty");
+export const graphDirtySentinelPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".dirty");
+
 // 0.1.3+: per-repo lock taken by the async background-rebuild path so
 // rapid edits don't pile up rebuilds. Existence = "rebuild in flight."
-// Same dir as the snapshot so it's atomic-safe with rmSync recursive.
-export const graphRebuildLockPath = (repoId: string): string =>
-  join(graphDir(repoId), ".rebuilding");
+export const graphRebuildLockPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".rebuilding");
+
 // 0.1.8+: last async-rebuild failure recorded by the read-side
 // `startBackgroundRebuild` so the next MCP query can surface it inline
-// (`last_build_failure` on every cacheable response). Cleared by a
-// successful rebuild. Pre-0.1.8 background failures were silently
-// swallowed — agents kept asking a hostage graph for answers.
-export const graphAsyncFailurePath = (repoId: string): string =>
-  join(graphDir(repoId), ".last-async-failure.json");
+// (`last_build_failure` on every cacheable response).
+export const graphAsyncFailurePath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".last-async-failure.json");
+
+// 0.1.8+: per-repo Raven storage. Same dual-mode as graph.
+export const ravenRepoDir = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => {
+  const loc = cfg?.location ?? "in-repo";
+  if (loc === "home") {
+    return join(legacyRavenRootDir(), identity.repoId);
+  }
+  assertAbsolute(identity.repoPath, "ravenRepoDir repoPath");
+  return join(identity.repoPath, ".tokenomy-raven");
+};
 
 export const claudeSettingsPath = (): string =>
   join(homedir(), ".claude", "settings.json");

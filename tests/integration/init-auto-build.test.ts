@@ -77,8 +77,8 @@ test("init --graph-path: auto-builds the graph; snapshot written + summary in st
     );
 
     // Snapshot file should exist on disk for the fixture repo.
-    const { repoId } = resolveRepoId(s.repo);
-    assert.equal(existsSync(graphSnapshotPath(repoId)), true);
+    const identity = resolveRepoId(s.repo);
+    assert.equal(existsSync(graphSnapshotPath(identity)), true);
   } finally {
     s.restore();
   }
@@ -95,8 +95,8 @@ test("init --graph-path --no-build: MCP registered but no graph built", async ()
     assert.match(result.stdout, /graph:\s+tokenomy-graph/);
     assert.doesNotMatch(result.stdout, /build:\s+/);
 
-    const { repoId } = resolveRepoId(s.repo);
-    assert.equal(existsSync(graphSnapshotPath(repoId)), false);
+    const identity = resolveRepoId(s.repo);
+    assert.equal(existsSync(graphSnapshotPath(identity)), false);
   } finally {
     s.restore();
   }

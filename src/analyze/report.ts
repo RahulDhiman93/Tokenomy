@@ -68,9 +68,11 @@ export interface AggregatorOptions {
   // whether the bridge is currently turned on. Stats are collected
   // unconditionally; this only colours the "status" line.
   raven_enabled?: boolean;
-  // 0.1.3+: scope the rolled-up Raven stats to a single repo. When unset,
-  // aggregate across every registered Raven store (pre-0.1.3 behavior).
-  raven_repo_id?: string;
+  // 0.1.8+: scope the rolled-up Raven stats to a single repo. When unset,
+  // aggregate across every registered project via the registry.
+  // Pre-0.1.8 took just `repoId`; the new in-repo storage needs the full
+  // identity to locate `<repoPath>/.tokenomy-raven/`.
+  raven_identity?: { repoId: string; repoPath: string };
 }
 
 interface ToolBucket {
@@ -395,9 +397,8 @@ export class Aggregator {
         approximate: this.opts.tokenizer_approximate,
       },
       raven: collectRavenStats(
-        undefined,
         this.opts.raven_enabled === true,
-        this.opts.raven_repo_id ? { repoId: this.opts.raven_repo_id } : {},
+        this.opts.raven_identity ? { identity: this.opts.raven_identity } : {},
       ),
     };
   }

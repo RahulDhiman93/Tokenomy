@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Config } from "../core/types.js";
-import { graphMetaPath, tokenomyGraphRootDir } from "../core/paths.js";
+import { graphMetaPath } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 
 // UserPromptSubmit prompt-classifier nudge.
@@ -111,11 +111,10 @@ const INTENTS: IntentPattern[] = [
   },
 ];
 
-const graphSnapshotExists = (cwd: string): boolean => {
+const graphSnapshotExists = (cwd: string, cfg: Config): boolean => {
   try {
-    if (!existsSync(tokenomyGraphRootDir())) return false;
-    const { repoId } = resolveRepoId(cwd);
-    return existsSync(graphMetaPath(repoId));
+    const identity = resolveRepoId(cwd);
+    return existsSync(graphMetaPath(identity, cfg.graph));
   } catch {
     return false;
   }
@@ -143,7 +142,7 @@ export const classifyPromptRule = (
   if (alreadyMentionsTokenomy(prompt)) return { kind: "passthrough" };
 
   const intents = nudge.prompt_classifier.intents;
-  const hasGraph = graphSnapshotExists(cwd);
+  const hasGraph = graphSnapshotExists(cwd, cfg);
 
   for (const entry of INTENTS) {
     if (!intents[entry.intent]) continue;

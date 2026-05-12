@@ -43,11 +43,10 @@ const baseInput = (cwd: string, tool: string, file: string): HookInput => ({
 
 test("markGraphDirty: writes .dirty sentinel for Edit on a repo with an existing graph dir", () => {
   withTmpHomeAndRepo((home, repo) => {
-    // Pretend a graph snapshot exists for this repo so the rule fires.
-    const { repoId } = resolveRepoId(repo);
-    mkdirSync(graphDir(repoId), { recursive: true });
+    const identity = resolveRepoId(repo);
+    mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     markGraphDirty(baseInput(repo, "Edit", "src/a.ts"), cfgWithGraph());
-    const sentinel = graphDirtySentinelPath(repoId);
+    const sentinel = graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph);
     assert.ok(existsSync(sentinel), "expected .dirty sentinel to exist");
     const body = readFileSync(sentinel, "utf8");
     assert.match(body, /src\/a\.ts/);
@@ -57,55 +56,55 @@ test("markGraphDirty: writes .dirty sentinel for Edit on a repo with an existing
 
 test("markGraphDirty: idempotent / appends across multiple edits", () => {
   withTmpHomeAndRepo((_home, repo) => {
-    const { repoId } = resolveRepoId(repo);
-    mkdirSync(graphDir(repoId), { recursive: true });
+    const identity = resolveRepoId(repo);
+    mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     markGraphDirty(baseInput(repo, "Write", "src/a.ts"), cfgWithGraph());
     markGraphDirty(baseInput(repo, "Edit", "src/b.ts"), cfgWithGraph());
     markGraphDirty(baseInput(repo, "MultiEdit", "src/c.ts"), cfgWithGraph());
-    const body = readFileSync(graphDirtySentinelPath(repoId), "utf8").split("\n").filter(Boolean);
+    const body = readFileSync(graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph), "utf8")
+      .split("\n")
+      .filter(Boolean);
     assert.equal(body.length, 3);
   });
 });
 
 test("markGraphDirty: skips when graph dir does not exist (no graph built for this repo)", () => {
   withTmpHomeAndRepo((_home, repo) => {
-    const { repoId } = resolveRepoId(repo);
+    const identity = resolveRepoId(repo);
     markGraphDirty(baseInput(repo, "Edit", "src/a.ts"), cfgWithGraph());
-    // Should NOT auto-create the graph dir or sentinel.
-    assert.equal(existsSync(graphDir(repoId)), false);
-    assert.equal(existsSync(graphDirtySentinelPath(repoId)), false);
+    assert.equal(existsSync(graphDir(identity, DEFAULT_CONFIG.graph)), false);
+    assert.equal(existsSync(graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph)), false);
   });
 });
 
 test("markGraphDirty: skips when cfg.graph.enabled is false", () => {
   withTmpHomeAndRepo((_home, repo) => {
-    const { repoId } = resolveRepoId(repo);
-    mkdirSync(graphDir(repoId), { recursive: true });
+    const identity = resolveRepoId(repo);
+    mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     const cfg = cfgWithGraph();
     cfg.graph.enabled = false;
     markGraphDirty(baseInput(repo, "Edit", "src/a.ts"), cfg);
-    assert.equal(existsSync(graphDirtySentinelPath(repoId)), false);
+    assert.equal(existsSync(graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph)), false);
   });
 });
 
 test("markGraphDirty: skips for non-edit tool names", () => {
   withTmpHomeAndRepo((_home, repo) => {
-    const { repoId } = resolveRepoId(repo);
-    mkdirSync(graphDir(repoId), { recursive: true });
+    const identity = resolveRepoId(repo);
+    mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     markGraphDirty(baseInput(repo, "Read", "src/a.ts"), cfgWithGraph());
     markGraphDirty(baseInput(repo, "Bash", ""), cfgWithGraph());
-    assert.equal(existsSync(graphDirtySentinelPath(repoId)), false);
+    assert.equal(existsSync(graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph)), false);
   });
 });
 
 test("isGraphStaleCheap: short-circuits to stale when sentinel exists", () => {
   withTmpHomeAndRepo((_home, repo) => {
-    const { repoId } = resolveRepoId(repo);
-    // Fake a built graph: write minimal meta + snapshot files so the check
-    // doesn't bail with "missing".
-    mkdirSync(graphDir(repoId), { recursive: true });
+    const identity = resolveRepoId(repo);
+    const { repoId } = identity;
+    mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     writeFileSync(
-      graphMetaPath(repoId),
+      graphMetaPath(identity, DEFAULT_CONFIG.graph),
       JSON.stringify({
         schema_version: 1,
         repo_id: repoId,
@@ -121,13 +120,14 @@ test("isGraphStaleCheap: short-circuits to stale when sentinel exists", () => {
         parse_error_count: 0,
       }),
     );
-    writeFileSync(graphSnapshotPath(repoId), JSON.stringify({ schema_version: 1, repo_id: repoId, nodes: [], edges: [], parse_errors: [] }));
-    // Drop the sentinel.
-    writeFileSync(graphDirtySentinelPath(repoId), "marked\n");
+    writeFileSync(
+      graphSnapshotPath(identity, DEFAULT_CONFIG.graph),
+      JSON.stringify({ schema_version: 1, repo_id: repoId, nodes: [], edges: [], parse_errors: [] }),
+    );
+    writeFileSync(graphDirtySentinelPath(identity, DEFAULT_CONFIG.graph), "marked\n");
     const result = isGraphStaleCheap(repo, cfgWithGraph());
     assert.equal(result.missing, false);
     assert.equal(result.stale, true);
-    // Short-circuit: stale_files is empty since we didn't enumerate.
     assert.deepEqual(result.stale_files, []);
   });
 });

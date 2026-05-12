@@ -3,6 +3,7 @@ import { runGraphPurge } from "./graph-purge.js";
 import { runGraphQuery } from "./graph-query.js";
 import { runGraphServe } from "./graph-serve.js";
 import { runGraphStatus } from "./graph-status.js";
+import { runGraphMigrate } from "./graph-migrate.js";
 
 interface ArgMap {
   _: string[];
@@ -14,6 +15,7 @@ const HELP = `Usage:
   tokenomy graph status [--path=<dir>]
   tokenomy graph serve [--path=<dir>]
   tokenomy graph purge [--path=<dir>|--all]
+  tokenomy graph migrate [--apply]
   tokenomy graph query <minimal|impact|review|usages> [--path=<dir>] ...
 `;
 
@@ -81,6 +83,9 @@ export const runGraph = async (argv: string[]): Promise<number> => {
   }
   if (cmd === "purge") {
     return runGraphPurge({ cwd: process.cwd(), path, all: args.flags["all"] === true });
+  }
+  if (cmd === "migrate") {
+    return runGraphMigrate({ apply: args.flags["apply"] === true });
   }
 
   process.stderr.write(`Unknown graph command: ${cmd}\n${HELP}`);

@@ -260,49 +260,55 @@ const withGraphContext = <T>(
 // caller so they see the actionable reason instead of silently receiving
 // a stale snapshot. Catches unexpected throws and falls back to the cheap
 // pre-check's stale state so the read path doesn't tear down.
-// 0.1.3+: in-flight rebuild lockset. Keyed on repoId. Prevents the agent
-// from kicking off N parallel rebuilds in quick succession when each tool
-// call sees a stale snapshot. Process-local; the on-disk
-// graphRebuildLockPath sentinel covers cross-process concurrency.
+// 0.1.3+: in-flight rebuild lockset. 0.1.8+: keyed on `repoPath` (absolute
+// path) — more discriminating than `repoId` under symlinks and worktrees.
+// Process-local; the on-disk graphRebuildLockPath sentinel covers
+// cross-process concurrency.
 const inFlightRebuilds = new Set<string>();
 
 const startBackgroundRebuild = (cwd: string, cfg: Config): void => {
-  let repoId: string;
+  let identity: { repoId: string; repoPath: string };
   try {
-    repoId = resolveRepoId(cwd).repoId;
+    identity = resolveRepoId(cwd);
   } catch {
-    repoId = cwd;
+    identity = { repoId: cwd, repoPath: cwd };
   }
-  if (inFlightRebuilds.has(repoId)) return;
-  inFlightRebuilds.add(repoId);
+  const lockKey = identity.repoPath;
+  if (inFlightRebuilds.has(lockKey)) return;
+  inFlightRebuilds.add(lockKey);
   // Fire-and-forget. Errors are logged via buildGraph's own log path.
   // 0.1.8+: persist any non-ok result to `.last-async-failure.json` so
-  // the next cacheable read-side response can embed it. Pre-0.1.8 these
-  // failures were swallowed silently — agents kept hitting a hostage
-  // graph without learning why.
+  // the next cacheable read-side response can embed it.
   void buildGraph({ cwd, config: cfg, force: false })
     .then((result) => {
       if (result.ok) {
         if (result.data.built) queryCache.invalidate();
-        clearAsyncBuildFailure(repoId);
+        clearAsyncBuildFailure(identity, cfg.graph);
       } else {
-        writeAsyncBuildFailure(repoId, {
-          ts: new Date().toISOString(),
-          reason: result.reason,
-          ...(result.hint ? { hint: result.hint } : {}),
-        });
+        writeAsyncBuildFailure(
+          identity,
+          {
+            ts: new Date().toISOString(),
+            reason: result.reason,
+            ...(result.hint ? { hint: result.hint } : {}),
+          },
+          cfg.graph,
+        );
       }
     })
     .catch((e) => {
-      // buildGraph is meant to be non-throwing; record anyway.
-      writeAsyncBuildFailure(repoId, {
-        ts: new Date().toISOString(),
-        reason: "io-error",
-        hint: (e as Error).message,
-      });
+      writeAsyncBuildFailure(
+        identity,
+        {
+          ts: new Date().toISOString(),
+          reason: "io-error",
+          hint: (e as Error).message,
+        },
+        cfg.graph,
+      );
     })
     .finally(() => {
-      inFlightRebuilds.delete(repoId);
+      inFlightRebuilds.delete(lockKey);
     });
 };
 
@@ -336,7 +342,7 @@ const ensureFreshGraph = async (
       // 0.1.8+: synchronous success clears any stale async-failure
       // record left by a prior background attempt.
       try {
-        clearAsyncBuildFailure(resolveRepoId(cwd).repoId);
+        clearAsyncBuildFailure(resolveRepoId(cwd), cfg.graph);
       } catch {
         // best-effort
       }
@@ -520,32 +526,40 @@ export const dispatchGraphTool = async (
       const version = cacheVersion(name, graphContext.data.meta.built_at, config);
       cacheKey = queryCache.key(name, args, version);
       const cached = queryCache.get(cacheKey);
-      if (cached !== undefined) return annotateWithAsyncFailure(cached as QueryResult<unknown>, name, effectiveCwd);
+      if (cached !== undefined) return annotateWithAsyncFailure(cached as QueryResult<unknown>, name, effectiveCwd, config);
     }
   }
 
   const result = await dispatchGraphToolUncached(name, args, effectiveCwd, precomputedStale);
   // 0.1.8+: cache the UNANNOTATED result. The `last_build_failure`
-  // annotation is read-time only — pre-fix the annotation got cached and
-  // would survive sentinel clears (codex round 1).
+  // annotation is read-time only — caching it would survive sentinel clears.
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
-  return annotateWithAsyncFailure(result, name, effectiveCwd);
+  // Reload config to annotate (cheap; same call path that produced cacheKey).
+  // Skipped automatically by annotateWithAsyncFailure when name is non-cacheable.
+  if (CACHEABLE_TOOLS.has(name)) {
+    return annotateWithAsyncFailure(result, name, effectiveCwd, loadConfig(effectiveCwd));
+  }
+  return result;
 };
 
 // 0.1.8+: shallow-clone + annotate so cached results aren't mutated.
+// `cfg` is optional: when omitted (non-cacheable tools, or callsites
+// outside the loadConfig block) the annotation is skipped — the caller
+// already knows the result isn't cacheable, so there's nothing to do.
 const annotateWithAsyncFailure = (
   result: QueryResult<unknown>,
   name: string,
   effectiveCwd: string,
+  cfg?: Config,
 ): QueryResult<unknown> => {
-  if (!CACHEABLE_TOOLS.has(name) || !result.ok) return result;
-  let repoId: string;
+  if (!CACHEABLE_TOOLS.has(name) || !result.ok || !cfg) return result;
+  let identity: { repoId: string; repoPath: string };
   try {
-    repoId = resolveRepoId(effectiveCwd).repoId;
+    identity = resolveRepoId(effectiveCwd);
   } catch {
     return result;
   }
-  const lastAsync = readAsyncBuildFailure(repoId);
+  const lastAsync = readAsyncBuildFailure(identity, cfg.graph);
   // Cached results are stored UNANNOTATED; if no sentinel exists now,
   // nothing to do — return the cached result as-is.
   if (!lastAsync) return result;
@@ -767,7 +781,8 @@ const ravenContext = (cwd: string): QueryResult<{ root: string; store: ReturnTyp
   if (!git.ok) return git;
   const cfg = loadConfig(git.data.root);
   if (!cfg.raven.enabled) return fail("raven-disabled", "Run `tokenomy raven enable` first.");
-  return { ok: true, data: { root: git.data.root, store: ravenStoreForRepo(git.data.repo_id), cfg } };
+  const identity = { repoId: git.data.repo_id, repoPath: git.data.root };
+  return { ok: true, data: { root: git.data.root, store: ravenStoreForRepo(identity, cfg.raven), cfg } };
 };
 
 const ravenBudget = (cfg: Config, name: string): number =>

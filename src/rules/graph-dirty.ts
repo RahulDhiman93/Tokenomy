@@ -31,15 +31,15 @@ export const markGraphDirty = (input: HookInput, cfg: Config): void => {
   if (!isEditTool(input.tool_name)) return;
   if (!input.cwd || typeof input.cwd !== "string") return;
   try {
-    const { repoId } = resolveRepoId(input.cwd);
-    const dir = graphDir(repoId);
+    const identity = resolveRepoId(input.cwd);
+    const dir = graphDir(identity, cfg.graph);
     if (!existsSync(dir)) {
       // No graph snapshot exists for this repo yet — nothing to invalidate.
       // Don't auto-create the dir; that would imply a graph the user never
       // built and the read-side would treat it as missing → rebuild storm.
       return;
     }
-    const sentinel = graphDirtySentinelPath(repoId);
+    const sentinel = graphDirtySentinelPath(identity, cfg.graph);
     mkdirSync(dirname(sentinel), { recursive: true });
     // Content carries the file_path that triggered the dirty flag so a
     // future incremental-rebuild path can scope work. For now we just

@@ -31,7 +31,7 @@ const HELP = `tokenomy — transparent MCP tool-output trimmer for Claude Code
 Usage:
   tokenomy init [--aggression=conservative|balanced|aggressive] [--no-backup] [--graph-path=<dir>] [--no-build]
                 [--agent=claude-code|codex|cursor|windsurf|cline|gemini] [--list-agents]
-  tokenomy doctor [--fix]
+  tokenomy doctor [--fix] [--all-repos]
   tokenomy status-line [--json]
   tokenomy compress <file> [--llm] [--dry-run] [--diff] [--in-place] [--force]
   tokenomy compress status | restore <file>
@@ -101,8 +101,8 @@ const isAggression = (v: string): v is Config["aggression"] =>
 
 const isAgentName = (v: string): v is AgentName => (agentNames() as string[]).includes(v);
 
-const printDoctor = async (): Promise<number> => {
-  const results = await runDoctor();
+const printDoctor = async (allRepos = false): Promise<number> => {
+  const results = await runDoctor({ allRepos });
   let failed = 0;
   for (const r of results) {
     const mark = r.ok ? "✓" : "✗";
@@ -270,7 +270,7 @@ const main = async (): Promise<number> => {
       for (const a of applied) process.stdout.write(`${a.ok ? "✓" : "✗"} ${a.name} — ${a.detail}\n`);
       return applied.every((a) => a.ok) ? 0 : 1;
     }
-    return printDoctor();
+    return printDoctor(args.flags["all-repos"] === true);
   }
   if (cmd === "graph") return runGraph(process.argv.slice(3));
 
