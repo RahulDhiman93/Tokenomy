@@ -13,6 +13,9 @@ import { collectGitState, currentHeadSha, diffForFile } from "./git.js";
 import { renderPacketMarkdown } from "./render.js";
 import type { RavenDiffEntry, RavenPacket, RavenResult } from "./schema.js";
 import { ravenStoreForRepo, savePacket } from "./store.js";
+import { appendGitignoreLine } from "../util/gitignore.js";
+import { registerProject } from "../util/projects-registry.js";
+import { tryMigrateOne } from "../util/migrate-storage.js";
 
 export interface CreatePacketOptions {
   cwd: string;
@@ -257,8 +260,38 @@ export const createAndSaveRavenPacket = (opts: CreatePacketOptions): RavenResult
     repoId: built.data.packet.repo.repo_id,
     repoPath: built.data.packet.repo.root,
   };
+  // 0.1.8+ codex round 3: a `raven brief` (or MCP `create_handoff_packet`)
+  // is the user's FIRST raven touch when they haven't run `raven enable`.
+  // Mirror enable's housekeeping so they don't get an untracked
+  // `?? .tokenomy-raven/` in `git status`: auto-migrate any legacy data,
+  // auto-patch `.gitignore`, and register the project.
+  if (
+    (cfg.raven.location ?? "in-repo") === "in-repo" &&
+    cfg.raven.auto_migrate !== false
+  ) {
+    try {
+      tryMigrateOne("raven", identity);
+    } catch {
+      // best-effort
+    }
+  }
   const store = ravenStoreForRepo(identity, cfg.raven);
   savePacket(store, built.data.packet, built.data.markdown);
+  if (
+    (cfg.raven.location ?? "in-repo") === "in-repo" &&
+    cfg.raven.auto_gitignore !== false
+  ) {
+    appendGitignoreLine(`${identity.repoPath}/.gitignore`, ".tokenomy-raven/");
+  }
+  try {
+    registerProject({
+      repoRoot: identity.repoPath,
+      repoId: identity.repoId,
+      raven_enabled: true,
+    });
+  } catch {
+    // best-effort
+  }
   return { ok: true, data: { ...built.data, path: store.dir } };
 };
 
