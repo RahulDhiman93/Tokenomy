@@ -9,3 +9,4 @@ coverage/
 *.cursorrules
 CLAUDE.md
 .tokenomy-graph/
+.tokenomy-raven/

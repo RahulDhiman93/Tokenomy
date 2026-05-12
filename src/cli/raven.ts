@@ -62,10 +62,15 @@ const parseFlag = (argv: string[], name: string): string | undefined => {
 
 // 0.1.8+: resolve {git, store} together. Storage cfg flows through so the
 // store dir matches the configured location (in-repo vs home).
+// Codex round 5: load config from the resolved git root, not `cwd`. If
+// the user runs `raven status/pr-check/compare` from a subdir, the
+// subdir has no `.tokenomy.json`, so loadConfig(cwd) would miss the
+// repo-root overrides (e.g. `location: "home"`) and look in the wrong
+// place. Pin cfg to the same path the store uses.
 const repoStore = (cwd: string) => {
-  const cfg = loadConfig(cwd);
   const git = collectGitState(cwd);
   if (!git.ok) return git;
+  const cfg = loadConfig(git.data.root);
   const identity = { repoId: git.data.repo_id, repoPath: git.data.root };
   return {
     ok: true as const,
