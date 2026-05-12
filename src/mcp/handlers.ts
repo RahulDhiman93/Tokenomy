@@ -442,7 +442,15 @@ export const dispatchGraphTool = async (
   }
 
   if (name === "build_or_update_graph") {
-    const config = loadConfig(effectiveCwd);
+    // 0.1.8+ codex round 7: load cfg from resolved repo root so a subdir
+    // `path` arg picks up the project-root `.tokenomy.json` overrides.
+    let buildIdentity: { repoId: string; repoPath: string };
+    try {
+      buildIdentity = resolveRepoId(effectiveCwd);
+    } catch {
+      buildIdentity = { repoId: effectiveCwd, repoPath: effectiveCwd };
+    }
+    const config = loadConfig(buildIdentity.repoPath);
     if (!config.graph.enabled) return fail("graph-disabled");
     const result: BuildGraphResult = await buildGraph({
       cwd: effectiveCwd,
@@ -468,7 +476,14 @@ export const dispatchGraphTool = async (
     const invalid = earlyValidateReadArgs(name, args);
     if (invalid) return invalid;
 
-    const config = loadConfig(effectiveCwd);
+    // 0.1.8+ codex round 7: load cfg from resolved repo root.
+    let cacheIdentity: { repoId: string; repoPath: string };
+    try {
+      cacheIdentity = resolveRepoId(effectiveCwd);
+    } catch {
+      cacheIdentity = { repoId: effectiveCwd, repoPath: effectiveCwd };
+    }
+    const config = loadConfig(cacheIdentity.repoPath);
 
     // Auto-refresh is opt-in via config. When enabled, run the cheap stale
     // check + conditional rebuild FIRST; when disabled, skip entirely and let
@@ -534,10 +549,16 @@ export const dispatchGraphTool = async (
   // 0.1.8+: cache the UNANNOTATED result. The `last_build_failure`
   // annotation is read-time only — caching it would survive sentinel clears.
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
-  // Reload config to annotate (cheap; same call path that produced cacheKey).
-  // Skipped automatically by annotateWithAsyncFailure when name is non-cacheable.
+  // Reload config to annotate. 0.1.8+ codex round 7: from resolved repo
+  // root so subdir `path` args still find the project-root config.
   if (CACHEABLE_TOOLS.has(name)) {
-    return annotateWithAsyncFailure(result, name, effectiveCwd, loadConfig(effectiveCwd));
+    let annotateCfg: Config;
+    try {
+      annotateCfg = loadConfig(resolveRepoId(effectiveCwd).repoPath);
+    } catch {
+      annotateCfg = loadConfig(effectiveCwd);
+    }
+    return annotateWithAsyncFailure(result, name, effectiveCwd, annotateCfg);
   }
   return result;
 };

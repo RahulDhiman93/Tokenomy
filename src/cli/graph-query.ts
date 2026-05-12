@@ -5,6 +5,7 @@ import { loadGraphContext } from "../graph/query/common.js";
 import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 
 const parseIntegerFlag = (
   value: string | boolean | undefined,
@@ -58,7 +59,9 @@ export const runGraphQuery = async (opts: {
   const mode = opts.argv[0];
   const flags = parseFlags(opts.argv.slice(1));
   const target = opts.path ?? opts.cwd;
-  const config = loadConfig(target);
+  // 0.1.8+ codex round 7: load cfg from resolved repo root.
+  const identity = resolveRepoId(target);
+  const config = loadConfig(identity.repoPath);
   const context = loadGraphContext(target, config);
   if (!context.ok) return print(context);
 

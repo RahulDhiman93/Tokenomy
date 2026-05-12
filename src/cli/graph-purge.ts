@@ -42,7 +42,8 @@ export const runGraphPurge = async (opts: {
 
   const target = opts.path ?? opts.cwd;
   const identity = resolveRepoId(target);
-  const cfg = loadConfig(target);
+  // 0.1.8+ codex round 7: load cfg from resolved repo root.
+  const cfg = loadConfig(identity.repoPath);
   const path = graphDir(identity, cfg.graph);
   const existed = existsSync(path);
   rmSync(path, { recursive: true, force: true });

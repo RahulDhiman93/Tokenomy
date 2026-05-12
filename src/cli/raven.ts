@@ -189,8 +189,10 @@ const runMigrate = (argv: string[]): number => {
 };
 
 const runStatus = (): number => {
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 7: load cfg via repoStore (which itself loads from
+  // the resolved git root). Fall back to cwd-load when not in a repo.
   const store = repoStore(process.cwd());
+  const cfg = store.ok ? loadConfig(store.data.identity.repoPath) : loadConfig(process.cwd());
   if (!store.ok) {
     process.stdout.write(`Raven: ${cfg.raven.enabled ? "enabled" : "disabled"}\nRepo: ${store.reason}\n`);
     return 0;
@@ -279,7 +281,8 @@ const runClean = (argv: string[]): number => {
     process.stderr.write(`tokenomy raven clean: ${store.reason}\n`);
     return 1;
   }
-  const cfg = loadConfig(process.cwd());
+  // 0.1.8+ codex round 7: load cfg from the resolved repo root.
+  const cfg = loadConfig(store.data.identity.repoPath);
   const keep = parseInt(parseFlag(argv, "keep") ?? `${cfg.raven.clean_keep}`, 10);
   const olderRaw = parseFlag(argv, "older-than") ?? `${cfg.raven.clean_older_than_days}`;
   const older = parseInt(olderRaw.replace(/d$/, ""), 10);
