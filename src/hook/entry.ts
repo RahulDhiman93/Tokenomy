@@ -9,6 +9,7 @@ import {
 } from "./pre-dispatch.js";
 import { loadConfig } from "../core/config.js";
 import { tokenomyDir } from "../core/paths.js";
+import { resolveRepoId } from "../graph/repo-id.js";
 import { markGraphDirty } from "../rules/graph-dirty.js";
 import type {
   HookInput,
@@ -155,7 +156,18 @@ const main = async (): Promise<void> => {
       return;
     }
 
-    const cfg = loadConfig(parsed?.cwd ?? process.cwd());
+    // 0.1.8+ codex round 11: load cfg from resolved repo root so subdir
+    // cwds still honor the repo-root `.tokenomy.json`. The hook's 1s
+    // watchdog protects us from a slow `git rev-parse`; fall back to
+    // raw cwd-load on non-repo cwds.
+    const rawCwd = parsed?.cwd ?? process.cwd();
+    let cfgPath = rawCwd;
+    try {
+      cfgPath = resolveRepoId(rawCwd).repoPath;
+    } catch {
+      // best-effort
+    }
+    const cfg = loadConfig(cfgPath);
 
     if (parsed?.hook_event_name === "SessionStart") {
       const sessionInput = parsed as SessionStartHookInput;
