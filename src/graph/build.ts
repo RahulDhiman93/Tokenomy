@@ -627,6 +627,10 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
             },
           };
           logGraphBuild(identity, result, options.config.graph);
+          // 0.1.8+ codex round 1: also run housekeeping on the cached-
+          // fresh path so first-time-after-upgrade users get `.gitignore`
+          // patched + project registered even when no rebuild fired.
+          postBuildHousekeeping(identity, options.config);
           return result;
         }
         // Incremental (beta-3): re-parse only stale files + their direct

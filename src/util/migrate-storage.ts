@@ -1,4 +1,5 @@
 import { cpSync, existsSync, renameSync, rmSync, statSync } from "node:fs";
+import { dirname, basename } from "node:path";
 import {
   graphDir,
   legacyGraphRootDir,
@@ -46,14 +47,40 @@ const moveDir = (src: string, dst: string): { ok: boolean; reason?: string } => 
     renameSync(src, dst);
     return { ok: true };
   } catch {
-    // Cross-device rename, busy file, or permission: fall back to copy + remove.
+    // 0.1.8+ codex round 1: cross-fs rename fallback. Copy to a temp
+    // sibling of `dst` first, then atomic-rename into place. If the copy
+    // fails midway we delete the temp; the user never sees a partial
+    // `.tokenomy-graph/` dir. Legacy src is only removed AFTER the
+    // rename succeeds.
+    const tempDst = `${dst}.migrating-${process.pid}-${Date.now()}`;
     try {
-      cpSync(src, dst, { recursive: true });
-      rmSync(src, { recursive: true, force: true });
-      return { ok: true };
+      cpSync(src, tempDst, { recursive: true });
     } catch (e) {
+      try {
+        rmSync(tempDst, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
       return { ok: false, reason: (e as Error).message };
     }
+    try {
+      renameSync(tempDst, dst);
+    } catch (e) {
+      // Final rename failed — purge temp; do NOT remove legacy src.
+      try {
+        rmSync(tempDst, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+      return { ok: false, reason: (e as Error).message };
+    }
+    try {
+      rmSync(src, { recursive: true, force: true });
+    } catch {
+      // best-effort: dst is good; legacy lingering is harmless (will be
+      // skipped as `skipped-dst-exists` on subsequent migration attempts).
+    }
+    return { ok: true };
   }
 };
 

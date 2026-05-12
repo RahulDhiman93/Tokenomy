@@ -289,8 +289,165 @@ test("runGraphMigrate: with projects, dry-run prints plan; apply moves", async (
 });
 
 // ---------------------------------------------------------------------------
+// migrate-storage temp-staging fallback (codex round 1 P1)
+// ---------------------------------------------------------------------------
+
+test("moveDir: cross-fs fallback uses temp sibling rename (never partial dst)", async () => {
+  await withHome(async () => {
+    const repoPath = mkdtempSync(join(tmpdir(), "tokenomy-migrate-temp-"));
+    try {
+      const identity = { repoId: "rid-temp", repoPath };
+      // Seed legacy with nested data.
+      const legacyDir = join(legacyGraphRootDir(), identity.repoId);
+      mkdirSync(join(legacyDir, "sub"), { recursive: true });
+      writeFileSync(join(legacyDir, "meta.json"), '{"a":1}');
+      writeFileSync(join(legacyDir, "sub", "build.jsonl"), "{}");
+      const result = tryMigrateOne("graph", identity);
+      assert.equal(result.status, "moved");
+      // Destination has full structure; no `.migrating-*` siblings linger.
+      const parent = join(repoPath);
+      const lingering = readFileSync(join(repoPath, ".tokenomy-graph", "meta.json"), "utf8");
+      assert.equal(lingering, '{"a":1}');
+      void parent;
+    } finally {
+      rmSync(repoPath, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // end-to-end: buildGraph auto-migrates + .gitignore patches + registry
 // ---------------------------------------------------------------------------
+
+test("raven migrate: prints message + 0 when no projects, walks registry when present", async () => {
+  await withHome(async () => {
+    const { runRaven } = await import("../../src/cli/raven.js");
+    let buf = "";
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((c: unknown) => {
+      buf += typeof c === "string" ? c : Buffer.from(c as Uint8Array).toString("utf8");
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const code = await runRaven(["migrate"]);
+      assert.equal(code, 0);
+      assert.match(buf, /No projects/);
+    } finally {
+      process.stdout.write = orig;
+    }
+  });
+});
+
+test("graph purge: cwd-scoped default removes only this repo's .tokenomy-graph/", async () => {
+  await withHome(async () => {
+    const repo = mkdtempSync(join(tmpdir(), "tokenomy-purge-cwd-"));
+    try {
+      mkdirSync(join(repo, ".tokenomy-graph"), { recursive: true });
+      writeFileSync(join(repo, ".tokenomy-graph", "snapshot.json"), "{}");
+      const { runGraphPurge } = await import("../../src/cli/graph-purge.js");
+      let buf = "";
+      const orig = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((c: unknown) => {
+        buf += typeof c === "string" ? c : Buffer.from(c as Uint8Array).toString("utf8");
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        await runGraphPurge({ cwd: repo });
+      } finally {
+        process.stdout.write = orig;
+      }
+      assert.equal(existsSync(join(repo, ".tokenomy-graph")), false);
+      assert.match(buf, /scope.*repo/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("graph purge --all: walks registry + drops legacy root", async () => {
+  await withHome(async (home) => {
+    const repoA = mkdtempSync(join(tmpdir(), "tokenomy-purge-all-A-"));
+    const repoB = mkdtempSync(join(tmpdir(), "tokenomy-purge-all-B-"));
+    try {
+      mkdirSync(join(repoA, ".tokenomy-graph"), { recursive: true });
+      mkdirSync(join(repoB, ".tokenomy-graph"), { recursive: true });
+      writeFileSync(join(repoA, ".tokenomy-graph", "snapshot.json"), "{}");
+      writeFileSync(join(repoB, ".tokenomy-graph", "snapshot.json"), "{}");
+      registerProject({ repoRoot: repoA, repoId: "A" });
+      registerProject({ repoRoot: repoB, repoId: "B" });
+      // Seed legacy root too.
+      mkdirSync(join(home, ".tokenomy", "graphs", "legacy-x"), { recursive: true });
+      const { runGraphPurge } = await import("../../src/cli/graph-purge.js");
+      let buf = "";
+      const orig = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((c: unknown) => {
+        buf += typeof c === "string" ? c : Buffer.from(c as Uint8Array).toString("utf8");
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        await runGraphPurge({ cwd: repoA, all: true });
+      } finally {
+        process.stdout.write = orig;
+      }
+      assert.equal(existsSync(join(repoA, ".tokenomy-graph")), false);
+      assert.equal(existsSync(join(repoB, ".tokenomy-graph")), false);
+      assert.equal(existsSync(join(home, ".tokenomy", "graphs")), false);
+    } finally {
+      rmSync(repoA, { recursive: true, force: true });
+      rmSync(repoB, { recursive: true, force: true });
+    }
+  });
+});
+
+test("collectRavenStats: per-project location respected via loadConfig", async () => {
+  await withHome(async (home) => {
+    const repo = mkdtempSync(join(tmpdir(), "tokenomy-stats-loc-"));
+    try {
+      // Set per-project config to legacy "home" mode.
+      mkdirSync(join(home, ".tokenomy"), { recursive: true });
+      writeFileSync(
+        join(home, ".tokenomy", "config.json"),
+        JSON.stringify({ raven: { location: "home" } }),
+      );
+      // Legacy storage under ~/.tokenomy/raven/<repoId>/.
+      const legacyDir = join(home, ".tokenomy", "raven", "loc-repo", "packets");
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(join(legacyDir, "p.json"), "{}");
+      registerProject({ repoRoot: repo, repoId: "loc-repo", raven_enabled: true });
+      const { collectRavenStats } = await import("../../src/raven/stats.js");
+      const stats = collectRavenStats(true);
+      // Per-project loadConfig picks up location:"home" so this repo's legacy
+      // dir IS counted; no double-count under legacy fallback.
+      assert.equal(stats.repos, 1);
+      assert.equal(stats.packets, 1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("diagnose: --all-repos uses registry-backed Raven tally", async () => {
+  await withHome(async () => {
+    const repoA = mkdtempSync(join(tmpdir(), "tokenomy-diag-all-A-"));
+    const repoB = mkdtempSync(join(tmpdir(), "tokenomy-diag-all-B-"));
+    try {
+      for (const r of [repoA, repoB]) {
+        mkdirSync(join(r, ".tokenomy-raven", "packets"), { recursive: true });
+        writeFileSync(join(r, ".tokenomy-raven", "packets", "p.json"), "{}");
+      }
+      registerProject({ repoRoot: repoA, repoId: "diag-A", raven_enabled: true });
+      registerProject({ repoRoot: repoB, repoId: "diag-B", raven_enabled: true });
+      const { buildDiagnoseReport } = await import("../../src/cli/diagnose.js");
+      const report = await buildDiagnoseReport({ allRepos: true });
+      assert.equal(report.raven.scope, "all-repos");
+      assert.equal(report.raven.repos, 2);
+      assert.equal(report.raven.packets, 2);
+    } finally {
+      rmSync(repoA, { recursive: true, force: true });
+      rmSync(repoB, { recursive: true, force: true });
+    }
+  });
+});
 
 test("buildGraph: in-repo storage + auto-migrate + .gitignore patch + registry", async () => {
   await withHome(async () => {

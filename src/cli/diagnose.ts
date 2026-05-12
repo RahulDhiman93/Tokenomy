@@ -16,6 +16,7 @@ import {
 } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { readLastGraphBuildFailure, readLastGraphBuildLog } from "../graph/build-log.js";
+import { collectRavenStats } from "../raven/stats.js";
 import { commandExists } from "./agents/common.js";
 import { runDoctor } from "./doctor.js";
 
@@ -160,16 +161,31 @@ const sectionGraph = (): SectionResult => {
   }
 };
 
-const sectionRaven = (): SectionResult => {
+const sectionRaven = (allRepos = false): SectionResult => {
   try {
-    // 0.1.8+: scope to the current repo (in-repo storage) rather than the
-    // legacy global walk. Pre-0.1.8 enumerated every `~/.tokenomy/raven/*`.
+    // 0.1.8+: default to cwd-scoped tally; `allRepos:true` uses the
+    // collectRavenStats path which walks the project registry +
+    // legacy-fallback for unmigrated repos.
+    if (allRepos) {
+      const stats = collectRavenStats(true);
+      return {
+        ok: true,
+        scope: "all-repos",
+        repos: stats.repos,
+        packets: stats.packets,
+        reviews: stats.reviews,
+        comparisons: stats.comparisons,
+        decisions: stats.decisions,
+        last_activity: stats.last_activity,
+      };
+    }
     const identity = resolveRepoId(process.cwd());
     const cfg = loadConfig(process.cwd());
     const root = ravenRepoDir(identity, cfg.raven);
     if (!existsSync(root)) {
       return {
         ok: true,
+        scope: "cwd",
         repos: 0,
         root,
         present: false,
@@ -190,6 +206,7 @@ const sectionRaven = (): SectionResult => {
     }
     return {
       ok: true,
+      scope: "cwd",
       root,
       repos: 1,
       total_bytes: totalBytes,
@@ -259,13 +276,21 @@ const sectionFeedback = (): SectionResult => {
   }
 };
 
-export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
+export interface BuildDiagnoseOptions {
+  // 0.1.8+: when true, dirty-age + raven-size checks (in doctor) and the
+  // raven section walk every registered project. Default false (cwd only).
+  allRepos?: boolean;
+}
+
+export const buildDiagnoseReport = async (
+  opts: BuildDiagnoseOptions = {},
+): Promise<DiagnoseReport> => {
   // 0.1.5+: never let runDoctor's failure abort the whole report. If it
   // throws, surface a `doctor: { ok: false, reason }` block and force
   // `worst: "error"`. Codex audit catch.
   let doctor: SectionResult;
   try {
-    const doctorChecks = await runDoctor();
+    const doctorChecks = await runDoctor({ allRepos: opts.allRepos });
     const failures = doctorChecks.filter((c) => !c.ok);
     doctor = {
       ok: failures.length === 0,
@@ -278,7 +303,7 @@ export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
   }
   const sections = {
     graph: sectionGraph(),
-    raven: sectionRaven(),
+    raven: sectionRaven(opts.allRepos),
     kratos: sectionKratos(),
     golem: sectionGolem(),
     update: sectionUpdate(),
@@ -303,7 +328,8 @@ export const buildDiagnoseReport = async (): Promise<DiagnoseReport> => {
 
 export const runDiagnose = async (argv: string[]): Promise<number> => {
   const json = argv.includes("--json");
-  const report = await buildDiagnoseReport();
+  const allRepos = argv.includes("--all-repos");
+  const report = await buildDiagnoseReport({ allRepos });
   if (json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {

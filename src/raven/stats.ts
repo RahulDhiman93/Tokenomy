@@ -7,6 +7,7 @@ import {
   type StorageLocationConfig,
 } from "../core/paths.js";
 import { listProjects } from "../util/projects-registry.js";
+import { loadConfig } from "../core/config.js";
 
 export interface RavenStats {
   enabled: boolean;
@@ -109,25 +110,43 @@ export const collectRavenStats = (
     return stats;
   }
 
-  // Cross-repo aggregation via registry (in-repo).
+  // Cross-repo aggregation via registry. 0.1.8+ codex round 1:
+  // per-project we load its own config and tally the location it actually
+  // uses (in-repo OR home). Pre-fix this only counted in-repo per project,
+  // so a registered repo running in legacy `raven.location: "home"` mode
+  // showed zero. Each project counted at most once.
+  const countedRepoIds = new Set<string>();
   for (const project of listProjects()) {
     const identity = { repoId: project.repoId, repoPath: project.repoRoot };
-    const dir = ravenRepoDir(identity, options.location);
-    if (!existsSync(dir)) continue;
-    stats.repos++;
-    const t = tallyRepoDir(stats, dir);
-    if (t.latestMs > latestMs) latestMs = t.latestMs;
+    // Per-project location resolution. Caller can override with
+    // `options.location` (uniform mode); otherwise load each project's
+    // own `cfg.raven.location` and respect it. Defensive try/catch in
+    // case a project's config is malformed.
+    let perProjectCfg: StorageLocationConfig | undefined = options.location;
+    if (!perProjectCfg) {
+      try {
+        perProjectCfg = loadConfig(project.repoRoot).raven;
+      } catch {
+        perProjectCfg = undefined;
+      }
+    }
+    const dir = ravenRepoDir(identity, perProjectCfg);
+    if (existsSync(dir)) {
+      stats.repos++;
+      countedRepoIds.add(project.repoId);
+      const t = tallyRepoDir(stats, dir);
+      if (t.latestMs > latestMs) latestMs = t.latestMs;
+    }
   }
   // Cross-repo aggregation via legacy `~/.tokenomy/raven/<repoId>/` (best-
-  // effort for unmigrated installs).
+  // effort for unmigrated installs). Skip any repoId we already counted
+  // above (regardless of how it was located).
   if (options.include_legacy !== false) {
     const legacyRoot = legacyRavenRootDir();
     if (existsSync(legacyRoot)) {
       for (const repoId of readdirSync(legacyRoot)) {
+        if (countedRepoIds.has(repoId)) continue;
         const dir = join(legacyRoot, repoId);
-        // Skip if already counted via registry+in-repo above (same repoId).
-        const alreadyCounted = listProjects().some((p) => p.repoId === repoId);
-        if (alreadyCounted) continue;
         try {
           if (!statSync(dir).isDirectory()) continue;
         } catch {
