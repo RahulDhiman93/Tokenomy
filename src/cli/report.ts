@@ -248,8 +248,15 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
   const entries = readEntries(logPath, opts.since);
   const pricePerMillion = opts.pricePerMillion ?? readConfigPrice();
   let ravenEnabled = false;
+  // 0.1.8+ codex round 10: load cfg from resolved repo root.
   try {
-    ravenEnabled = loadConfig(process.cwd()).raven.enabled;
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // best-effort
+    }
+    ravenEnabled = loadConfig(cfgPath).raven.enabled;
   } catch {
     // Config unreadable — render Raven as "disabled" rather than failing the report.
   }

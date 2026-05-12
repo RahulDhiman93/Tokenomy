@@ -177,6 +177,10 @@ export const runStatusLine = (argv: string[]): number => {
   const start = Date.now();
   const overBudget = (): boolean => Date.now() - start > STATUSLINE_BUDGET_MS;
   try {
+    // 0.1.8+ codex round 10: subdir-config loading deferred — the
+    // statusline 50ms budget cannot afford an extra `git rev-parse` on
+    // every render. graphState() resolves identity itself when needed
+    // (and is the only consumer that cares about per-repo paths).
     const cfg = loadConfig(process.cwd());
     if (overBudget()) {
       process.stdout.write("");
