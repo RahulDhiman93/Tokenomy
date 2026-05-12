@@ -80,7 +80,12 @@ const repoStore = (cwd: string) => {
 
 const runEnable = (): number => {
   const cwd = process.cwd();
-  const cfg = loadConfig(cwd);
+  // 0.1.8+ codex round 6: resolve repo root FIRST so cfg picks up the
+  // repo-root `.tokenomy.json` even when the user runs from a subdir.
+  // Pre-fix, `loadConfig(cwd)` from a subdir missed `raven.location:
+  // "home"` and auto_migrate fired into the wrong location.
+  const identity = resolveRepoId(cwd);
+  const cfg = loadConfig(identity.repoPath);
   const codexFound = commandExists("codex");
   if (cfg.raven.requires_codex && !codexFound) {
     process.stderr.write(
@@ -103,7 +108,6 @@ const runEnable = (): number => {
     cfg.raven.auto_migrate !== false
   ) {
     try {
-      const identity = resolveRepoId(cwd);
       const r = tryMigrateOne("raven", identity);
       if (r.status === "moved") migrated = { from: r.from, to: r.to };
     } catch {
