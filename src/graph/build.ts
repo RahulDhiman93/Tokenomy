@@ -2,6 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statS
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import {
+  graphAsyncFailurePath,
   graphBuildLogPath,
   graphDirtySentinelPath,
   graphLockPath,
@@ -442,7 +443,13 @@ const buildGraphFromFiles = async (
       parse_errors.push({ file, message: `stat failed: ${(e as Error).message}` });
       continue;
     }
-    file_hashes[file] = sha256FileSync(absPath);
+    try {
+      file_hashes[file] = sha256FileSync(absPath);
+    } catch (e) {
+      // 0.1.8+ codex round 2: same per-file resilience as delta path.
+      parse_errors.push({ file, message: `hash failed: ${(e as Error).message}` });
+      continue;
+    }
     file_mtimes[file] = st.mtimeMs;
     let source: string;
     try {
@@ -565,6 +572,31 @@ const postBuildHousekeeping = (
   }
 };
 
+// 0.1.8+ codex round 2: shared post-success cleanup. Runs on every
+// successful path (cached-fresh / delta / full). Pre-fix only the full
+// rebuild cleared `.dirty`; with `incremental:true` default, the delta
+// path returned BEFORE that clear, so every subsequent read saw the
+// sentinel and kicked off another rebuild. Same fix surfaces async
+// failure clearing on direct `tokenomy graph build` calls.
+const postBuildSuccess = (
+  identity: RepoIdentityLike,
+  cfg: Config,
+): void => {
+  postBuildHousekeeping(identity, cfg);
+  try {
+    const dirty = graphDirtySentinelPath(identity, cfg.graph);
+    if (existsSync(dirty)) rmSync(dirty, { force: true });
+  } catch {
+    // best-effort
+  }
+  try {
+    const async = graphAsyncFailurePath(identity, cfg.graph);
+    if (existsSync(async)) rmSync(async, { force: true });
+  } catch {
+    // best-effort
+  }
+};
+
 export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraphResult> => {
   const start = Date.now();
   const identity = resolveRepoId(options.cwd);
@@ -627,10 +659,9 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
             },
           };
           logGraphBuild(identity, result, options.config.graph);
-          // 0.1.8+ codex round 1: also run housekeeping on the cached-
-          // fresh path so first-time-after-upgrade users get `.gitignore`
-          // patched + project registered even when no rebuild fired.
-          postBuildHousekeeping(identity, options.config);
+          // 0.1.8+ codex round 1+2: shared cleanup on every success
+          // path — housekeeping + `.dirty` clear + async-failure clear.
+          postBuildSuccess(identity, options.config);
           return result;
         }
         // Incremental (beta-3): re-parse only stale files + their direct
@@ -657,7 +688,11 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               if (delta.ok) {
                 delta.data.duration_ms = Date.now() - start;
                 logGraphBuild(identity, delta, options.config.graph);
-                postBuildHousekeeping(identity, options.config);
+                // 0.1.8+ codex round 2: clear `.dirty` + async-failure
+                // here too. Pre-fix the delta path returned BEFORE the
+                // post-build `.dirty` clear, so every read kicked off
+                // another rebuild forever.
+                postBuildSuccess(identity, options.config);
                 return delta;
               }
               // Fall through to full rebuild if delta couldn't complete.
@@ -690,17 +725,9 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
     }
     built.data.duration_ms = Date.now() - start;
     logGraphBuild(identity, built, options.config.graph);
-    postBuildHousekeeping(identity, options.config);
-    // 0.1.3+: clear the dirty sentinel after a successful rebuild so the
-    // next isGraphStaleCheap call falls back to its normal mtime walk
-    // instead of short-circuiting to "stale". Best-effort; missing-file
-    // is the desired post-state anyway.
-    try {
-      const dirty = graphDirtySentinelPath(identity, options.config.graph);
-      if (existsSync(dirty)) rmSync(dirty, { force: true });
-    } catch {
-      // ignore
-    }
+    // 0.1.8+: shared post-success cleanup (housekeeping + `.dirty` +
+    // async-failure clear). See postBuildSuccess.
+    postBuildSuccess(identity, options.config);
     return built;
   } catch (error) {
     const result = fail("io-error", (error as Error).message);
