@@ -49,3 +49,30 @@ export const resolveRepoId = (cwd: string): RepoIdentity => {
   const repoPath = resolveGitRoot(cwd) ?? resolve(cwd);
   return { repoId: sha256String(resolve(repoPath)), repoPath: resolve(repoPath) };
 };
+
+// 0.1.8+ codex round 12: non-spawning ancestor-walk repo discovery. For
+// hot paths (the hook entry, statusline, anywhere a slow `git rev-parse`
+// would stall under a wedged `.git`) we just walk ancestors looking for
+// a `.git` dir/file and treat that ancestor as repoPath. No subprocess.
+// Falls back to `cwd` when no `.git` ancestor is found.
+//
+// Caveat: returns the directory CONTAINING `.git`, which for a git
+// worktree's `.git` *file* is the worktree's own dir (matches what
+// `git rev-parse --show-toplevel` returns). Bare clones / submodules
+// with non-standard layouts won't resolve identically to git's view,
+// but the hook path can tolerate that — config files live at the dir
+// containing `.git`, which is what users edit.
+export const resolveRepoIdSync = (cwd: string): RepoIdentity => {
+  let dir = resolve(cwd);
+  let repoPath = dir;
+  for (;;) {
+    if (existsSync(join(dir, ".git"))) {
+      repoPath = dir;
+      break;
+    }
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return { repoId: sha256String(repoPath), repoPath };
+};

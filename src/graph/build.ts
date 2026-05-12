@@ -602,6 +602,17 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
   const identity = resolveRepoId(options.cwd);
   const store = new JsonGraphStore();
 
+  // 0.1.8+ codex round 12: patch `.gitignore` BEFORE any write to
+  // `<repoRoot>/.tokenomy-graph/` so even failure paths (graph-disabled,
+  // no-files, repo-too-large, build-in-progress) don't leave an
+  // untracked `?? .tokenomy-graph/` in `git status`. Idempotent.
+  if (
+    (options.config.graph.location ?? "in-repo") === "in-repo" &&
+    options.config.graph.auto_gitignore !== false
+  ) {
+    appendGitignoreLine(join(identity.repoPath, ".gitignore"), ".tokenomy-graph/");
+  }
+
   if (!options.config.graph.enabled) {
     const result = fail("graph-disabled");
     logGraphBuild(identity, result, options.config.graph);
