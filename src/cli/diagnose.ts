@@ -89,7 +89,14 @@ const sectionAgents = () =>
 
 const sectionConfig = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       log_path: cfg.log_path,
@@ -109,7 +116,8 @@ const sectionConfig = (): SectionResult => {
 const sectionGraph = (): SectionResult => {
   try {
     const identity = resolveRepoId(process.cwd());
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    const cfg = loadConfig(identity.repoPath);
     const meta = graphMetaPath(identity, cfg.graph);
     const snapshot = graphSnapshotPath(identity, cfg.graph);
     const buildLog = graphBuildLogPath(identity, cfg.graph);
@@ -180,7 +188,8 @@ const sectionRaven = (allRepos = false): SectionResult => {
       };
     }
     const identity = resolveRepoId(process.cwd());
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    const cfg = loadConfig(identity.repoPath);
     const root = ravenRepoDir(identity, cfg.raven);
     if (!existsSync(root)) {
       return {
@@ -219,7 +228,14 @@ const sectionRaven = (allRepos = false): SectionResult => {
 
 const sectionKratos = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       enabled: cfg.kratos.enabled,
@@ -234,7 +250,14 @@ const sectionKratos = (): SectionResult => {
 
 const sectionGolem = (): SectionResult => {
   try {
-    const cfg = loadConfig(process.cwd());
+    // 0.1.8+ codex round 9: load cfg from resolved repo root.
+    let cfgPath = process.cwd();
+    try {
+      cfgPath = resolveRepoId(process.cwd()).repoPath;
+    } catch {
+      // not a git repo — fall back to cwd
+    }
+    const cfg = loadConfig(cfgPath);
     return {
       ok: true,
       enabled: cfg.golem.enabled,
