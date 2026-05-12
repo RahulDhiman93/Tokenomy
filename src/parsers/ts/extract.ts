@@ -387,10 +387,34 @@ const processTopLevelDeclaration = (
   state: ExtractionState,
   stmt: TS.Statement,
 ): void => {
+  // 0.1.8+: anonymous default function/class — `export default function() {}`
+  // and `export default class {}` — have no `stmt.name` so the named
+  // branches below skip. Emit a bare `exp:default` exports edge to the
+  // file itself so default-import find_usages can correlate. Codex
+  // round 2 catch.
+  if (
+    (state.ts.isFunctionDeclaration(stmt) || state.ts.isClassDeclaration(stmt)) &&
+    !stmt.name &&
+    hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword) &&
+    hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword)
+  ) {
+    const expId = addExportSymbol(state, "default");
+    addEdge(state, expId, state.fileNodeId, "exports", "definite");
+    return;
+  }
+
   if (state.ts.isFunctionDeclaration(stmt) && stmt.name) {
     const fnId = addTopLevelFunction(state, stmt, stmt.name.text);
     if (hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword)) {
-      const expId = addExportSymbol(state, stmt.name.text);
+      // 0.1.8+: `export default function foo()` is two modifiers
+      // (Export + Default). Emit `exp:default` AND `exp:foo` so both
+      // `import foo from "./mod"` and named `import { foo }`
+      // (rare but valid) can correlate. Pre-0.1.8 only `exp:foo`
+      // was emitted, so default-import find_usages couldn't link.
+      // Codex round 1 catch.
+      const isDefault = hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword);
+      const expName = isDefault ? "default" : stmt.name.text;
+      const expId = addExportSymbol(state, expName);
       addEdge(state, expId, fnId, "exports", "definite");
     }
     return;
@@ -405,7 +429,9 @@ const processTopLevelDeclaration = (
       }
     }
     if (hasModifier(stmt, state.ts, state.ts.SyntaxKind.ExportKeyword)) {
-      const expId = addExportSymbol(state, className);
+      const isDefault = hasModifier(stmt, state.ts, state.ts.SyntaxKind.DefaultKeyword);
+      const expName = isDefault ? "default" : className;
+      const expId = addExportSymbol(state, expName);
       addEdge(state, expId, classId, "exports", "definite");
     }
     return;

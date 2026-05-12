@@ -368,6 +368,158 @@ test("diagnose: human-readable output writes header + JSON", async () => {
   });
 });
 
+test("dispatchGraphTool: cached result respects sentinel changes (annotate-after-cache)", async () => {
+  await withTmpRepo(async (repo) => {
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
+    assert.equal(built.ok, true);
+    const { repoId } = resolveRepoId(repo);
+    const { dispatchGraphTool, _resetQueryCacheForTests } = await import(
+      "../../src/mcp/handlers.js"
+    );
+    _resetQueryCacheForTests();
+    // First call — no sentinel.
+    const r1 = (await dispatchGraphTool(
+      "find_usages",
+      { target: { file: "a.ts" }, path: repo },
+      repo,
+    )) as { ok: boolean; data?: Record<string, unknown> };
+    assert.equal(r1.ok, true);
+    assert.equal(r1.data?.last_build_failure, undefined);
+    // Seed sentinel; cached UNANNOTATED result must NOW carry annotation.
+    writeAsyncBuildFailure(repoId, { ts: "2026-05-11T11:00:00Z", reason: "timeout" });
+    const r2 = (await dispatchGraphTool(
+      "find_usages",
+      { target: { file: "a.ts" }, path: repo },
+      repo,
+    )) as { ok: boolean; data?: Record<string, unknown> };
+    assert.equal(r2.ok, true);
+    assert.ok(r2.data?.last_build_failure, "cache hit must annotate on read");
+    // Clear sentinel; annotation must disappear on the next read.
+    clearAsyncBuildFailure(repoId);
+    const r3 = (await dispatchGraphTool(
+      "find_usages",
+      { target: { file: "a.ts" }, path: repo },
+      repo,
+    )) as { ok: boolean; data?: Record<string, unknown> };
+    assert.equal(r3.ok, true);
+    assert.equal(r3.data?.last_build_failure, undefined, "sentinel clear must strip annotation");
+  });
+});
+
+test("readAsyncBuildFailure: fills hint from fallback catalog when stored hint missing", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tokenomy-fb-hint-"));
+  const prev = process.env["HOME"];
+  process.env["HOME"] = home;
+  try {
+    const repoId = "stab-fb-hint-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Write WITHOUT a hint; reader should fill from fallback catalog.
+    mkdirSync(dirname(graphAsyncFailurePath(repoId)), { recursive: true });
+    writeFileSync(
+      graphAsyncFailurePath(repoId),
+      JSON.stringify({ ts: "2026-05-11T00:00:00Z", reason: "timeout" }),
+    );
+    const r = readAsyncBuildFailure(repoId);
+    assert.equal(r?.reason, "timeout");
+    assert.ok(typeof r?.hint === "string" && r.hint.length > 0);
+  } finally {
+    if (prev === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("buildGraph: delta carries forward previously-skipped files across rebuild", async () => {
+  await withTmpRepo(async (repo) => {
+    writeFileSync(join(repo, "good.ts"), "export const ok = 1;\n");
+    const big = Array.from({ length: 60 }, (_, i) => `import { x${i} } from "./good";`).join("\n");
+    writeFileSync(join(repo, "bad.ts"), big + "\nexport const used = 1;\n");
+    writeFileSync(join(repo, "neutral.ts"), "export const n = 1;\n");
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    const cfg: Config = {
+      ...DEFAULT_CONFIG,
+      graph: { ...DEFAULT_CONFIG.graph, max_edges_per_file: 5, incremental: true },
+    };
+    const first = await buildGraph({ cwd: repo, config: cfg });
+    assert.equal(first.ok, true);
+    if (!first.ok) return;
+    assert.ok(first.data.skipped_files.includes("bad.ts"));
+    // Touch ONLY neutral.ts. bad.ts isn't expanded → must carry forward.
+    writeFileSync(join(repo, "neutral.ts"), "export const n = 2;\n");
+    const second = await buildGraph({ cwd: repo, config: cfg });
+    assert.equal(second.ok, true);
+    if (!second.ok) return;
+    assert.ok(
+      second.data.skipped_files.includes("bad.ts"),
+      `bad.ts must be carried in delta skipped_files; got ${JSON.stringify(second.data.skipped_files)}`,
+    );
+  });
+});
+
+test("extract: anonymous export default function/class emits exp:default", async () => {
+  await withTmpRepo(async (repo) => {
+    writeFileSync(
+      join(repo, "anon-fn.ts"),
+      "export default function () { return 1; }\n",
+    );
+    writeFileSync(
+      join(repo, "anon-cls.ts"),
+      "export default class { hi() { return 'hi'; } }\n",
+    );
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
+    assert.equal(built.ok, true);
+    const store = new JsonGraphStore();
+    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const fnDef = graph!.nodes.find(
+      (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "anon-fn.ts",
+    );
+    const clsDef = graph!.nodes.find(
+      (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "anon-cls.ts",
+    );
+    assert.ok(fnDef, "anonymous default function must emit exp:default");
+    assert.ok(clsDef, "anonymous default class must emit exp:default");
+  });
+});
+
+test("extract: export default class emits exp:default", async () => {
+  await withTmpRepo(async (repo) => {
+    writeFileSync(
+      join(repo, "lib.ts"),
+      "export default class Greeter { hi(): string { return 'hi'; } }\n",
+    );
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
+    assert.equal(built.ok, true);
+    const store = new JsonGraphStore();
+    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    const defaultExport = graph!.nodes.find(
+      (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "lib.ts",
+    );
+    assert.ok(defaultExport, "expected exp:default node for default class");
+  });
+});
+
+test("extract: export default function emits exp:default", async () => {
+  await withTmpRepo(async (repo) => {
+    writeFileSync(
+      join(repo, "lib.ts"),
+      "export default function greet(): string { return 'hi'; }\n",
+    );
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    const built = await buildGraph({ cwd: repo, config: DEFAULT_CONFIG });
+    assert.equal(built.ok, true);
+    const store = new JsonGraphStore();
+    const graph = store.loadGraph(resolveRepoId(repo).repoId);
+    assert.ok(graph);
+    const defaultExport = graph!.nodes.find(
+      (n) => n.kind === "exported-symbol" && n.name === "default" && n.file === "lib.ts",
+    );
+    assert.ok(defaultExport, "expected exp:default node");
+  });
+});
+
 test("dispatchGraphTool: embeds last_build_failure on cacheable response", async () => {
   await withTmpRepo(async (repo) => {
     writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");

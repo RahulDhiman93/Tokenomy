@@ -520,32 +520,42 @@ export const dispatchGraphTool = async (
       const version = cacheVersion(name, graphContext.data.meta.built_at, config);
       cacheKey = queryCache.key(name, args, version);
       const cached = queryCache.get(cacheKey);
-      if (cached !== undefined) return cached as QueryResult<unknown>;
+      if (cached !== undefined) return annotateWithAsyncFailure(cached as QueryResult<unknown>, name, effectiveCwd);
     }
   }
 
   const result = await dispatchGraphToolUncached(name, args, effectiveCwd, precomputedStale);
+  // 0.1.8+: cache the UNANNOTATED result. The `last_build_failure`
+  // annotation is read-time only — pre-fix the annotation got cached and
+  // would survive sentinel clears (codex round 1).
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
-  // 0.1.8+: when the previous async rebuild failed (graph-too-large in a
-  // generated file, typescript missing, timeout, etc.), pin the failure
-  // onto every cacheable read-side response so the agent actually learns
-  // about it instead of consuming stale data forever. The successful
-  // primary result still wins — we only annotate.
-  if (CACHEABLE_TOOLS.has(name) && result.ok) {
-    let asyncFailRepoId: string | null = null;
-    try {
-      asyncFailRepoId = resolveRepoId(effectiveCwd).repoId;
-    } catch {
-      // ignore — best-effort surface
-    }
-    if (asyncFailRepoId) {
-      const lastAsync = readAsyncBuildFailure(asyncFailRepoId);
-      if (lastAsync) {
-        (result.data as Record<string, unknown>).last_build_failure = lastAsync;
-      }
-    }
+  return annotateWithAsyncFailure(result, name, effectiveCwd);
+};
+
+// 0.1.8+: shallow-clone + annotate so cached results aren't mutated.
+const annotateWithAsyncFailure = (
+  result: QueryResult<unknown>,
+  name: string,
+  effectiveCwd: string,
+): QueryResult<unknown> => {
+  if (!CACHEABLE_TOOLS.has(name) || !result.ok) return result;
+  let repoId: string;
+  try {
+    repoId = resolveRepoId(effectiveCwd).repoId;
+  } catch {
+    return result;
   }
-  return result;
+  const lastAsync = readAsyncBuildFailure(repoId);
+  // Cached results are stored UNANNOTATED; if no sentinel exists now,
+  // nothing to do — return the cached result as-is.
+  if (!lastAsync) return result;
+  return {
+    ...result,
+    data: {
+      ...(result.data as Record<string, unknown>),
+      last_build_failure: lastAsync,
+    },
+  };
 };
 
 const dispatchGraphToolUncached = async (

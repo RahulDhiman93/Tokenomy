@@ -20,7 +20,7 @@ import {
 } from "./schema.js";
 import { getGraphStaleStatus } from "./stale.js";
 import { JsonGraphStore, serializeGraphSnapshot } from "./store.js";
-import { readLastGraphBuildFailure } from "./build-log.js";
+import { readAsyncBuildFailure, readLastGraphBuildFailure } from "./build-log.js";
 import type { BuildGraphResult, FailOpen } from "./types.js";
 import { loadTypescript } from "../parsers/ts/loader.js";
 import { extractTsFileGraph } from "../parsers/ts/extract.js";
@@ -162,10 +162,30 @@ const deltaBuildFromSnapshot = async (
     for (const file of expanded) {
       if (Date.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
-      const st = statSync(absPath);
-      file_hashes[file] = sha256FileSync(absPath);
+      // 0.1.8+: every per-file IO step is now best-effort. Pre-0.1.8 a
+      // mid-build rebase/rm would throw out of statSync/sha256/read and
+      // abort the whole delta. Codex round 1 catch.
+      let st;
+      try {
+        st = statSync(absPath);
+      } catch (e) {
+        addedErrors.push({ file, message: `stat failed: ${(e as Error).message}` });
+        continue;
+      }
+      try {
+        file_hashes[file] = sha256FileSync(absPath);
+      } catch (e) {
+        addedErrors.push({ file, message: `hash failed: ${(e as Error).message}` });
+        continue;
+      }
       file_mtimes[file] = st.mtimeMs;
-      const source = readFileSync(absPath, "utf8");
+      let source: string;
+      try {
+        source = readFileSync(absPath, "utf8");
+      } catch (e) {
+        addedErrors.push({ file, message: `read failed: ${(e as Error).message}` });
+        continue;
+      }
       // 0.1.8+: per-file extraction is best-effort. A single bad file
       // (parser crash, malformed source) must not abort the whole delta.
       let extracted: ReturnType<typeof extractTsFileGraph>;
@@ -191,7 +211,17 @@ const deltaBuildFromSnapshot = async (
       addedEdges.push(...extracted.edges);
       addedErrors.push(...extracted.parse_errors);
     }
-    const mergedSkipped = [...skipped_files, ...localSkipped];
+    // 0.1.8+: carry forward prevMeta.skipped_files for entries that
+    // (a) still exist in current enumeration, AND (b) weren't re-parsed
+    // this delta (so we didn't get a chance to clear or re-skip them).
+    // Pre-0.1.8 the delta path silently dropped them, lying to the user
+    // about the graph's completeness. Codex round 1 catch.
+    const carriedSkipped = (prevMeta.skipped_files ?? []).filter(
+      (f) => allFileSet.has(f) && !expanded.has(f),
+    );
+    const mergedSkipped = Array.from(
+      new Set([...skipped_files, ...carriedSkipped, ...localSkipped]),
+    ).sort();
 
     const graph = normalizeGraph({
       schema_version: GRAPH_SCHEMA_VERSION,
@@ -413,7 +443,9 @@ const buildGraphFromFiles = async (
     edges.push(...extracted.edges);
     parse_errors.push(...extracted.parse_errors);
   }
-  const mergedSkipped = [...skipped_files, ...localSkipped];
+  const mergedSkipped = Array.from(
+    new Set([...skipped_files, ...localSkipped]),
+  ).sort();
 
   const graph = normalizeGraph({
     schema_version: GRAPH_SCHEMA_VERSION,
@@ -604,8 +636,14 @@ export const readGraphStatus = (cwd: string, config: Config): import("./types.js
   // rebuild) on success so users see it in `tokenomy graph status`
   // without having to call `tokenomy diagnose`. The graph is still
   // ok — agent can still query — but the user gets to learn the
-  // updates haven't been landing.
-  const lastFailure = readLastGraphBuildFailure(identity.repoId);
+  // updates haven't been landing. Prefer the async-failure sentinel
+  // (freshest, written by handlers.ts startBackgroundRebuild) over the
+  // build log; the build log is the truncatable fallback. Codex round 1
+  // P2 catch.
+  const async = readAsyncBuildFailure(identity.repoId);
+  const lastFailure: { reason: string; hint?: string } | null = async
+    ? { reason: async.reason, ...(async.hint ? { hint: async.hint } : {}) }
+    : readLastGraphBuildFailure(identity.repoId);
 
   return {
     ok: true,

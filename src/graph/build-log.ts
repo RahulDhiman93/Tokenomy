@@ -123,6 +123,13 @@ export const readAsyncBuildFailure = (
     if (!parsed || typeof parsed.reason !== "string" || typeof parsed.ts !== "string") {
       return null;
     }
+    // 0.1.8+: when the record was written without a hint, fill it from
+    // the fallback catalog so callers always see actionable text.
+    // Codex round 1 catch.
+    if (!parsed.hint) {
+      const hint = fallbackHint(parsed.reason);
+      if (hint) return { ...parsed, hint };
+    }
     return parsed;
   } catch {
     return null;
