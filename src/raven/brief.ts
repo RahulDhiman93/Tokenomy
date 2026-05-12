@@ -255,11 +255,16 @@ export const buildRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packe
 export const createAndSaveRavenPacket = (opts: CreatePacketOptions): RavenResult<{ packet: RavenPacket; markdown: string; path: string }> => {
   const built = buildRavenPacket(opts);
   if (!built.ok) return built;
-  const cfg = loadConfig(opts.cwd);
   const identity = {
     repoId: built.data.packet.repo.repo_id,
     repoPath: built.data.packet.repo.root,
   };
+  // 0.1.8+ codex round 4: load config from the resolved repo root, not
+  // from `opts.cwd`. If the user calls `raven brief` from a subdir, the
+  // subdir has no `.tokenomy.json`, and `loadConfig(opts.cwd)` would
+  // miss the repo-root overrides (e.g. `location: "home"`,
+  // `auto_gitignore: false`). Pin to the repo root.
+  const cfg = loadConfig(identity.repoPath);
   // 0.1.8+ codex round 3: a `raven brief` (or MCP `create_handoff_packet`)
   // is the user's FIRST raven touch when they haven't run `raven enable`.
   // Mirror enable's housekeeping so they don't get an untracked
