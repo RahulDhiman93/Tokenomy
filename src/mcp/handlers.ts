@@ -10,7 +10,9 @@ import { minimalContext } from "../graph/query/minimal.js";
 import { reviewContext } from "../graph/query/review.js";
 import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
+import { recordScopedStaleSample } from "../graph/freshness-stats.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import { isServerModeActive, isWorkerActive, registerRepo } from "./rebuild-worker.js";
 import {
   clearAsyncBuildFailure,
   readAsyncBuildFailure,
@@ -228,6 +230,11 @@ const resolveOssEcosystems = (
 interface PrecomputedStale {
   stale: boolean;
   stale_files: string[];
+  // 0.1.9+: time since the earliest unconsumed entry in the dirty
+  // sentinel. Populated when the worker is active and there's pending
+  // work; lets the response carry "stale and X ms behind" to the
+  // caller without forcing a synchronous rebuild.
+  lag_ms?: number | null;
 }
 
 const withGraphContext = <T>(
@@ -339,9 +346,62 @@ const ensureFreshGraph = async (
   // true (graph never built) we still await the synchronous build —
   // there's nothing to serve in the meantime.
   if (!check.missing && check.stale) {
+    // codex round 3 P2: respect `async_rebuild: false` opt-out even
+    // when the worker is active. Users disable async rebuilds when
+    // they need synchronous error propagation (e.g. repo-too-large
+    // surfaced on the call that triggered drift). Falling into the
+    // worker shortcut would mask those failures.
+    if (cfg.graph.async_rebuild === false) {
+      // Fall through to the synchronous build below.
+    } else {
+      // 0.1.9+: worker ownership. The worker reacts ONLY to
+      // `.dirty` sentinel writes (fs.watch on the graph dir,
+      // filename === ".dirty"). We delegate to it ONLY when the
+      // current staleness was sentinel-driven (lag_ms != null).
+      //
+      // codex round 6 P1: when staleness comes from a non-sentinel
+      // source — mtime drift from `git checkout`, codegen via Bash,
+      // tsconfig/exclude fingerprint flip, external editor — the
+      // worker has no event to consume. Fall through to
+      // `startBackgroundRebuild` so the read path doesn't get stuck
+      // serving the stale snapshot until a hook-driven edit later.
+      //
+      // codex round 5 P2: when sentinel DROVE the staleness AND the
+      // worker is watching, don't compete with it. Worker has its
+      // own retry / failure-record logic; a parallel
+      // `startBackgroundRebuild` would race the build lock and log
+      // bogus `build-in-progress` failures on every long rebuild.
+      let workerOwns = false;
+      try {
+        workerOwns = isWorkerActive(resolveRepoId(cwd).repoPath);
+      } catch {
+        // best-effort
+      }
+      const sentinelDrove = check.lag_ms != null;
+      // codex round 7 P2: high-watermark fallback. If the sentinel
+      // has sat for far longer than any plausible rebuild window,
+      // assume fs.watch dropped the event (common on FUSE/network
+      // mounts) or the worker is wedged; fire `startBackgroundRebuild`
+      // as a self-heal. 60s is generous — well past a 5k-file
+      // rebuild on a slow machine — but bounded so users on broken
+      // filesystems aren't permanently stuck.
+      const WORKER_FALLBACK_LAG_MS = 60_000;
+      const stuck = sentinelDrove && (check.lag_ms ?? 0) > WORKER_FALLBACK_LAG_MS;
+      if (workerOwns && sentinelDrove && !stuck) {
+        return {
+          stale: true,
+          stale_files: check.stale_files,
+          lag_ms: check.lag_ms ?? null,
+        };
+      }
+    }
     if (cfg.graph.async_rebuild !== false) {
       startBackgroundRebuild(cwd, cfg);
-      return { stale: true, stale_files: check.stale_files };
+      return {
+        stale: true,
+        stale_files: check.stale_files,
+        lag_ms: check.lag_ms ?? null,
+      };
     }
   }
   try {
@@ -409,9 +469,38 @@ export const _queryCacheSize = (): number => queryCache.size;
 // graph.query_budget_bytes.<tool> <N>` invalidates prior (clipped) responses
 // for that tool without requiring a graph rebuild. Other tools' caches are
 // unaffected because only their own budget is part of their version string.
-const cacheVersion = (tool: string, builtAt: string, cfg: Config): string => {
+//
+// 0.1.9+ codex round 3 P2: mix the current stale_files signature into the
+// version. Without this, a query first cached when an unrelated file
+// was dirty (stale_in_scope=[]) would keep returning that empty
+// scoped set even after a later edit touched the focal file. The
+// underlying snapshot hasn't been rebuilt yet (built_at unchanged),
+// so without the stale signature the cache would stick.
+//
+// codex round 4 P2: also distinguish "fresh" from "whole-graph
+// invalidation with empty stale_files" (exclude_fingerprint or
+// tsconfig_fingerprint change). Without this gate, a query cached
+// while fresh would return after a fingerprint flip — because the
+// signature would still say "fresh" — and the cached `stale: false`
+// would mask the invalidation until the next rebuild.
+const staleSignature = (stale: PrecomputedStale | undefined): string => {
+  if (!stale) return "fresh";
+  if (stale.stale_files.length === 0) {
+    return stale.stale ? "whole-graph" : "fresh";
+  }
+  // codex round 12 P3: collision-free encoding. A naive
+  // `.join("|")` collides when filenames contain `|` (legal on
+  // POSIX). JSON.stringify on the sorted list is unambiguous.
+  return JSON.stringify([...stale.stale_files].sort());
+};
+const cacheVersion = (
+  tool: string,
+  builtAt: string,
+  cfg: Config,
+  stale: PrecomputedStale | undefined,
+): string => {
   const budget = cfg.graph.query_budget_bytes[tool as keyof GraphQueryBudgetConfig];
-  return `${builtAt}#b=${budget ?? 0}`;
+  return `${builtAt}#b=${budget ?? 0}#s=${staleSignature(stale)}`;
 };
 
 const withBudget = <T>(
@@ -450,6 +539,32 @@ export const dispatchGraphTool = async (
     return dispatchRavenTool(name, args, effectiveCwd);
   }
 
+  // 0.1.9+: cross-repo worker registration. The server start hook
+  // registers the host cwd; if the caller passes a `path` arg pointing
+  // at a different repo, register that one too — but ONLY when we're
+  // running inside `startGraphServer` (server-mode). Direct-import
+  // callers (tests, ad-hoc CLI usage) bypass server startup AND don't
+  // get `stopAllWorkers()` on exit, so any fs.watch handles they
+  // create would leak until the process hits `EMFILE`.
+  // (codex round 2 P2)
+  if (isServerModeActive() && argPath && argPath !== cwd) {
+    try {
+      let regIdentity: { repoId: string; repoPath: string };
+      try {
+        regIdentity = resolveRepoId(effectiveCwd);
+      } catch {
+        regIdentity = { repoId: effectiveCwd, repoPath: effectiveCwd };
+      }
+      // codex round 14 P2: always call registerRepo so storage-location
+      // changes (graph.location flipped mid-session) trigger watcher
+      // teardown + rebind. registerRepo is cheap when the desired
+      // graphDir matches the existing watcher.
+      registerRepo(effectiveCwd, loadConfig(regIdentity.repoPath));
+    } catch {
+      // best-effort; legacy rebuild path still works without a worker
+    }
+  }
+
   if (name === "build_or_update_graph") {
     // 0.1.8+ codex round 7: load cfg from resolved repo root so a subdir
     // `path` arg picks up the project-root `.tokenomy.json` overrides.
@@ -468,6 +583,21 @@ export const dispatchGraphTool = async (
     });
     // A successful rebuild invalidates all cached queries.
     if (result.ok && result.data.built) queryCache.invalidate();
+    // codex round 3 P2: register the worker AFTER a successful first
+    // build. Pre-fix the worker skipped registration when `.tokenomy-
+    // graph/` was missing; if `init --no-build` (or fresh-clone) ran,
+    // the host repo never got a worker until server restart.
+    if (isServerModeActive() && result.ok) {
+      try {
+        // codex round 14 P2: always call registerRepo. Pre-fix the
+        // isWorkerActive guard skipped re-registration even when
+        // graph.location flipped mid-session and the active watcher
+        // was bound to the old graphDir.
+        registerRepo(effectiveCwd, config);
+      } catch {
+        // best-effort
+      }
+    }
     return withBudget(result, config.graph.query_budget_bytes.build_or_update_graph);
   }
 
@@ -507,6 +637,24 @@ export const dispatchGraphTool = async (
         return fresh;
       }
       precomputedStale = fresh as PrecomputedStale;
+      // codex round 5 P2: when the server lifecycle ran but
+      // `<repo>/.tokenomy-graph/` didn't exist at start, the host
+      // worker wasn't registered. After the read-path's first
+      // ensureFreshGraph creates the dir, register the worker so
+      // future edits go through the watcher path instead of the
+      // legacy read-driven rebuild.
+      if (isServerModeActive()) {
+        try {
+          // codex round 14 P2: always call registerRepo; it now
+          // detects storage-location changes (graphDir flips) and
+          // tears down the old watcher before binding a new one.
+          // Pre-fix the isWorkerActive guard skipped re-registration
+          // and the old watcher kept polling the obsolete dir.
+          registerRepo(effectiveCwd, config);
+        } catch {
+          // best-effort
+        }
+      }
     }
 
     let graphContext = loadGraphContext(
@@ -547,10 +695,53 @@ export const dispatchGraphTool = async (
       // `tokenomy config set graph.query_budget_bytes.<tool> <N>` is a
       // silent no-op until the next rebuild: cached clipped responses
       // keep returning the old (smaller) result.
-      const version = cacheVersion(name, graphContext.data.meta.built_at, config);
+      // codex round 5 P2: when `auto_refresh_on_read=false`,
+      // precomputedStale is undefined but loadGraphContext computed
+      // its own staleness in graphContext.data — fall back to that
+      // for the cache signature so different dirty-file states get
+      // distinct cache entries in opt-out mode.
+      const stalePayload: PrecomputedStale | undefined = precomputedStale ?? {
+        stale: graphContext.data.stale,
+        stale_files: graphContext.data.stale_files,
+      };
+      const version = cacheVersion(
+        name,
+        graphContext.data.meta.built_at,
+        config,
+        stalePayload,
+      );
       cacheKey = queryCache.key(name, args, version);
       const cached = queryCache.get(cacheKey);
-      if (cached !== undefined) return annotateWithAsyncFailure(cached as QueryResult<unknown>, name, effectiveCwd, config);
+      if (cached !== undefined) {
+        // codex round 2 P3: apply CURRENT lag_ms to the cache hit
+        // via a shallow clone — the cached object never gets a
+        // wall-clock lag value baked in.
+        let cachedWithLag: QueryResult<unknown> = cached as QueryResult<unknown>;
+        if (
+          cachedWithLag.ok &&
+          precomputedStale?.lag_ms != null
+        ) {
+          cachedWithLag = { ...cachedWithLag, lag_ms: precomputedStale.lag_ms };
+        }
+        // codex round 4 P3: record scoped-stale sample on cache hits
+        // too. Without this, repeated identical queries while
+        // `.dirty` is pending miss the report counters, skewing the
+        // scoped-stale ratio that proves Fix 1's value.
+        if (
+          cachedWithLag.ok &&
+          precomputedStale &&
+          precomputedStale.stale_files.length > 0
+        ) {
+          try {
+            const idForSample = resolveRepoId(effectiveCwd);
+            const hit = (cachedWithLag.stale_in_scope?.length ?? 0) > 0;
+            recordScopedStaleSample(idForSample, config, hit);
+          } catch {
+            // best-effort
+          }
+        }
+        return annotateWithAsyncFailure(cachedWithLag, name, effectiveCwd, config);
+      }
     }
   }
 
@@ -558,8 +749,37 @@ export const dispatchGraphTool = async (
   // 0.1.8+: cache the UNANNOTATED result. The `last_build_failure`
   // annotation is read-time only — caching it would survive sentinel clears.
   if (cacheKey && result.ok) queryCache.set(cacheKey, result);
+  // 0.1.9+ codex round 2 P3: lag_ms is wall-clock at request time and
+  // must NOT bleed into the cached object. QueryCache stores by
+  // reference; mutating `result` after `cache.set` poisons cache hits.
+  // Apply lag_ms via a shallow clone so the cached entry stays clean.
+  let withLag: QueryResult<unknown> = result;
+  if (result.ok && precomputedStale?.lag_ms != null) {
+    withLag = { ...result, lag_ms: precomputedStale.lag_ms };
+  }
+  // 0.1.9+: record scoped-stale samples for `tokenomy report`. A "hit"
+  // means the whole-graph drift actually intersected this query's
+  // reachable surface (the answer IS affected). A "miss" means the
+  // graph had drift but unrelated to this answer — Fix 1's payoff.
+  if (
+    CACHEABLE_TOOLS.has(name) &&
+    result.ok &&
+    precomputedStale &&
+    precomputedStale.stale_files.length > 0
+  ) {
+    try {
+      const id = resolveRepoId(effectiveCwd);
+      const cfg = loadConfig(id.repoPath);
+      const hit = (result.stale_in_scope?.length ?? 0) > 0;
+      recordScopedStaleSample(id, cfg, hit);
+    } catch {
+      // best-effort
+    }
+  }
   // Reload config to annotate. 0.1.8+ codex round 7: from resolved repo
   // root so subdir `path` args still find the project-root config.
+  // Use `withLag` (clone with lag_ms applied) so the caller sees the
+  // wall-clock lag; the cached `result` reference stays unmutated.
   if (CACHEABLE_TOOLS.has(name)) {
     let annotateCfg: Config;
     try {
@@ -567,9 +787,9 @@ export const dispatchGraphTool = async (
     } catch {
       annotateCfg = loadConfig(effectiveCwd);
     }
-    return annotateWithAsyncFailure(result, name, effectiveCwd, annotateCfg);
+    return annotateWithAsyncFailure(withLag, name, effectiveCwd, annotateCfg);
   }
-  return result;
+  return withLag;
 };
 
 // 0.1.8+: shallow-clone + annotate so cached results aren't mutated.

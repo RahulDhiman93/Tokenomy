@@ -85,6 +85,33 @@ Pre-0.1.3 the graph snapshot only refreshed when the agent invoked a graph MCP t
 
 Opt-out: `tokenomy config set graph.async_rebuild false` reverts to the synchronous-await behavior so a doomed rebuild surfaces immediately.
 
+## Query-scoped staleness + rebuild worker (0.1.9+)
+
+0.1.9 makes the freshness signal actionable.
+
+**Scoped stale.** Read-side responses now include:
+
+- `stale_files: string[]` — the whole-graph list of files known to have drifted (the parsed sentinel content + a TTL-cached mtime/added-file walk).
+- `stale_in_scope: string[]` — the subset that intersects this query's reachable surface (focal file + transitive callers/imports as the BFS walks). Empty list with `stale: true` means "drift exists but is likely unrelated to this answer."
+- `whole_graph_stale: boolean` — set when an exclude / tsconfig / `.tokenomy.json` change invalidates every query, even with empty `stale_in_scope`.
+- `lag_ms: number` — how long the oldest unconsumed dirty signal has been pending (read-time wall-clock; never cached).
+
+`stale: true` stays conservative — true whenever any drift exists — because the scoped surface is built from the OLD snapshot and a new edit can introduce edges the snapshot can't show. Use `stale_in_scope.length === 0 && !whole_graph_stale && stale: true` as the low-risk-proceed signal.
+
+**In-process rebuild worker.** `startGraphServer` spawns an `fs.watch`+debounce loop per active repo. Edits flow Edit→PostToolUse→`.dirty`→fs.watch→debounced `buildGraph`. Reads observe lag instead of driving rebuilds. Toggles:
+
+- `graph.rebuild_worker.enabled` (default `true`)
+- `graph.rebuild_worker.debounce_ms` (default `150`)
+- Auto-disabled when `graph.async_rebuild: false` (worker IS the async path).
+
+Worker is gated to server-mode only — tests / direct API callers stay on the legacy read-driven rebuild path so fs.watch handles don't leak.
+
+Cross-platform: hook-recorded file paths are resolved against `input.cwd` at write time and normalized to forward-slash repo-relative on read, so Windows `C:\repo\src\a.ts`, POSIX `/repo/src/a.ts`, `./src/a.ts`, and backslash separators all match the graph's node ids.
+
+**Statusline alignment.** The badge now reads the same sentinel / meta-validity check the read path uses, so `[Tokenomy v0.1.9 · graph stale - rebuild]` and the tool response's `stale` flag never disagree.
+
+**Telemetry.** `tokenomy report` and `tokenomy analyze` gain a `Graph freshness` block: worker state, rebuild count, last/avg duration, dirty files pending, and `stale_in_scope` hit/miss counters. The hit/miss ratio quantifies the win — "X% of drift was actually relevant to a query."
+
 ## Cross-repo isolation (0.1.3+)
 
 The MCP server's startup cwd was previously baked into every tool call. When the agent worked across multiple repos in one Claude session, every query returned data for the registered repo regardless of the active one.

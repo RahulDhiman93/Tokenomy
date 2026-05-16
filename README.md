@@ -45,7 +45,7 @@ tokenomy doctor                     # all checks passing
 
 Codex CLI hooks plus Cursor, Windsurf, Cline, and Gemini graph MCP configs are auto-detected when each is on PATH. Force one target with `--agent <name>`; inspect first with `tokenomy init --list-agents`.
 
-> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.8`. Upgrade: `tokenomy update`.
+> **Pre-`1.0`.** Breaking changes may land before `1.0.0` (see [CHANGELOG](./CHANGELOG.md)). Pin: `npm install -g tokenomy@0.1.9`. Upgrade: `tokenomy update`.
 
 ---
 
@@ -127,6 +127,24 @@ Step 2 — Then ask me about each optional feature, one at a time.
      background. ON by default. Tell me whether to keep it ON
      (recommended) or disable.
      Disable: tokenomy config set graph.async_rebuild false
+
+  h2) In-process graph rebuild worker (0.1.9+) — the MCP server
+     watches `.dirty` with fs.watch + a 150ms debounce and rebuilds
+     before the next query needs it. Replaces the read-driven
+     background rebuild for active repos; uses one inotify slot per
+     repo. Also adds a per-query `stale_in_scope` field to graph
+     responses: the precise list of edited files that intersect
+     this query's answer. `stale: true` stays conservative (any
+     drift), so `stale_in_scope.length === 0 && stale: true` means
+     "drift exists but is likely unrelated to this answer" — agents
+     can proceed at low risk. EXCEPTION: when `whole_graph_stale:
+     true` is set (config-file edit, exclude/tsconfig fingerprint
+     flip), every query is potentially affected even with empty
+     `stale_in_scope` — treat as high risk and wait for rebuild
+     or re-query. ON by default. Tell me whether to keep it ON
+     (recommended) or disable for hostile filesystems (some
+     FUSE/network mounts).
+     Disable: tokenomy config set graph.rebuild_worker.enabled false
 
   i) Multi-repo graph + Raven (0.1.3+) — register the graph in EACH
      repo I want it for. Run `tokenomy init --graph-path "$PWD"` in
@@ -246,7 +264,7 @@ Removes both hook entries from `~/.claude/settings.json` (matched by absolute co
 - [x] **Phase 4.5.** OSS-alternatives-first nudge — `find_oss_alternatives` MCP tool + Write context nudge.
 - [x] **Phase 5.** Polish — Golem output mode, statusline, prompt-classifier, `compress`, `bench`, cross-agent installers.
 - [x] **Phase 5.5.** Codex hook foothold — user-scoped `SessionStart` + `UserPromptSubmit` hooks for Golem and prompt-classifier nudges.
-- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4), `tokenomy diagnose` + production-hardening pass + RECON v2 (0.1.5), production-scale graph defaults (0.1.6), Codex MCP startup hotfix + hot-path git timeouts + build-lock stale reclaim + Windows `commandExists` + init rollback + redact-pre size cap + bounded session-state read + debug-log secret hygiene + realpath identity (0.1.7), graph stability pass — skip-and-continue on per-file edge-cap, async-rebuild failure persistence + surface, default-import find_usages, priority BFS, exhaustive hint catalog, incremental rebuilds default-on, memoized graph index, in-repo `.tokenomy-graph/` + `.tokenomy-raven/` storage with auto-migration + auto-gitignore + project registry, `graph/raven migrate`, `doctor/diagnose --all-repos`, subdir-aware config resolution, non-spawning hook resolveRepoId (0.1.8).
+- [x] **Phase 6 (0.1.x).** Raven bridge, Kratos security shield, statusline update marker, Raven in report/analyze, Golem `recon` mode, `tokenomy feedback` command, live graph freshness + cross-repo isolation + auto-update-check (0.1.3), Kratos statusline badge (0.1.4), `tokenomy diagnose` + production-hardening pass + RECON v2 (0.1.5), production-scale graph defaults (0.1.6), Codex MCP startup hotfix + hot-path git timeouts + build-lock stale reclaim + Windows `commandExists` + init rollback + redact-pre size cap + bounded session-state read + debug-log secret hygiene + realpath identity (0.1.7), graph stability pass — skip-and-continue on per-file edge-cap, async-rebuild failure persistence + surface, default-import find_usages, priority BFS, exhaustive hint catalog, incremental rebuilds default-on, memoized graph index, in-repo `.tokenomy-graph/` + `.tokenomy-raven/` storage with auto-migration + auto-gitignore + project registry, `graph/raven migrate`, `doctor/diagnose --all-repos`, subdir-aware config resolution, non-spawning hook resolveRepoId (0.1.8), **core graph staleness pass — query-scoped `stale_in_scope` + `whole_graph_stale`, parsed dirty sentinel with cross-platform path normalization, sentinel race guard (inode+mtime+size), in-process fs.watch rebuild worker with debounce + opt-out, statusline alignment, graph freshness block in `tokenomy report`/`analyze` (0.1.9)**.
 - [ ] **Phase 7.** Language breadth — Python parser plugin, richer benchmark fixtures, npm publish at 1.0.
 - [ ] **Phase 8.** Agent operating layer — rule-pack generator, compaction-time memory hygiene, workflow MCP tools, session ledgers, team-ready reports. See [docs/NEXT_FEATURES.md](./docs/NEXT_FEATURES.md).
 

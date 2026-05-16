@@ -35,6 +35,8 @@ HTML adds a daily bar chart. Pricing: `tokenomy config set report.price_per_mill
 
 Surfaces Raven bridge stats (packets, reviews, comparisons, decisions, repo count, last activity) alongside trims.
 
+0.1.9+ adds a **Graph freshness** block: rebuild-worker state (active/inactive), rebuild count, last and average rebuild duration, files pending in the dirty sentinel, and `stale_in_scope` hit/miss counters with the percentage of drift that was actually relevant to a query. Counters live in `<repoRoot>/.tokenomy-graph/.rebuild-stats.json`.
+
 ## `tokenomy analyze`
 
 Walks `~/.claude/projects/**/*.jsonl` + `~/.codex/sessions/**/*.jsonl`, replays the full pipeline over every historical tool call with a real tokenizer, and reports what Tokenomy *would have* saved.
@@ -50,7 +52,7 @@ tokenomy analyze --verbose                # per-day breakdown
 tokenomy analyze --tune                   # writes ~/.tokenomy/golem-tune.json
 ```
 
-Output: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, ⚠ Wasted-probe incidents (same tool, ≥ 3 distinct-arg calls within 60 s), largest individual results, by-day sparkline, Raven block.
+Output: rounded-box header, per-rule savings bars, top-N waste leaderboard, duplicate hotspots, ⚠ Wasted-probe incidents (same tool, ≥ 3 distinct-arg calls within 60 s), largest individual results, by-day sparkline, Raven block, and (0.1.9+) Graph freshness block.
 
 Tokenizers: `heuristic` (default, ±10 % on code/JSON), `tiktoken` (real `cl100k_base`), `auto` (tiktoken if present).
 
@@ -92,11 +94,11 @@ tokenomy bench compare <a.json> <b.json>   # per-scenario regressions
 
 ## `tokenomy status-line` (beta.2+)
 
-`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.8 · GOLEM-GRUNT · 4.2k saved · graph fresh · Raven · Kratos]`.
+`tokenomy init` patches `settings.json.statusLine`. Reads today's `savings.jsonl`, aggregates by tool/reason, emits a one-liner like `[Tokenomy v0.1.9 · GOLEM-GRUNT · 4.2k saved · graph fresh · Raven · Kratos]`.
 
 Segments (left-to-right): version + `↑` if an update is available, GOLEM mode (when on), today's saved-tokens count, graph freshness, Raven badge (when enabled), Kratos badge (when continuous shield is on).
 
-After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.8↑`). 0.1.3+: cache TTL is 24h and SessionStart + the statusline (every 3h) auto-spawn `tokenomy update --check --quiet` so a new release surfaces on the next Claude Code restart or within 3h on a long-running session.
+After `tokenomy update --check`, a `↑` is appended when a newer release exists on npm (e.g. `v0.1.9↑`). 0.1.3+: cache TTL is 24h and SessionStart + the statusline (every 3h) auto-spawn `tokenomy update --check --quiet` so a new release surfaces on the next Claude Code restart or within 3h on a long-running session.
 
 Must return in < 50 ms — uses a bounded read of the log and no external I/O. Fails open: missing config or parse error → empty string → Claude Code renders nothing.
 
@@ -118,8 +120,8 @@ Single-command self-update.
 ```bash
 tokenomy update              # install latest + re-stage hook
 tokenomy update --check      # query registry, print installed vs remote, exit 1 if out of date
-tokenomy update@0.1.8 # npm-style pin
-tokenomy update --version=0.1.8
+tokenomy update@0.1.9 # npm-style pin
+tokenomy update --version=0.1.9
 tokenomy update --tag=beta   # opt into a non-default dist-tag
 ```
 

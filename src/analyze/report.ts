@@ -1,5 +1,7 @@
 import type { SimEvent } from "./simulate.js";
 import { collectRavenStats, type RavenStats } from "../raven/stats.js";
+import { collectGraphFreshness, type GraphFreshnessStats } from "../graph/freshness-stats.js";
+import { loadConfig } from "../core/config.js";
 
 export interface AggregateReport {
   window: { first_ts: string | null; last_ts: string | null };
@@ -57,6 +59,10 @@ export interface AggregateReport {
   }>;
   tokenizer: { name: string; approximate: boolean };
   raven: RavenStats;
+  // 0.1.9+: same block surfaced in `tokenomy report`. Lets analyze
+  // runs show whether the rebuild worker is keeping the graph fresh
+  // and what the stale-scoping ratio looks like over the window.
+  graph_freshness: GraphFreshnessStats;
 }
 
 export interface AggregatorOptions {
@@ -400,6 +406,36 @@ export class Aggregator {
         this.opts.raven_enabled === true,
         this.opts.raven_identity ? { identity: this.opts.raven_identity } : {},
       ),
+      graph_freshness: this.opts.raven_identity
+        ? (() => {
+            try {
+              return collectGraphFreshness(
+                this.opts.raven_identity!,
+                loadConfig(this.opts.raven_identity!.repoPath),
+              );
+            } catch {
+              return {
+                worker_active: false,
+                rebuild_count: 0,
+                last_rebuild_ms: 0,
+                avg_rebuild_ms: 0,
+                last_rebuild_ts: null,
+                dirty_files_pending: 0,
+                stale_in_scope_hits: 0,
+                stale_in_scope_misses: 0,
+              };
+            }
+          })()
+        : {
+            worker_active: false,
+            rebuild_count: 0,
+            last_rebuild_ms: 0,
+            avg_rebuild_ms: 0,
+            last_rebuild_ts: null,
+            dirty_files_pending: 0,
+            stale_in_scope_hits: 0,
+            stale_in_scope_misses: 0,
+          },
     };
   }
 }

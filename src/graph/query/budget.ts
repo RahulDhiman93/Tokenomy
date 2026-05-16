@@ -1,5 +1,12 @@
 import { utf8Bytes } from "../../rules/text-trim.js";
 
+// 0.1.9+ codex round 13 P2: freshness metadata at the top level
+// (stale_files, stale_in_scope) is signal, not payload. Truncating
+// it produces an answer with `stale: true` and empty
+// `stale_in_scope` — callers misread that as "drift exists but is
+// unrelated" even when an in-scope edit was simply clipped away.
+const PROTECTED_TOP_KEYS = new Set(["stale_files", "stale_in_scope"]);
+
 const findArrayPaths = (
   value: unknown,
   path: Array<string | number> = [],
@@ -11,7 +18,12 @@ const findArrayPaths = (
     return out;
   }
   if (value && typeof value === "object") {
-    for (const [key, child] of Object.entries(value)) findArrayPaths(child, [...path, key], out);
+    for (const [key, child] of Object.entries(value)) {
+      // Skip protected top-level arrays — never let the clipper
+      // drop entries from them.
+      if (path.length === 0 && PROTECTED_TOP_KEYS.has(key)) continue;
+      findArrayPaths(child, [...path, key], out);
+    }
   }
   return out;
 };

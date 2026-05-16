@@ -1,4 +1,5 @@
 import type { AggregateReport } from "./report.js";
+import type { GraphFreshnessStats } from "../graph/freshness-stats.js";
 
 // Pure stdlib ANSI. No chalk, no boxen, no ora.
 // Colours are disabled automatically when stdout isn't a TTY or when the
@@ -266,6 +267,38 @@ export const render = (report: AggregateReport, opts: RenderOptions): string => 
     out.push(
       `  ${pad("Decisions", 26)} ${c.bold}${n(rv.decisions)}${c.reset}` +
         `     ${pad("Last activity", 14)} ${c.dim}${rv.last_activity ? rv.last_activity.slice(0, 19) + "Z" : "—"}${c.reset}`,
+    );
+    out.push("");
+  }
+
+  // 0.1.9+: graph-freshness block. Render only when there's meaningful
+  // state (worker active OR any rebuilds have happened OR there's
+  // pending dirty drift) so empty fixture/test runs stay quiet.
+  const gf = (report as { graph_freshness?: GraphFreshnessStats }).graph_freshness;
+  if (
+    gf &&
+    (gf.worker_active ||
+      gf.rebuild_count > 0 ||
+      gf.dirty_files_pending > 0 ||
+      gf.stale_in_scope_hits + gf.stale_in_scope_misses > 0)
+  ) {
+    out.push(`${c.bold}Graph freshness${c.reset}  ${c.dim}(rebuild worker + scoped stale)${c.reset}`);
+    const wstatus = gf.worker_active ? `${c.green}active${c.reset}` : `${c.dim}inactive${c.reset}`;
+    out.push(`  ${pad("Worker", 26)} ${wstatus}`);
+    out.push(
+      `  ${pad("Rebuilds", 26)} ${c.bold}${n(gf.rebuild_count)}${c.reset}` +
+        `     ${pad("Last (ms)", 14)} ${c.bold}${n(gf.last_rebuild_ms)}${c.reset}` +
+        `     ${pad("Avg (ms)", 12)} ${c.bold}${n(Math.round(gf.avg_rebuild_ms))}${c.reset}`,
+    );
+    out.push(
+      `  ${pad("Dirty pending", 26)} ${c.bold}${n(gf.dirty_files_pending)}${c.reset}` +
+        `     ${pad("Last rebuild", 14)} ${c.dim}${gf.last_rebuild_ts ? gf.last_rebuild_ts.slice(0, 19) + "Z" : "—"}${c.reset}`,
+    );
+    const total = gf.stale_in_scope_hits + gf.stale_in_scope_misses;
+    const hitPct = total > 0 ? Math.round((gf.stale_in_scope_hits / total) * 100) : 0;
+    out.push(
+      `  ${pad("Scoped stale", 26)} ${c.bold}${n(gf.stale_in_scope_hits)}${c.reset} hit / ${c.bold}${n(gf.stale_in_scope_misses)}${c.reset} miss  ` +
+        `${c.dim}(${hitPct}% of drift actually relevant)${c.reset}`,
     );
     out.push("");
   }

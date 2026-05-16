@@ -257,6 +257,15 @@ export interface GraphConfig {
     // behavior). Default: true.
     enabled: boolean;
   };
+  // 0.1.9+: in-process rebuild worker spawned by `startGraphServer`.
+  // Watches `<graphDir>/.dirty` with `fs.watch` + a debounce timer;
+  // when the sentinel changes it kicks `buildGraph` directly so reads
+  // never have to fire the rebuild. Falls back to read-driven
+  // `startBackgroundRebuild` when fs.watch fails (network FS).
+  rebuild_worker?: {
+    enabled: boolean;
+    debounce_ms: number;
+  };
 }
 
 export interface PerToolOverride {

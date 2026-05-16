@@ -152,7 +152,7 @@ test("read-side auto-refresh: propagates rebuild FailOpen when async_rebuild=fal
   });
 });
 
-test("read-side auto-refresh: async_rebuild=true serves cached snapshot + flags stale", async () => {
+test("read-side auto-refresh: async_rebuild=true serves cached snapshot + flags stale_files (scoped)", async () => {
   await withSandbox(async (repo) => {
     const built = (await dispatchGraphTool("build_or_update_graph", {}, repo)) as BuildResult;
     assert.equal(built.ok, true);
@@ -165,12 +165,27 @@ test("read-side auto-refresh: async_rebuild=true serves cached snapshot + flags 
       "get_minimal_context",
       { target: { file: "src/a.ts" }, depth: 1 },
       repo,
-    )) as { ok: boolean; stale?: boolean };
+    )) as {
+      ok: boolean;
+      stale?: boolean;
+      stale_files?: string[];
+      stale_in_scope?: string[];
+    };
 
-    // Stale-but-cached: ok:true, stale:true. The agent sees results
-    // immediately; rebuild runs in the background.
+    // 0.1.9+: scoped stale via `stale_in_scope` is the precise list
+    // of edits known to affect this answer. `stale` itself stays
+    // conservative (codex round 2 P2): an unrelated edit could
+    // introduce new edges into this query's surface that the OLD
+    // snapshot can't see, so `stale: true` whenever any drift
+    // exists. Callers compare `stale_in_scope.length === 0` to know
+    // the drift is unrelated.
     assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.stale_in_scope, []);
     assert.equal(result.stale, true);
+    assert.ok(
+      (result.stale_files ?? []).includes("src/added.ts"),
+      `whole-graph stale_files should include added.ts: ${JSON.stringify(result.stale_files)}`,
+    );
   });
 });
 

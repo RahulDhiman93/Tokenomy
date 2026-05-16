@@ -553,6 +553,33 @@ const buildGraphFromFiles = async (
 //   2. patch `<repoRoot>/.gitignore` with `.tokenomy-graph/` (idempotent);
 //   3. register the project in `~/.tokenomy/projects.json` (idempotent).
 // All best-effort — none of these failures must break the build itself.
+// codex round 13 P2: when postBuildSuccess deliberately leaves
+// `.dirty` in place (mid-build edit detected by the inode guard),
+// the build's response must reflect that pending state. Otherwise
+// `ensureFreshGraph` propagates `stale: false` and the query that
+// triggered the synchronous rebuild reports fresh data while a
+// known edit is still pending. Call this AFTER postBuildSuccess to
+// overlay the post-cleanup sentinel state onto the build result.
+const reflectPostBuildSentinel = (
+  identity: RepoIdentityLike,
+  cfg: Config,
+  result: BuildGraphResult,
+): BuildGraphResult => {
+  if (!result.ok) return result;
+  try {
+    const dirty = graphDirtySentinelPath(identity, cfg.graph);
+    if (!existsSync(dirty)) return result;
+    // Sentinel survived → at least one mid-build edit pending.
+    return {
+      ...result,
+      stale: true,
+      stale_files: result.stale_files ?? [],
+    };
+  } catch {
+    return result;
+  }
+};
+
 const postBuildHousekeeping = (
   identity: RepoIdentityLike,
   cfg: Config,
@@ -572,20 +599,63 @@ const postBuildHousekeeping = (
   }
 };
 
+// 0.1.9+: snapshot of `.dirty` taken at build start. Used by
+// `postBuildSuccess` to detect mid-build edits — if any of inode /
+// mtimeMs / size changed during the build, an Edit landed between
+// enumerate-time and cleanup, so we leave the sentinel in place and
+// let the next build pick those edits up.
+interface DirtySnapshot {
+  ino: number;
+  mtimeMs: number;
+  size: number;
+}
+
+const snapshotDirty = (path: string): DirtySnapshot | null => {
+  try {
+    const st = statSync(path);
+    return { ino: st.ino, mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+};
+
 // 0.1.8+ codex round 2: shared post-success cleanup. Runs on every
 // successful path (cached-fresh / delta / full). Pre-fix only the full
 // rebuild cleared `.dirty`; with `incremental:true` default, the delta
 // path returned BEFORE that clear, so every subsequent read saw the
 // sentinel and kicked off another rebuild. Same fix surfaces async
 // failure clearing on direct `tokenomy graph build` calls.
+//
+// 0.1.9+: race fix. Pre-0.1.9 the rmSync was unconditional. If an Edit
+// landed between enumerate-time and this cleanup, its sentinel entry
+// got silently deleted. `startSnap` lets us check whether the sentinel
+// grew during the build — if so, leave it for the next rebuild cycle.
 const postBuildSuccess = (
   identity: RepoIdentityLike,
   cfg: Config,
+  startSnap: DirtySnapshot | null,
 ): void => {
   postBuildHousekeeping(identity, cfg);
   try {
     const dirty = graphDirtySentinelPath(identity, cfg.graph);
-    if (existsSync(dirty)) rmSync(dirty, { force: true });
+    if (existsSync(dirty)) {
+      const cur = snapshotDirty(dirty);
+      // Three cases:
+      //   1. sentinel existed at start AND is unchanged → clear (clean cycle)
+      //   2. sentinel existed at start AND grew/changed → keep (mid-build edit)
+      //   3. sentinel did NOT exist at start AND now exists → keep
+      //      (codex round 1 P2: a mid-build edit CREATED the sentinel.
+      //      The build didn't see it, so we must leave the signal for
+      //      the next rebuild cycle.)
+      const unchanged =
+        startSnap !== null &&
+        cur !== null &&
+        cur.ino === startSnap.ino &&
+        cur.mtimeMs === startSnap.mtimeMs &&
+        cur.size === startSnap.size;
+      if (unchanged) rmSync(dirty, { force: true });
+      // Else: leave it. The next rebuild cycle (read-side or worker) picks up.
+    }
   } catch {
     // best-effort
   }
@@ -644,6 +714,15 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
     return unlock;
   }
 
+  // 0.1.9+: snapshot the dirty sentinel BEFORE the build reads any
+  // file state. `postBuildSuccess` compares against this to detect
+  // mid-build edits — if the sentinel grew or was rewritten while we
+  // worked, we leave it in place so the next build round catches the
+  // late edits instead of silently dropping them.
+  const dirtySnapAtStart = snapshotDirty(
+    graphDirtySentinelPath(identity, options.config.graph),
+  );
+
   try {
     if (!options.force) {
       const existingMeta = store.loadMeta(identity, options.config.graph);
@@ -672,8 +751,8 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
           logGraphBuild(identity, result, options.config.graph);
           // 0.1.8+ codex round 1+2: shared cleanup on every success
           // path — housekeeping + `.dirty` clear + async-failure clear.
-          postBuildSuccess(identity, options.config);
-          return result;
+          postBuildSuccess(identity, options.config, dirtySnapAtStart);
+          return reflectPostBuildSentinel(identity, options.config, result);
         }
         // Incremental (beta-3): re-parse only stale files + their direct
         // importers; splice into the prior graph. Skipped on
@@ -703,8 +782,8 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
                 // here too. Pre-fix the delta path returned BEFORE the
                 // post-build `.dirty` clear, so every read kicked off
                 // another rebuild forever.
-                postBuildSuccess(identity, options.config);
-                return delta;
+                postBuildSuccess(identity, options.config, dirtySnapAtStart);
+                return reflectPostBuildSentinel(identity, options.config, delta);
               }
               // Fall through to full rebuild if delta couldn't complete.
             }
@@ -738,8 +817,8 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
     logGraphBuild(identity, built, options.config.graph);
     // 0.1.8+: shared post-success cleanup (housekeeping + `.dirty` +
     // async-failure clear). See postBuildSuccess.
-    postBuildSuccess(identity, options.config);
-    return built;
+    postBuildSuccess(identity, options.config, dirtySnapAtStart);
+    return reflectPostBuildSentinel(identity, options.config, built);
   } catch (error) {
     const result = fail("io-error", (error as Error).message);
     logGraphBuild(identity, result, options.config.graph);

@@ -140,6 +140,15 @@ export const graphAsyncFailurePath = (
   cfg?: StorageLocationConfig,
 ): string => join(graphDir(identity, cfg), ".last-async-failure.json");
 
+// 0.1.9+: rolling rebuild-worker stats. JSON: { count, last_ms,
+// total_ms, last_ts, worker_active }. Updated each time the worker
+// completes a rebuild. Surfaced in `tokenomy report` and consumed by
+// `tokenomy analyze`.
+export const graphRebuildStatsPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".rebuild-stats.json");
+
 // 0.1.8+: per-repo Raven storage. Same dual-mode as graph.
 export const ravenRepoDir = (
   identity: RepoIdentityLike,

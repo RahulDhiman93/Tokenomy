@@ -7,6 +7,7 @@ import { safeParse } from "../util/json.js";
 import type { Config, SavingsLogEntry } from "../core/types.js";
 import { globalConfigPath } from "../core/paths.js";
 import { collectRavenStats, type RavenStats } from "../raven/stats.js";
+import { collectGraphFreshness, type GraphFreshnessStats } from "../graph/freshness-stats.js";
 import { loadConfig } from "../core/config.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 
@@ -37,6 +38,10 @@ export interface ReportSummary {
   by_day: { day: string; calls: number; tokens_saved: number }[];
   window: { first_ts: string | null; last_ts: string | null };
   raven: RavenStats;
+  // 0.1.9+: graph freshness block. Surfaces the rebuild worker's
+  // counters and the current dirty-sentinel state so users can see
+  // whether the in-process worker is keeping the snapshot warm.
+  graph_freshness: GraphFreshnessStats;
 }
 
 const readEntries = (logPath: string, since?: Date): SavingsLogEntry[] => {
@@ -55,7 +60,12 @@ const readEntries = (logPath: string, since?: Date): SavingsLogEntry[] => {
 
 export const summarize = (
   entries: SavingsLogEntry[],
-  opts: { top: number; pricePerMillion: number; raven?: RavenStats },
+  opts: {
+    top: number;
+    pricePerMillion: number;
+    raven?: RavenStats;
+    graph_freshness?: GraphFreshnessStats;
+  },
 ): ReportSummary => {
   const byTool = new Map<string, { calls: number; tokens: number }>();
   const byReason = new Map<string, { calls: number; tokens: number }>();
@@ -117,6 +127,16 @@ export const summarize = (
     by_day: dayRanking,
     window: { first_ts: first, last_ts: last },
     raven: opts.raven ?? collectRavenStats(false),
+    graph_freshness: opts.graph_freshness ?? {
+      worker_active: false,
+      rebuild_count: 0,
+      last_rebuild_ms: 0,
+      avg_rebuild_ms: 0,
+      last_rebuild_ts: null,
+      dirty_files_pending: 0,
+      stale_in_scope_hits: 0,
+      stale_in_scope_misses: 0,
+    },
   };
 };
 
@@ -139,6 +159,17 @@ const renderTui = (s: ReportSummary): string => {
   lines.push(`  packets:           ${fmtNum(s.raven.packets)}   repos: ${fmtNum(s.raven.repos)}`);
   lines.push(`  reviews:           ${fmtNum(s.raven.reviews)}   comparisons: ${fmtNum(s.raven.comparisons)}   decisions: ${fmtNum(s.raven.decisions)}`);
   lines.push(`  last activity:     ${s.raven.last_activity ?? "—"}`);
+  lines.push("");
+  // 0.1.9+: graph-freshness block. Same shape as the Raven block:
+  // single subsystem header, key:value lines under it. Lets users
+  // confirm at a glance that the rebuild worker is alive and tracking.
+  const gf = s.graph_freshness;
+  lines.push("Graph freshness");
+  lines.push(`  worker:            ${gf.worker_active ? "active" : "inactive"}`);
+  lines.push(`  rebuilds:          ${fmtNum(gf.rebuild_count)}   last: ${gf.last_rebuild_ms}ms   avg: ${Math.round(gf.avg_rebuild_ms)}ms`);
+  lines.push(`  last rebuild:      ${gf.last_rebuild_ts ?? "—"}`);
+  lines.push(`  dirty pending:     ${fmtNum(gf.dirty_files_pending)} file(s)`);
+  lines.push(`  scoped stale:      ${fmtNum(gf.stale_in_scope_hits)} hit / ${fmtNum(gf.stale_in_scope_misses)} miss`);
   lines.push("");
   lines.push("Top tools by tokens saved");
   for (const t of s.by_tool) {
@@ -212,6 +243,17 @@ const renderHtml = (s: ReportSummary): string => {
   last activity: ${escapeHtml(s.raven.last_activity ?? "—")}
 </div>
 
+<h2>Graph freshness</h2>
+<div class="card">
+  <strong>${s.graph_freshness.worker_active ? "worker active" : "worker inactive"}</strong> &nbsp;·&nbsp;
+  ${fmtNum(s.graph_freshness.rebuild_count)} rebuilds &nbsp;·&nbsp;
+  last ${s.graph_freshness.last_rebuild_ms}ms &nbsp;·&nbsp;
+  avg ${Math.round(s.graph_freshness.avg_rebuild_ms)}ms &nbsp;·&nbsp;
+  ${fmtNum(s.graph_freshness.dirty_files_pending)} dirty pending &nbsp;·&nbsp;
+  scoped stale ${fmtNum(s.graph_freshness.stale_in_scope_hits)}/${fmtNum(s.graph_freshness.stale_in_scope_hits + s.graph_freshness.stale_in_scope_misses)} &nbsp;·&nbsp;
+  last rebuild: ${escapeHtml(s.graph_freshness.last_rebuild_ts ?? "—")}
+</div>
+
 <h2>Top tools by tokens saved</h2>
 <table><thead><tr><th>Tool</th><th>Calls</th><th>Tokens saved</th></tr></thead>
 <tbody>${rows(s.by_tool.map((t) => ({ label: t.tool, calls: t.calls, tokens: t.tokens_saved })))}</tbody></table>
@@ -275,7 +317,24 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
     }
   }
   const raven = collectRavenStats(ravenEnabled, identity ? { identity } : {});
-  const summary = summarize(entries, { top: opts.top, pricePerMillion, raven });
+  // 0.1.9+: graph-freshness stats. Always scope to current repo —
+  // freshness is a per-repo concept; aggregating across repos would
+  // hide which one's worker is stuck.
+  let graph_freshness: GraphFreshnessStats | undefined;
+  try {
+    let cfgPath = process.cwd();
+    let id = identity;
+    try {
+      id = id ?? resolveRepoId(process.cwd());
+      cfgPath = id.repoPath;
+    } catch {
+      // non-repo cwd — skip
+    }
+    if (id) graph_freshness = collectGraphFreshness(id, loadConfig(cfgPath));
+  } catch {
+    // best-effort
+  }
+  const summary = summarize(entries, { top: opts.top, pricePerMillion, raven, graph_freshness });
   const html = renderHtml(summary);
   const tui = renderTui(summary);
   const htmlPath = opts.out ?? join(tokenomyDir(), "report.html");

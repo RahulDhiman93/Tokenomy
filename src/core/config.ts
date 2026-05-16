@@ -113,6 +113,15 @@ export const DEFAULT_CONFIG: Config = {
     tsconfig: {
       enabled: true,
     },
+    // 0.1.9+: in-process rebuild worker. When the MCP server is the
+    // host, this spawns an fs.watch+debounce loop that rebuilds the
+    // graph within `debounce_ms` of the .dirty sentinel changing —
+    // reads no longer drive rebuilds, just observe lag. Disable on
+    // filesystems where fs.watch is flaky (some FUSE/network mounts).
+    rebuild_worker: {
+      enabled: true,
+      debounce_ms: 150,
+    },
   },
   redact: {
     enabled: true,

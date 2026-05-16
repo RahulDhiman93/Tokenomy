@@ -6,7 +6,7 @@ import type {
   ImpactRadiusInput,
   ImpactRadiusResult,
 } from "../types.js";
-import { buildGraphIndex, projectNode, resolveTargetNode } from "./common.js";
+import { buildGraphIndex, projectNode, resolveTargetNode, scopeStale } from "./common.js";
 import { clipResultToBudget, limitByCount } from "./budget.js";
 
 const REVERSE_KINDS = new Set<Edge["kind"]>(["imports", "exports", "calls", "references"]);
@@ -31,6 +31,8 @@ export const impactRadius = (
   graph: Graph,
   input: ImpactRadiusInput,
   cfg: Config,
+  // 0.1.9+: caller's whole-graph stale flag — honors cases where
+  // stale_files is empty (whole-graph invalidations). codex round 3 P2.
   stale: boolean,
   stale_files: string[],
 ): ImpactRadiusResult => {
@@ -93,11 +95,27 @@ export const impactRadius = (
   });
 
   const suggested_tests = limitByCount(collectSuggestedTests(graph, reachedFiles), 20);
+
+  // 0.1.9+: also include the originally-changed input files in the
+  // reachable surface — they're the seeds, so a dirty mark on one of
+  // them is always in-scope for an impact query, even if nothing
+  // depends on it yet.
+  for (const c of input.changed) reachedFiles.add(c.file);
+  // codex round 14 P2: suggested_tests files surface in the
+  // response data — they must count as in-scope. Without this, a
+  // deleted/renamed test file would appear in suggested_tests AND
+  // `stale_files`, yet `stale_in_scope` would stay empty and the
+  // caller would treat it as unrelated drift.
+  for (const t of suggested_tests) reachedFiles.add(t);
+  const scoped = scopeStale(stale, stale_files, reachedFiles);
+
   return clipResultToBudget(
     {
       ok: true,
-      stale,
+      stale: scoped.stale,
       stale_files,
+      stale_in_scope: scoped.stale_in_scope,
+      ...(scoped.whole_graph_stale ? { whole_graph_stale: true } : {}),
       data: {
         reverse_deps: limitByCount(reverse_deps, 80),
         suggested_tests,

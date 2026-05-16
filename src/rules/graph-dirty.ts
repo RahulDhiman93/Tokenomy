@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, resolve as pathResolve } from "node:path";
 import type { Config, HookInput } from "../core/types.js";
 import { graphDir, graphDirtySentinelPath } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
@@ -41,13 +41,22 @@ export const markGraphDirty = (input: HookInput, cfg: Config): void => {
     }
     const sentinel = graphDirtySentinelPath(identity, cfg.graph);
     mkdirSync(dirname(sentinel), { recursive: true });
-    // Content carries the file_path that triggered the dirty flag so a
-    // future incremental-rebuild path can scope work. For now we just
-    // touch the file — `isGraphStaleCheap` only checks existence.
-    const filePath =
+    // codex round 4 P2: resolve the recorded file_path to an
+    // ABSOLUTE path before writing. PostToolUse `cwd` can be a
+    // subdirectory of the repo (e.g. `cwd=/repo/src`,
+    // `file_path='a.ts'` means `/repo/src/a.ts`). Without anchoring
+    // at write time, the read-side parser couldn't distinguish a
+    // repo-root-relative `a.ts` from a subdir-relative one; absolute
+    // paths normalize cleanly there via `path.relative(repoPath, ...)`.
+    const rawFilePath =
       typeof input.tool_input?.["file_path"] === "string"
         ? (input.tool_input["file_path"] as string)
         : "";
+    const filePath = rawFilePath
+      ? isAbsolute(rawFilePath)
+        ? rawFilePath
+        : pathResolve(input.cwd, rawFilePath)
+      : "";
     writeFileSync(sentinel, `${new Date().toISOString()}\t${filePath}\n`, { flag: "a" });
   } catch {
     // best-effort; never throw out of a hook
