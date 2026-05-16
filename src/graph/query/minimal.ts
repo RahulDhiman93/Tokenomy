@@ -5,7 +5,7 @@ import type {
   MinimalContextNeighbor,
   MinimalContextResult,
 } from "../types.js";
-import { buildGraphIndex, projectNode, resolveTargetNode } from "./common.js";
+import { buildGraphIndex, projectNode, resolveTargetNode, scopeStale } from "./common.js";
 import { clipResultToBudget, limitByCount } from "./budget.js";
 
 // 0.1.8+: edge priority drives both the BFS order (so the most-useful
@@ -26,6 +26,8 @@ export const minimalContext = (
   graph: Graph,
   input: MinimalContextInput,
   cfg: Config,
+  // 0.1.9+: caller's whole-graph stale flag — honors cases where
+  // stale_files is empty (whole-graph invalidations). codex round 3 P2.
   stale: boolean,
   stale_files: string[],
 ): MinimalContextResult => {
@@ -77,12 +79,17 @@ export const minimalContext = (
   for (const edge of index.incoming.get(target.id) ?? []) enqueue(edge.from, 1, edge, "in");
 
   const neighbors: MinimalContextNeighbor[] = [];
+  // 0.1.9+: track files we actually visit so the response can scope
+  // staleness to "edits that affect this answer," not the whole graph.
+  const reachable = new Set<string>();
+  if (target.file) reachable.add(target.file);
   while (pq.length > 0 && visited.size < 64) {
     const cur = dequeue()!;
     if (visited.has(cur.id)) continue;
     const node = index.nodesById.get(cur.id);
     if (!node) continue;
     visited.add(node.id);
+    if (node.file) reachable.add(node.file);
     neighbors.push({
       ...projectNode(node),
       edge_kind: cur.edge.kind,
@@ -109,11 +116,14 @@ export const minimalContext = (
     return a.id.localeCompare(b.id);
   });
 
+  const scoped = scopeStale(stale, stale_files, reachable);
   return clipResultToBudget(
     {
       ok: true,
-      stale,
+      stale: scoped.stale,
       stale_files,
+      stale_in_scope: scoped.stale_in_scope,
+      ...(scoped.whole_graph_stale ? { whole_graph_stale: true } : {}),
       data: {
         focal: projectNode(target),
         neighbors: limitByCount(neighbors, 40),

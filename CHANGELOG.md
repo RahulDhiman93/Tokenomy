@@ -12,6 +12,110 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-05-16
+
+### Fixed (graph staleness — core architectural pass)
+
+Users reported the graph "constantly marked stale mid-session," which made
+agents distrust the freshness signal and fall back to broad `Read` sweeps.
+Five core fixes plus 29 rounds of Codex review address it:
+
+- **Query-scoped staleness.** `find_usages` / `get_impact_radius` /
+  `get_minimal_context` / `get_review_context` now emit a
+  `stale_in_scope` field: the precise list of edited files that
+  intersect this query's reachable surface. `stale: true` stays
+  conservative (any drift), so callers compare
+  `stale_in_scope.length === 0` to know the drift is unrelated to the
+  answer and proceed at low risk. `whole_graph_stale: true` flags
+  config-level invalidations (exclude / tsconfig fingerprint flip,
+  config-file edit) — high risk even with empty `stale_in_scope`.
+- **Sentinel content is parsed.** The `.dirty` log now carries
+  absolute file paths (PostToolUse anchors `tool_input.file_path`
+  against `input.cwd` at write time), and `isGraphStaleCheap` parses
+  the log into a granular `stale_files` list — normalized to repo-
+  relative on read (POSIX absolute, Windows `C:\…`, `./prefix`, and
+  backslash separators all collapse to forward-slash repo-relative).
+- **Sentinel race guard.** `buildGraph` snapshots the sentinel's
+  `inode + size + mtime` at lock acquisition. `postBuildSuccess`
+  clears `.dirty` only when those match — any mid-build edit leaves
+  the signal for the next cycle. Build results call
+  `reflectPostBuildSentinel` so a synchronous rebuild that left
+  `.dirty` returns `stale: true` instead of misleading callers.
+- **In-process rebuild worker.** The MCP server (`tokenomy graph
+  serve`) now watches `<graphDir>` with `fs.watch` + a 150ms
+  debounce. Sentinel-driven staleness rebuilds proactively before
+  the next query needs it; non-sentinel drift (git checkout, codegen
+  via Bash, external editor) still triggers the legacy
+  `startBackgroundRebuild` so nothing falls through. Worker exits
+  cleanly on `transport.onclose` and on runtime opt-out
+  (`graph.rebuild_worker.enabled: false`, `graph.async_rebuild:
+  false`, `graph.enabled: false`). Disabled by default on hostile
+  filesystems via the same config flags.
+- **Statusline alignment.** Pre-0.1.9 the badge used a 24h
+  `built_at` heuristic disconnected from the MCP read path. Now it
+  reads the same `.dirty` sentinel + meta validity that the read
+  path uses, so the badge and tool responses agree.
+
+### Observability
+
+- **Graph freshness in `tokenomy report` and `tokenomy analyze`.**
+  New `Graph freshness` block reports worker state, rebuild count,
+  last + avg duration, dirty-files-pending, and scoped-stale
+  hit/miss counters (the ratio quantifies Fix 1's payoff over a
+  session — "X% of drift was actually relevant to a query").
+  Counters live in `<graphDir>/.rebuild-stats.json`, surfaced by
+  `collectGraphFreshness()`.
+- **Cache-hit recording.** Cacheable MCP read responses now record
+  scoped-stale samples on both miss and hit paths, so repeated
+  identical queries don't undercount.
+
+### Codex round notes (29 review passes, 0 P0 / 1 P1 / ~47 P2-P3)
+
+- **P1 round 8**: worker retry loop bounded to `build-in-progress`
+  with 3-attempt cap + async-failure record. Persistent failures no
+  longer thrash the rebuild path.
+- **P2 cache correctness**: stale signature mixed into the cache
+  version key (collision-free JSON encoding), so a query first
+  cached with unrelated drift can't return stale `stale_in_scope`
+  after a relevant edit lands. `lag_ms` applied via shallow clone
+  so it never bleeds into the cached object.
+- **P2 worker lifecycle**: server-mode gate prevents test/direct
+  callers from leaking `fs.watch` handles. Registration is
+  idempotent and detects storage-location flips (`graph.location`
+  change tears down the watcher rooted at the old `graphDir`).
+  Runtime opt-out unregisters live watchers. Pre-existing `.dirty`
+  at register time schedules an immediate rebuild.
+- **P2 cross-platform**: `path.isAbsolute` + `path.relative` +
+  separator normalization, so Windows `C:\repo\src\a.ts` paths
+  scope correctly. Filename-less `fs.watch` events fall back to a
+  sentinel existsSync check.
+- **P2 fingerprint preservation**: cheap-path now runs the
+  exclude-fingerprint check (O(1)) AND a TTL-cached tsconfig
+  fingerprint (O(repo), amortized) on every sentinel hit so
+  out-of-band tsconfig / exclude changes don't slip past.
+- **P2 added-file detection**: a TTL-cached enumerate finds files
+  that exist on disk but aren't in the prior snapshot's
+  `file_hashes` — covers git checkout adding a new source file
+  while a sentinel is pending.
+- **P2 sentinel-survives-rebuild**: on every successful build the
+  worker re-arms if `.dirty` still exists after `postBuildSuccess`,
+  catching the race where fs.watch coalesced a mid-build append.
+- **P2 budget protection**: `clipResultToBudget` no longer trims
+  `stale_files` / `stale_in_scope` — those are signal, not payload.
+- **P3 hotspots**: `reviewContext` reachable set capped to the
+  top-5 hotspots actually surfaced in the response, so the
+  scoped-stale ratio reflects what the caller sees.
+
+### Migration
+
+No schema bump. `stale_in_scope`, `whole_graph_stale`, and `lag_ms`
+are additive optional fields on `Ok<T>`. Existing
+`.tokenomy.json` files inherit `graph.rebuild_worker: { enabled:
+true, debounce_ms: 150 }` from `DEFAULT_CONFIG`. Opt out with
+`tokenomy config set graph.rebuild_worker.enabled false`. The
+`.rebuild-stats.json` file is created on first worker registration
+or first `recordScopedStaleSample` call; absent file = zeros.
+
 ## [0.1.8] — 2026-05-11
 
 ### Fixed (graph stability + usefulness)
@@ -1183,7 +1287,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.9
 [0.1.8]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.8
 [0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7
 [0.1.6]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.6

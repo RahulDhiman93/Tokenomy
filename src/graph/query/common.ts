@@ -127,6 +127,60 @@ export const projectNode = (node: Node): {
   ...(node.range?.line ? { line: node.range.line } : {}),
 });
 
+// 0.1.9+: scope whole-graph stale_files down to the files this query
+// actually touches. `reachable` is the set of files visited while
+// building the answer (focal, neighbors, importers, etc.).
+//
+// 0.1.9+ codex round 2 P2: `stale` is CONSERVATIVE — true whenever
+// ANY whole-graph drift exists. Reason: the reachable set is built
+// from the OLD snapshot; an edit can add new edges that the snapshot
+// can't show, so scoping alone can miss new dependencies.
+//
+// 0.1.9+ codex round 3 P2: also honor the caller's `inputStale`
+// flag. Whole-graph invalidations (exclude_fingerprint or
+// tsconfig_fingerprint changed) return `stale: true` with
+// `stale_files: []` from `getGraphStaleStatus`. Without this
+// preservation, those cases would report `stale: false` and serve
+// the old snapshot as fresh.
+//
+// `stale_in_scope` remains the precise "files known stale AND known
+// reachable" subset that callers can use to decide whether the
+// drift is worth a re-query.
+export const scopeStale = (
+  inputStale: boolean,
+  stale_files: string[],
+  reachable: Iterable<string>,
+): {
+  stale: boolean;
+  stale_in_scope: string[];
+  whole_graph_stale: boolean;
+} => {
+  if (stale_files.length === 0) {
+    // No granular drift list: trust the caller's stale flag.
+    // codex round 9 P2: `stale: true` here is WHOLE-GRAPH stale
+    // (exclude/tsconfig fingerprint flip, config-file edit, parse-
+    // empty sentinel). Expose that distinctly so agents don't
+    // treat it as "unrelated drift, low risk".
+    return {
+      stale: inputStale,
+      stale_in_scope: [],
+      whole_graph_stale: inputStale,
+    };
+  }
+  const reachSet = reachable instanceof Set ? reachable : new Set(reachable);
+  const hits: string[] = [];
+  for (const f of stale_files) if (reachSet.has(f)) hits.push(f);
+  hits.sort();
+  // Drift exists → stale is true (conservative). Caller's flag is
+  // already true here by construction (stale_files non-empty implies
+  // stale_status.stale = true), so OR'ing is a no-op but explicit.
+  return {
+    stale: inputStale || true,
+    stale_in_scope: hits,
+    whole_graph_stale: false,
+  };
+};
+
 // 0.1.8+: index-driven resolution. Pre-0.1.8 `resolveTargetNode` did two
 // O(N) linear scans of `graph.nodes` on every find_usages / impact /
 // minimal call — on a 3k-file graph that's ~100k node touches per query.

@@ -1,5 +1,5 @@
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { Config } from "../core/types.js";
 import { graphDirtySentinelPath, graphRebuildLockPath, graphSnapshotPath } from "../core/paths.js";
 import type { GraphMeta } from "./schema.js";
@@ -23,11 +23,253 @@ export interface StaleStatus {
 
 export type GraphStaleResult = StaleStatus | FailOpen;
 
+// codex round 8 P2: helper used by the sentinel fast path to merge
+// hook-recorded edits with out-of-band drift (git checkout, external
+// editor, Bash codegen). Walks every file tracked in meta.file_mtimes;
+// O(tracked files) but no SHA reads — just statSync.
+//
+// codex round 10 P2: cache the result keyed on sentinel
+// (inode + size + mtime) AND meta.built_at. Repeated queries within
+// a burst reuse the cached drift list instead of re-walking on every
+// request.
+//
+// codex round 12 P2: TTL the cache. The sentinel-only key misses
+// out-of-band edits to tracked files (the sentinel doesn't grow
+// because it's only written by the PostToolUse hook). A short TTL
+// re-walks recently enough that `git checkout`/codegen drift is
+// caught within the window, while still amortizing tight burst-read
+// loops common in interactive agent sessions.
+const DRIFT_CACHE_TTL_MS = 750;
+interface DriftCacheEntry {
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  built_at: string;
+  files: string[];
+  computed_at: number;
+}
+const driftCacheByRepo = new Map<string, DriftCacheEntry>();
+
+const mtimeDriftFiles = (
+  repoPath: string,
+  meta: import("./schema.js").GraphMeta,
+  sentinelStat?: { ino: number; size: number; mtimeMs: number },
+): string[] => {
+  if (sentinelStat) {
+    const cached = driftCacheByRepo.get(repoPath);
+    if (
+      cached &&
+      cached.ino === sentinelStat.ino &&
+      cached.size === sentinelStat.size &&
+      cached.mtimeMs === sentinelStat.mtimeMs &&
+      cached.built_at === meta.built_at &&
+      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+    ) {
+      return cached.files;
+    }
+  }
+  const drift: string[] = [];
+  for (const file of Object.keys(meta.file_mtimes)) {
+    const abs = join(repoPath, ...file.split("/"));
+    let cur = 0;
+    try {
+      cur = statSync(abs).mtimeMs;
+    } catch {
+      drift.push(file);
+      continue;
+    }
+    if (meta.file_mtimes[file] !== cur) drift.push(file);
+  }
+  if (sentinelStat) {
+    driftCacheByRepo.set(repoPath, {
+      ino: sentinelStat.ino,
+      size: sentinelStat.size,
+      mtimeMs: sentinelStat.mtimeMs,
+      built_at: meta.built_at,
+      files: drift,
+      computed_at: Date.now(),
+    });
+  }
+  return drift;
+};
+
+// codex round 11 P2: enumerate the current graph file set and
+// return files NOT in the snapshot's file_hashes. Cached with the
+// same sentinel-stat key as `mtimeDriftFiles` to avoid double-walks.
+interface AddedCacheEntry {
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  built_at: string;
+  files: string[];
+  computed_at: number;
+}
+const addedCacheByRepo = new Map<string, AddedCacheEntry>();
+
+const addedFilesSince = (
+  repoPath: string,
+  cfg: Config,
+  meta: import("./schema.js").GraphMeta,
+  sentinelStat?: { ino: number; size: number; mtimeMs: number },
+): string[] => {
+  if (sentinelStat) {
+    const cached = addedCacheByRepo.get(repoPath);
+    if (
+      cached &&
+      cached.ino === sentinelStat.ino &&
+      cached.size === sentinelStat.size &&
+      cached.mtimeMs === sentinelStat.mtimeMs &&
+      cached.built_at === meta.built_at &&
+      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+    ) {
+      return cached.files;
+    }
+  }
+  const enumerated = enumerateGraphFiles(repoPath, cfg);
+  if (!enumerated.ok) return [];
+  const previous = new Set(Object.keys(meta.file_hashes));
+  const added: string[] = [];
+  for (const f of enumerated.files) if (!previous.has(f)) added.push(f);
+  if (sentinelStat) {
+    addedCacheByRepo.set(repoPath, {
+      ino: sentinelStat.ino,
+      size: sentinelStat.size,
+      mtimeMs: sentinelStat.mtimeMs,
+      built_at: meta.built_at,
+      files: added,
+      computed_at: Date.now(),
+    });
+  }
+  return added;
+};
+
+// codex round 12 P2: TTL-cached tsconfig fingerprint. Same shape +
+// TTL as the drift/added caches so burst reads while the sentinel
+// sits don't repeatedly enumerate the repo or parse tsconfig files.
+interface TsconfigFpCacheEntry {
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  built_at: string;
+  fingerprint: string;
+  computed_at: number;
+}
+const tsconfigFpCacheByRepo = new Map<string, TsconfigFpCacheEntry>();
+
+const cachedTsconfigFingerprint = (
+  repoPath: string,
+  meta: import("./schema.js").GraphMeta,
+  cfg: Config,
+  sentinelStat?: { ino: number; size: number; mtimeMs: number },
+): string => {
+  if (sentinelStat) {
+    const cached = tsconfigFpCacheByRepo.get(repoPath);
+    if (
+      cached &&
+      cached.ino === sentinelStat.ino &&
+      cached.size === sentinelStat.size &&
+      cached.mtimeMs === sentinelStat.mtimeMs &&
+      cached.built_at === meta.built_at &&
+      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+    ) {
+      return cached.fingerprint;
+    }
+  }
+  const raw = enumerateAllFiles(repoPath);
+  const fp = computeTsconfigFingerprint(repoPath, raw.files, cfg.graph.tsconfig.enabled);
+  if (sentinelStat) {
+    tsconfigFpCacheByRepo.set(repoPath, {
+      ino: sentinelStat.ino,
+      size: sentinelStat.size,
+      mtimeMs: sentinelStat.mtimeMs,
+      built_at: meta.built_at,
+      fingerprint: fp,
+      computed_at: Date.now(),
+    });
+  }
+  return fp;
+};
+
+// Test affordance — clear between tests so per-repo cache doesn't bleed.
+export const _resetDriftCacheForTests = (): void => {
+  driftCacheByRepo.clear();
+  addedCacheByRepo.clear();
+  tsconfigFpCacheByRepo.clear();
+};
+
 export interface CheapStaleStatus {
   missing: boolean;
   stale: boolean;
   stale_files: string[];
+  // 0.1.9+: time since the earliest unconsumed entry in the dirty
+  // sentinel. Populated when the sentinel exists; null otherwise.
+  // Read-side handler uses this to surface rebuild lag to callers.
+  lag_ms?: number | null;
 }
+
+// 0.1.9+: parse `<graphDir>/.dirty` content. Sentinel format is
+// `<iso>\t<file_path>\n` per line, append-only across PostToolUse fires.
+// Returns sorted, deduped list of file paths. Best-effort: malformed
+// lines and missing files yield an empty list (caller falls back to the
+// full mtime walk so we never silently report "stale_files: []").
+//
+// 0.1.9+ codex round 1 P2: when `repoPath` is supplied, normalize each
+// path to a repo-relative form so the scoped-stale intersection works.
+// PostToolUse payloads can carry absolute `file_path` (Claude Code does
+// when the agent operates on absolute paths); graph nodes are always
+// repo-relative. Without normalization the intersection misses the
+// edited file, queries report `stale: false` while a real edit is
+// pending, and Fix 1 silently regresses.
+export const readDirtySentinel = (
+  path: string,
+  repoPath?: string,
+): { files: string[]; oldest_ts: number | null } => {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return { files: [], oldest_ts: null };
+  }
+  const files = new Set<string>();
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    if (tab < 0) continue;
+    const ts = Date.parse(line.slice(0, tab));
+    let file = line.slice(tab + 1).trim();
+    if (!file) continue;
+    // codex round 2 P2: cross-platform path normalization. On Windows
+    // Claude Code emits `C:\repo\src\a.ts`; on POSIX `/repo/src/a.ts`.
+    // Graph nodes always use forward-slash repo-relative ids. Use
+    // node:path.isAbsolute + node:path.relative so we handle both,
+    // then convert backslashes for the comparison.
+    if (isAbsolute(file)) {
+      if (!repoPath) {
+        // No repo context to anchor against — best to drop than to
+        // produce a path that never matches a graph node.
+        continue;
+      }
+      const rel = relative(repoPath, file);
+      // `relative` returns "../..." when the file is OUTSIDE repoPath.
+      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      file = rel;
+    }
+    // codex round 3 P3: normalize relative paths too. Hook payloads
+    // sometimes carry "./src/a.ts" (Claude Code occasionally), and
+    // on Windows the separator inside a relative path is "\". Graph
+    // node ids are always plain forward-slash repo-relative.
+    if (sep !== "/") file = file.split(sep).join("/");
+    if (file.startsWith("./")) file = file.slice(2);
+    while (file.startsWith("/")) file = file.slice(1);
+    if (Number.isFinite(ts) && ts < oldest) oldest = ts;
+    files.add(file);
+  }
+  return {
+    files: [...files].sort(),
+    oldest_ts: oldest === Number.POSITIVE_INFINITY ? null : oldest,
+  };
+};
 
 export const getGraphStaleStatus = (
   repoPath: string,
@@ -119,14 +361,139 @@ export const isGraphStaleCheap = (
     return { missing: true, stale: true, stale_files: [] };
   }
 
-  // 0.1.3 fast path: PostToolUse on Edit/Write/MultiEdit drops a `.dirty`
-  // sentinel under the graph dir. When it exists we know SOMETHING changed
-  // and short-circuit straight to stale — saves the full enumerate-and-stat
-  // walk on every read-side MCP query. The actual rebuild path picks up the
-  // SHA-256 verification, so a false positive (file touched but content
-  // unchanged) still short-circuits cheaply downstream.
-  if (existsSync(graphDirtySentinelPath(identity, cfg.graph))) {
-    return { missing: false, stale: true, stale_files: [] };
+  // 0.1.3 fast path: PostToolUse on Edit/Write/MultiEdit appends to a
+  // `<graphDir>/.dirty` log. 0.1.9+: we parse it so callers (query layer
+  // + statusline + worker) see the actual per-edit file paths rather
+  // than an opaque "something changed" flag. The full SHA verification
+  // still happens at rebuild time, so a false-positive touch (mtime
+  // bumped, content unchanged) collapses cheaply downstream.
+  const sentinelPath = graphDirtySentinelPath(identity, cfg.graph);
+  if (existsSync(sentinelPath)) {
+    const parsed = readDirtySentinel(sentinelPath, identity.repoPath);
+    // codex round 6 P3: lag_ms must distinguish "sentinel exists"
+    // from "no sentinel". If oldest_ts isn't parseable (legacy
+    // marker, missing tab), fall back to the sentinel file's mtime
+    // so the handler still sees sentinel-driven staleness and
+    // delegates to the worker instead of competing.
+    let lag_ms: number | null;
+    if (parsed.oldest_ts) {
+      lag_ms = Math.max(0, Date.now() - parsed.oldest_ts);
+    } else {
+      try {
+        lag_ms = Math.max(0, Date.now() - statSync(sentinelPath).mtimeMs);
+      } catch {
+        lag_ms = 0;
+      }
+    }
+    // codex round 6 P2: dirty entries that change the GRAPH BUILD
+    // ITSELF (tsconfig.json / jsconfig.json / .tokenomy.json change
+    // path aliases or excludes) must be reported as whole-graph
+    // stale, not granular. The query layer's scoped-stale
+    // intersection would otherwise see e.g. `tsconfig.json` in the
+    // list, find no graph node for it, and report
+    // `stale_in_scope: []` even though every node potentially moved.
+    const wholeGraphTriggers = parsed.files.some((f) =>
+      /(^|\/)tsconfig.*\.json$/i.test(f) ||
+      /(^|\/)jsconfig.*\.json$/i.test(f) ||
+      /(^|\/)\.tokenomy\.json$/.test(f),
+    );
+    // codex round 7 P2 / round 8 P2: also check fingerprints. Pre-
+    // fix, the read path passes the sentinel's granular list into
+    // `loadGraphContext` with `skipStaleCheck:true`, so out-of-band
+    // changes (git checkout, manual edit, codegen via Bash) to
+    // tsconfig/jsconfig/.tokenomy.json or any exclude pattern would
+    // never be detected — every query reports `stale_in_scope: []`
+    // for files outside the reachable surface, but the whole graph
+    // is actually invalid.
+    //
+    // Exclude check is O(1) (just stringify of cfg.graph.exclude).
+    // Tsconfig check requires `enumerateAllFiles` — O(repo). We pay
+    // that once per sentinel-active query; the queryCache amortizes
+    // repeated queries on the same snapshot.
+    const excludeChanged =
+      meta.exclude_fingerprint !== fingerprintExcludes(cfg.graph.exclude);
+    let tsconfigChanged = false;
+    if (!excludeChanged && !wholeGraphTriggers && parsed.files.length > 0) {
+      try {
+        // codex round 12 P2: cache the tsconfig fingerprint with
+        // the same sentinel-stat + TTL key. Pre-fix, every
+        // cacheable read while `.dirty` was pending paid for an
+        // `enumerateAllFiles` + tsconfig parse — that defeated the
+        // worker's low-latency read path on large repos.
+        let st: { ino: number; size: number; mtimeMs: number } | undefined;
+        try {
+          const s = statSync(sentinelPath);
+          st = { ino: s.ino, size: s.size, mtimeMs: s.mtimeMs };
+        } catch {
+          // best-effort
+        }
+        const fp = cachedTsconfigFingerprint(identity.repoPath, meta, cfg, st);
+        if (fp !== meta.tsconfig_fingerprint) tsconfigChanged = true;
+      } catch {
+        // best-effort; treat as no-change rather than failing the read.
+      }
+    }
+    if (wholeGraphTriggers || excludeChanged || tsconfigChanged) {
+      // codex round 6 P2 / round 7 P2: whole-graph invalidation
+      // (config file changed, or fingerprint mismatch). Signal
+      // with empty stale_files; scopeStale honors the input stale
+      // flag.
+      return { missing: false, stale: true, stale_files: [], lag_ms };
+    }
+    if (parsed.files.length > 0) {
+      // codex round 8 P2 / round 11 P2: ALSO run the mtime walk
+      // AND enumerate current files so we catch:
+      //   - out-of-band edits (git checkout, external editor, Bash
+      //     codegen) to files already tracked by the snapshot.
+      //   - NEWLY ADDED files (git checkout brought in a new
+      //     source file). `meta.file_mtimes` is from the prior
+      //     snapshot, so a fresh file isn't in there — only an
+      //     enumerate against the current disk state can find it.
+      //
+      // codex round 10 P2: cache keyed on sentinel ino+size+mtime
+      // so repeated queries while the sentinel sits don't re-walk
+      // every tracked file. First query while the sentinel is
+      // active pays O(tracked files + enumerate); subsequent reads
+      // reuse the cached drift list until the sentinel grows OR
+      // the snapshot is rebuilt.
+      let sentinelStat: { ino: number; size: number; mtimeMs: number } | undefined;
+      try {
+        const st = statSync(sentinelPath);
+        sentinelStat = { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+      } catch {
+        // best-effort
+      }
+      const merged = new Set<string>(parsed.files);
+      try {
+        const drift = mtimeDriftFiles(identity.repoPath, meta, sentinelStat);
+        for (const f of drift) merged.add(f);
+      } catch {
+        // best-effort
+      }
+      // codex round 11 P2: enumerate to find ADDED files (present
+      // on disk, absent from the snapshot's file_hashes). Same
+      // cache key — added-files set is stable as long as the
+      // sentinel and snapshot are unchanged.
+      try {
+        const added = addedFilesSince(identity.repoPath, cfg, meta, sentinelStat);
+        for (const f of added) merged.add(f);
+      } catch {
+        // best-effort
+      }
+      return {
+        missing: false,
+        stale: true,
+        stale_files: [...merged].sort(),
+        lag_ms,
+      };
+    }
+    // codex round 4 P2 / round 6 P2: sentinel exists but parses
+    // empty (legacy marker, truncated mid-write, malformed).
+    // Pre-0.1.9 behavior was to treat any sentinel as stale; we
+    // preserve that with empty stale_files, which signals
+    // "whole-graph stale" to the query layer via the input stale
+    // flag.
+    return { missing: false, stale: true, stale_files: [], lag_ms };
   }
 
   if (meta.exclude_fingerprint !== fingerprintExcludes(cfg.graph.exclude)) {

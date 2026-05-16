@@ -1,6 +1,6 @@
 import type { Config } from "../../core/types.js";
 import type { Confidence, Edge, Graph } from "../schema.js";
-import { buildGraphIndex, projectNode, resolveTargetNode } from "./common.js";
+import { buildGraphIndex, projectNode, resolveTargetNode, scopeStale } from "./common.js";
 import { clipResultToBudget, limitByCount } from "./budget.js";
 import type { FindUsagesInput, FindUsagesResult, FindUsagesCallSite } from "../types.js";
 
@@ -13,6 +13,9 @@ export const findUsages = (
   graph: Graph,
   input: FindUsagesInput,
   cfg: Config,
+  // 0.1.9+: caller's whole-graph stale flag — used to honor cases
+  // where stale_files is empty (e.g. exclude_fingerprint mismatch).
+  // codex round 3 P2.
   stale: boolean,
   stale_files: string[],
 ): FindUsagesResult => {
@@ -156,11 +159,20 @@ export const findUsages = (
     return a.id.localeCompare(b.id);
   });
 
+  // 0.1.9+: scope stale to files actually touched by this query.
+  // Reachable surface = focal file + every call-site file.
+  const reachable = new Set<string>();
+  if (target.file) reachable.add(target.file);
+  for (const cs of callSites) if (cs.file) reachable.add(cs.file);
+  const scoped = scopeStale(stale, stale_files, reachable);
+
   return clipResultToBudget(
     {
       ok: true,
-      stale,
+      stale: scoped.stale,
       stale_files,
+      stale_in_scope: scoped.stale_in_scope,
+      ...(scoped.whole_graph_stale ? { whole_graph_stale: true } : {}),
       data: {
         focal: projectNode(target),
         call_sites: limitByCount(callSites, 100),

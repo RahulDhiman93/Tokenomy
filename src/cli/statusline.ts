@@ -1,7 +1,13 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import type { Config } from "../core/types.js";
 import { loadConfig } from "../core/config.js";
-import { graphDir, graphMetaPath, graphSnapshotPath, updateCachePath } from "../core/paths.js";
+import {
+  graphDir,
+  graphDirtySentinelPath,
+  graphMetaPath,
+  graphSnapshotPath,
+  updateCachePath,
+} from "../core/paths.js";
 import type { SavingsLogEntry } from "../core/types.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { compareVersions } from "./update.js";
@@ -133,16 +139,37 @@ const graphState = (cwd: string, cfg: Config): "fresh" | "stale" | undefined => 
   // `.git` in the ancestor chain — resolveRepoId's cheap-gate handles
   // that, so the 50ms statusline budget is preserved on non-repo cwds.
   // 0.1.8+: storage moved per-repo, so the global-existsSync gate is gone.
+  //
+  // 0.1.9+: align with the MCP read path. The sentinel-existence check
+  // (cheap, O(1)) decides "stale" without a full mtime walk. We avoid
+  // calling `isGraphStaleCheap` because on the Tokenomy repo itself it
+  // walks several hundred files per render — past the 50ms budget.
+  // Trade-off: a manual file edit that bypasses the PostToolUse hook
+  // won't show as stale until the next graph query, which is the same
+  // staleness ceiling the agent already sees.
   try {
     const identity = resolveRepoId(cwd);
-    if (!existsSync(graphDir(identity, cfg.graph))) return undefined;
-    if (!existsSync(graphMetaPath(identity, cfg.graph)) || !existsSync(graphSnapshotPath(identity, cfg.graph))) {
+    const dir = graphDir(identity, cfg.graph);
+    if (!existsSync(dir)) return undefined;
+    if (
+      !existsSync(graphMetaPath(identity, cfg.graph)) ||
+      !existsSync(graphSnapshotPath(identity, cfg.graph))
+    ) {
       return undefined;
     }
-    const meta = safeParse<{ built_at?: string }>(readFileSync(graphMetaPath(identity, cfg.graph), "utf8"));
+    // codex round 4 P3: validate meta.json is parseable AND has
+    // built_at. A corrupt or empty meta would otherwise let the badge
+    // claim "fresh" for a snapshot that graph queries can't actually
+    // load — confusing the user about what state the graph is in.
+    const meta = safeParse<{ built_at?: string }>(
+      readFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+    );
     if (!meta?.built_at) return "stale";
-    const age = Date.now() - new Date(meta.built_at).getTime();
-    return Number.isFinite(age) && age < 24 * 60 * 60 * 1000 ? "fresh" : "stale";
+    // Dirty sentinel = an Edit/Write/MultiEdit fired since the last
+    // rebuild. Mirrors what `isGraphStaleCheap` reports without the
+    // walk cost.
+    if (existsSync(graphDirtySentinelPath(identity, cfg.graph))) return "stale";
+    return "fresh";
   } catch {
     return undefined;
   }
@@ -186,10 +213,15 @@ export const runStatusLine = (argv: string[]): number => {
       process.stdout.write("");
       return 0;
     }
+    // 0.1.9+: graph stale check is now isGraphStaleCheap-backed, which
+    // is O(1) on the dirty-sentinel hit but walks the tree on a cold
+    // path. Gate behind the 50ms budget — skipping the badge is better
+    // than blowing the budget on a 5k-file repo's enumerate walk.
+    const graph = overBudget() ? undefined : graphState(process.cwd(), cfg);
     const state: StatusLineState = {
       active: true,
       tokensToday: sumTodaySavings(cfg.log_path),
-      graph: graphState(process.cwd(), cfg),
+      graph,
       golem: cfg.golem.enabled ? resolveGolemMode(cfg) : undefined,
       raven: cfg.raven.enabled,
       // 0.1.4+: surface kratos when the continuous prompt-time shield

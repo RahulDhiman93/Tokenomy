@@ -8,8 +8,36 @@ export interface FailOpen {
 
 export interface Ok<T> {
   ok: true;
+  // 0.1.9+: `stale` is CONSERVATIVE — true whenever ANY uncommitted
+  // disk drift exists, regardless of whether that drift can actually
+  // affect this query's answer. Reason: scoping is computed from the
+  // OLD snapshot's reachable surface, so a new edit can introduce
+  // edges the snapshot can't show. To check whether the drift is
+  // KNOWN to be relevant, read `stale_in_scope` — that's the precise
+  // subset of edited files that intersect this query's reachable set.
+  // `stale_in_scope.length === 0` while `stale: true` means "drift
+  // exists but is most likely unrelated to this answer" — the agent
+  // can proceed with the cached answer at low risk.
   stale?: boolean;
+  // Whole-graph drift list: every file the cheap stale-check found
+  // diverged from the snapshot. May be empty during whole-graph
+  // invalidations (exclude_fingerprint / tsconfig_fingerprint).
   stale_files?: string[];
+  // Scoped subset of `stale_files`: edits known to intersect this
+  // query's reachable surface.
+  stale_in_scope?: string[];
+  // 0.1.9+ codex round 9 P2: true when the staleness is a whole-
+  // graph invalidation (exclude/tsconfig/jsconfig/.tokenomy.json
+  // fingerprint changed, OR `.dirty` references a config file).
+  // Distinguishes "EVERY query is potentially affected" from
+  // "unrelated drift" — both have `stale_in_scope: []`, so agents
+  // can't use scoped-stale as a low-risk signal when this is set.
+  whole_graph_stale?: boolean;
+  // 0.1.9+: how long the most recent dirty signal has been pending,
+  // measured at response time. Useful when the rebuild worker is
+  // active and the caller wants to decide whether to wait vs.
+  // proceed.
+  lag_ms?: number;
   data: T;
   truncated?: { dropped_count: number };
 }
