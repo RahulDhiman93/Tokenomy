@@ -86,6 +86,12 @@ export interface GraphMeta {
   // pre-0.1.10 meta lacks this field and triggers a one-time rebuild
   // (not a quarantine).
   snapshot_sha256?: string;
+  // 0.1.10+: per-file size + inode at build time. Defends against the
+  // `touch -r` equal-mtime trick — when mtime equality says "no change"
+  // but size or inode differs, the equality check still surfaces drift.
+  // Optional for backwards-compat with 0.1.9 meta.
+  file_sizes?: Record<string, number>;
+  file_inos?: Record<string, number>;
 }
 
 export interface GraphBuildLogEntry {

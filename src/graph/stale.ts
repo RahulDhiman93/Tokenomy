@@ -23,6 +23,26 @@ export interface StaleStatus {
 
 export type GraphStaleResult = StaleStatus | FailOpen;
 
+// 0.1.10+ equal-mtime defense (P10b): when mtime matches the recorded
+// value, also require size + inode match if meta carries them.
+// `touch -r` restores mtime without changing content, but inode or
+// size of a modified file will differ. Pre-0.1.10 meta lacks
+// file_sizes/file_inos — caller falls back to mtime-only behavior.
+export const fileLooksUnchanged = (
+  meta: GraphMeta,
+  file: string,
+  st: { ino: number; mtimeMs: number; size: number },
+): boolean => {
+  if (meta.file_mtimes[file] !== st.mtimeMs) return false;
+  if (meta.file_sizes !== undefined && meta.file_sizes[file] !== undefined) {
+    if (meta.file_sizes[file] !== st.size) return false;
+  }
+  if (meta.file_inos !== undefined && meta.file_inos[file] !== undefined) {
+    if (meta.file_inos[file] !== st.ino) return false;
+  }
+  return true;
+};
+
 // codex round 8 P2: helper used by the sentinel fast path to merge
 // hook-recorded edits with out-of-band drift (git checkout, external
 // editor, Bash codegen). Walks every file tracked in meta.file_mtimes;
@@ -71,14 +91,15 @@ const mtimeDriftFiles = (
   const drift: string[] = [];
   for (const file of Object.keys(meta.file_mtimes)) {
     const abs = join(repoPath, ...file.split("/"));
-    let cur = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      cur = statSync(abs).mtimeMs;
+      const s = statSync(abs);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       drift.push(file);
       continue;
     }
-    if (meta.file_mtimes[file] !== cur) drift.push(file);
+    if (!fileLooksUnchanged(meta, file, st)) drift.push(file);
   }
   if (sentinelStat) {
     driftCacheByRepo.set(repoPath, {
@@ -318,14 +339,15 @@ export const getGraphStaleStatus = (
       stale.add(file);
       continue;
     }
-    let currentMtime = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      currentMtime = statSync(absPath).mtimeMs;
+      const s = statSync(absPath);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       stale.add(file);
       continue;
     }
-    if (meta.file_mtimes[file] === currentMtime) continue;
+    if (fileLooksUnchanged(meta, file, st)) continue;
     if (meta.file_hashes[file] !== sha256FileSync(absPath)) stale.add(file);
   }
 
@@ -537,14 +559,15 @@ export const isGraphStaleCheap = (
       drift.add(file);
       continue;
     }
-    let currentMtime = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      currentMtime = statSync(absPath).mtimeMs;
+      const s = statSync(absPath);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       drift.add(file);
       continue;
     }
-    if (meta.file_mtimes[file] !== currentMtime) drift.add(file);
+    if (!fileLooksUnchanged(meta, file, st)) drift.add(file);
   }
 
   const stale_files = [...drift].sort();
