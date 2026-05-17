@@ -57,9 +57,16 @@ export const clipResultToBudget = <T extends { ok: boolean; truncated?: { droppe
   // prefix length that still fits under budget. O(log n) stringifies
   // per array, repeated until either we fit or no array has elements
   // left to drop.
+  //
+  // codex round 6 P2: removed the 32-iteration safety cap. Responses
+  // with many small arrays (>32 entries) need every array dropped to
+  // reach the budget; an arbitrary cap meant truncation could halt
+  // while the result still exceeded budgetBytes. Termination is now
+  // driven entirely by "no further progress possible" — either the
+  // loop breaks because no array has any elements left, or because
+  // the most recent pass dropped nothing.
   let totalDropped = 0;
-  let safety = 32; // hard cap on outer iterations across distinct arrays
-  while (utf8Bytes(serialized) > budgetBytes && safety-- > 0) {
+  while (utf8Bytes(serialized) > budgetBytes) {
     const candidates = findArrayPaths(copy)
       .filter((candidate) => candidate.length > 0)
       .sort((a, b) => b.length - a.length);
