@@ -71,16 +71,26 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
         isError: true,
       };
     }
+    // 0.1.10+ codex round 2 P2: hold the inflight slot until the
+    // inner dispatch actually settles. Pre-fix, withDeadline returns
+    // a timeout while the inner promise keeps running, and the
+    // surrounding `finally` released the slot immediately — a burst
+    // of slow queries could thus accumulate more than max_inflight
+    // actual operations, defeating the cap. Capture the underlying
+    // promise outside the race and use it to schedule the release.
+    const innerPromise = dispatchGraphTool(
+      request.params.name,
+      request.params.arguments ?? {},
+      cwd,
+    );
+    // Release the slot only after the underlying work has fully
+    // settled, regardless of whether the client-visible response
+    // came from the timeout race.
+    innerPromise.finally(() => {
+      slot.release();
+    });
     try {
-      // 0.1.10+ P4: per-tool deadline. The inner dispatch isn't
-      // cancellable mid-flight today (cooperative cancel requires
-      // signal threading through every BFS); the deadline just
-      // surfaces a structured timeout response. The inner work
-      // continues to its natural completion.
-      const outcome = await withDeadline(
-        () => dispatchGraphTool(request.params.name, request.params.arguments ?? {}, cwd),
-        bootCfgDeadlineMs,
-      );
+      const outcome = await withDeadline(() => innerPromise, bootCfgDeadlineMs);
       if (outcome.kind === "timeout") {
         return {
           content: [
@@ -118,8 +128,6 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
         ],
         isError: true,
       };
-    } finally {
-      slot.release();
     }
   });
 

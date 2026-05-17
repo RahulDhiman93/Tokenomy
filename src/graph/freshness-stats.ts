@@ -223,3 +223,14 @@ export const recordWorkerInactiveDelta = (
   const logPath = graphRebuildStatsLogPath(identity, cfg.graph);
   appendDelta(logPath, { worker_active: false });
 };
+
+// 0.1.10+ codex round 2 P2: appended on registerRepo so the folded
+// reader doesn't show inactive across server restarts (the previous
+// session's recordWorkerInactiveDelta would otherwise stick).
+export const recordWorkerActiveDelta = (
+  identity: RepoIdentityLike,
+  cfg: Config,
+): void => {
+  const logPath = graphRebuildStatsLogPath(identity, cfg.graph);
+  appendDelta(logPath, { worker_active: true });
+};

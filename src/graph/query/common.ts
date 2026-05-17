@@ -90,7 +90,28 @@ export const loadGraphContext = (
   const cached = snapshotCache.get(snapPath);
   let graph: Graph | null;
   let meta: GraphMeta | null;
-  if (cached && cached.mtimeMs === mtimeMs && mtimeMs > 0) {
+  // 0.1.10+ codex round 2 P2: also stat meta to compare its built_at
+  // against the cached entry. mtimeMs alone is insufficient on
+  // coarse-mtime filesystems (FAT32, some network FS) or backup
+  // restores that preserve mtime — those can swap in fresh
+  // snapshot+meta with identical mtime and a stale cache hit would
+  // serve old graph data until eviction.
+  let liveBuiltAt: string | null = null;
+  if (cached && mtimeMs > 0) {
+    try {
+      const liveMeta = store.loadMeta(identity, config.graph);
+      liveBuiltAt = liveMeta?.built_at ?? null;
+    } catch {
+      liveBuiltAt = null;
+    }
+  }
+  if (
+    cached &&
+    cached.mtimeMs === mtimeMs &&
+    mtimeMs > 0 &&
+    liveBuiltAt !== null &&
+    cached.built_at === liveBuiltAt
+  ) {
     graph = cached.graph;
     meta = cached.meta;
     touchCache(snapPath, cached);

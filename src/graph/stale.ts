@@ -445,7 +445,19 @@ export const isGraphStaleCheap = (
   // still happens at rebuild time, so a false-positive touch (mtime
   // bumped, content unchanged) collapses cheaply downstream.
   const sentinelPath = graphDirtySentinelPath(identity, cfg.graph);
-  if (existsSync(sentinelPath)) {
+  // 0.1.10+ P10d round-2 (codex P2): treat a zero-byte sentinel as
+  // "no drift". Pre-fix, the foreign-user EPERM truncate fallback
+  // left an empty .dirty in place — existsSync returned true and
+  // every read flagged stale → perpetual rebuild loop. An empty
+  // sentinel carries no entries; the parsed.files would be []
+  // anyway. Skip the whole fast-path in that case.
+  let sentinelSize = -1;
+  try {
+    sentinelSize = existsSync(sentinelPath) ? statSync(sentinelPath).size : -1;
+  } catch {
+    sentinelSize = -1;
+  }
+  if (sentinelSize > 0) {
     const parsed = readDirtySentinel(sentinelPath, identity.repoPath);
     // codex round 6 P3: lag_ms must distinguish "sentinel exists"
     // from "no sentinel". If oldest_ts isn't parseable (legacy

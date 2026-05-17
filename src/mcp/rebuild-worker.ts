@@ -17,6 +17,7 @@ import { atomicWrite } from "../util/atomic.js";
 import { appendGitignoreLine } from "../util/gitignore.js";
 import {
   recordRebuildDelta,
+  recordWorkerActiveDelta,
   recordWorkerInactiveDelta,
   readFoldedStats,
 } from "../graph/freshness-stats.js";
@@ -563,6 +564,12 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
       stale_in_scope_misses: prev.stale_in_scope_misses ?? 0,
     };
     atomicWrite(statsPath, JSON.stringify(next));
+    // codex round 2 P2: also append a worker_active:true delta to
+    // the NDJSON log. The folded reader replays the log AFTER the
+    // snapshot, so a previous-session shutdown's worker_active:false
+    // delta would otherwise stick across restarts until the next
+    // rebuild fired its own worker_active:true delta.
+    recordWorkerActiveDelta(identity, cfg);
   } catch {
     // best-effort
   }
