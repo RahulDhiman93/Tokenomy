@@ -146,6 +146,24 @@ Step 2 — Then ask me about each optional feature, one at a time.
      FUSE/network mounts).
      Disable: tokenomy config set graph.rebuild_worker.enabled false
 
+  h3) Reliability hardening (0.1.10+) — defaults ON; ask me about
+     each one only if I want to tune them.
+     • MCP concurrency cap: `mcp.max_inflight=8`. Overflow returns
+       `{code:"busy"}` instead of queueing. Raise if I run many
+       parallel agents.
+       Tune: tokenomy config set mcp.max_inflight 16
+     • MCP per-tool deadline: `mcp.tool_deadline_ms=5000`. Hard
+       wall-clock cap on every tool call. Raise for slow CI.
+       Tune: tokenomy config set mcp.tool_deadline_ms 10000
+     • Quarantine corrupt graph snapshots: ON. Loader recomputes
+       SHA on every load; mismatch moves the pair to
+       `<graphDir>/.corrupt/<iso>/` and rebuilds. No action needed.
+     • Repo-local TypeScript trust gate: OFF by default. Tokenomy
+       uses its own bundled TS so a malicious repo can't drop a
+       `node_modules/typescript/index.js` that runs during build.
+       Enable ONLY if my repo pins an unusual TS version.
+       Enable (UNSAFE): tokenomy config set graph.allow_repo_local_typescript true
+
   i) Multi-repo graph + Raven (0.1.3+) — register the graph in EACH
      repo I want it for. Run `tokenomy init --graph-path "$PWD"` in
      each project root. When working across repos in one Claude
