@@ -60,6 +60,11 @@ export const fileLooksUnchanged = (
 // caught within the window, while still amortizing tight burst-read
 // loops common in interactive agent sessions.
 const DRIFT_CACHE_TTL_MS = 750;
+// 0.1.10+ P10f: periodic sweep interval. Drift caches are queried by
+// repoPath; a user working across N repos leaves N entries that only
+// got TTL-checked on a hit-for-that-same-repo. Sweep every 5s so cold
+// entries don't leak across the process lifetime.
+const DRIFT_CACHE_SWEEP_INTERVAL_MS = 5000;
 interface DriftCacheEntry {
   ino: number;
   size: number;
@@ -110,6 +115,7 @@ const mtimeDriftFiles = (
       files: drift,
       computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return drift;
 };
@@ -160,6 +166,7 @@ const addedFilesSince = (
       files: added,
       computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return added;
 };
@@ -207,8 +214,42 @@ const cachedTsconfigFingerprint = (
       fingerprint: fp,
       computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return fp;
+};
+
+// 0.1.10+ P10f: periodic sweep. Lazy-init on first cache write so a
+// short-lived CLI invocation (no caches touched → no timer) doesn't pay
+// the cost. The timer is `.unref()` so it doesn't keep the process
+// alive past natural exit.
+let sweepTimer: NodeJS.Timeout | null = null;
+const ensureSweepTimer = (): void => {
+  if (sweepTimer !== null) return;
+  sweepTimer = setInterval(() => {
+    const now = performance.now();
+    const stale = (computed_at: number): boolean =>
+      now - computed_at > DRIFT_CACHE_TTL_MS * 4;
+    for (const [k, v] of driftCacheByRepo) {
+      if (stale(v.computed_at)) driftCacheByRepo.delete(k);
+    }
+    for (const [k, v] of addedCacheByRepo) {
+      if (stale(v.computed_at)) addedCacheByRepo.delete(k);
+    }
+    for (const [k, v] of tsconfigFpCacheByRepo) {
+      if (stale(v.computed_at)) tsconfigFpCacheByRepo.delete(k);
+    }
+    if (
+      driftCacheByRepo.size === 0 &&
+      addedCacheByRepo.size === 0 &&
+      tsconfigFpCacheByRepo.size === 0 &&
+      sweepTimer !== null
+    ) {
+      clearInterval(sweepTimer);
+      sweepTimer = null;
+    }
+  }, DRIFT_CACHE_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
 };
 
 // Test affordance — clear between tests so per-repo cache doesn't bleed.
@@ -216,6 +257,10 @@ export const _resetDriftCacheForTests = (): void => {
   driftCacheByRepo.clear();
   addedCacheByRepo.clear();
   tsconfigFpCacheByRepo.clear();
+  if (sweepTimer !== null) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
+  }
 };
 
 export interface CheapStaleStatus {
