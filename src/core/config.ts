@@ -315,6 +315,18 @@ const applyAggression = (cfg: Config): Config => {
       max_text_bytes: Math.round(cfg.mcp.max_text_bytes * m),
       per_block_head: Math.round(cfg.mcp.per_block_head * m),
       per_block_tail: Math.round(cfg.mcp.per_block_tail * m),
+      // 0.1.10+ codex round 3 P2: carry the new inflight/deadline
+      // keys through the aggression rebuild. Pre-fix
+      // applyAggression reconstructed `mcp` without them, dropping
+      // any user-tuned values from .tokenomy.json — the documented
+      // `tokenomy config set mcp.max_inflight 16` was a no-op under
+      // the default `conservative` aggression.
+      ...(typeof cfg.mcp.max_inflight === "number"
+        ? { max_inflight: cfg.mcp.max_inflight }
+        : {}),
+      ...(typeof cfg.mcp.tool_deadline_ms === "number"
+        ? { tool_deadline_ms: cfg.mcp.tool_deadline_ms }
+        : {}),
       profiles: cfg.mcp.profiles,
       disabled_profiles: cfg.mcp.disabled_profiles,
       shape_trim: cfg.mcp.shape_trim

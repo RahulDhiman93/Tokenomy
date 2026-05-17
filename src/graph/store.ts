@@ -1,4 +1,5 @@
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -6,6 +7,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -146,6 +148,58 @@ const quarantine = (
   }));
 };
 
+// 0.1.10+ codex round 3 P2: retry/copy-fallback for the final commit
+// rename. The temp file was just written via atomicWrite (which has
+// its own retry posture), but the rename that swaps the live target
+// is the only step a Windows antivirus / Search Indexer can crash
+// late in the commit. Mirror the same 50/150/300ms backoff used in
+// atomicWrite, with copyFile + unlink as the final fallback.
+const COMMIT_RENAME_BACKOFF_MS = [50, 150, 300];
+const isTransientRename = (err: unknown): boolean => {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  return (
+    typeof code === "string" &&
+    (code === "EAGAIN" ||
+      code === "EBUSY" ||
+      code === "ETXTBSY" ||
+      code === "EPERM" ||
+      code === "EACCES" ||
+      code === "EMFILE")
+  );
+};
+const sleepSync = (ms: number): void => {
+  if (ms <= 0) return;
+  const sab = new SharedArrayBuffer(4);
+  const view = new Int32Array(sab);
+  Atomics.wait(view, 0, 0, ms);
+};
+
+const commitRename = (from: string, to: string): void => {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= COMMIT_RENAME_BACKOFF_MS.length; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientRename(err) || attempt === COMMIT_RENAME_BACKOFF_MS.length) {
+        break;
+      }
+      sleepSync(COMMIT_RENAME_BACKOFF_MS[attempt] ?? 0);
+    }
+  }
+  // Fallback: copy + unlink. Less atomic than rename, but the snapshot
+  // is already SHA-pinned in meta — a crash mid-copy still leaves the
+  // loader's integrity check able to quarantine.
+  try {
+    copyFileSync(from, to);
+    unlinkSync(from);
+  } catch {
+    throw lastErr ?? new Error(`commitRename: ${from} → ${to} failed`);
+  }
+};
+
 // Best-effort: remove `.commit-<pid>-*` dirs in graphDir whose pid is
 // no longer alive. Cheap (one readdir + N kill(0) syscalls). Called at
 // the top of `save()` so a crashed prior build doesn't leave orphans.
@@ -237,6 +291,29 @@ export class JsonGraphStore implements GraphStore {
         quarantine(identity, cfg, snapPath, metaPath, "snapshot-sha-mismatch");
         return null;
       }
+    } else if (
+      metaForCheck &&
+      typeof metaForCheck === "object" &&
+      isGraphMetaShape(metaForCheck)
+    ) {
+      // 0.1.10+ codex round 3 P2: pre-0.1.10 meta lacks
+      // snapshot_sha256. Backfill the missing field by computing
+      // the SHA over current bytes and atomically rewriting the
+      // meta. Future loads then run the full integrity check.
+      // Pre-fix, legacy graphs were served indefinitely without
+      // ever writing a SHA — the new quarantine path stayed
+      // disabled for upgraded users until an unrelated rebuild.
+      try {
+        const computedSha = sha256OfString(raw);
+        const upgraded: GraphMeta = {
+          ...(metaForCheck as GraphMeta),
+          snapshot_sha256: computedSha,
+        };
+        atomicWrite(metaPath, `${stableStringify(upgraded)}\n`, false);
+      } catch {
+        // best-effort — failure to backfill leaves the legacy
+        // meta in place; the next load attempts again.
+      }
     }
 
     bumpIntegrity(graphIntegrityStatsPath(identity, cfg), (cur) => ({
@@ -304,10 +381,16 @@ export class JsonGraphStore implements GraphStore {
     // Sequential rename — snapshot first, then meta. If we crash between
     // them, the loader sees a fresh snapshot whose SHA the stale meta no
     // longer references; integrity check quarantines, build re-runs.
+    //
+    // codex round 3 P2: wrap each rename in retry-with-copy-fallback so
+    // an antivirus / Windows Search Indexer holding the live target
+    // open doesn't crash the commit. Mirrors atomicWrite's posture
+    // for the rename phase since these are the only ones that touch
+    // the canonical files.
     const snapFinal = graphSnapshotPath(identity, cfg);
     const metaFinal = graphMetaPath(identity, cfg);
-    renameSync(snapTmp, snapFinal);
-    renameSync(metaTmp, metaFinal);
+    commitRename(snapTmp, snapFinal);
+    commitRename(metaTmp, metaFinal);
 
     try {
       rmSync(commitDir, { recursive: true, force: true });

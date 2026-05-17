@@ -1,4 +1,14 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { projectsRegistryPath } from "../core/paths.js";
 import { atomicWrite } from "./atomic.js";
@@ -77,6 +87,13 @@ const dedupe = (entries: ProjectRegistryEntry[]): ProjectRegistryEntry[] => {
 // re-parsed every line on every call.
 const REGISTRY_COMPACT_BYTES = 1_048_576;
 
+// 0.1.10+ codex round 3 P3: compaction is a destructive rewrite —
+// a concurrent registerProject() append between the read and the
+// atomicWrite would lose the appended row. Per-call lock-file
+// pattern with a short timeout avoids the race; on lock contention
+// we just defer compaction to the next read. Worst case: registry
+// stays above threshold for another listProjects cycle, which is
+// a non-issue compared to losing a registration.
 const maybeCompact = (path: string, parsed: ProjectRegistryEntry[]): void => {
   let size = 0;
   try {
@@ -85,13 +102,38 @@ const maybeCompact = (path: string, parsed: ProjectRegistryEntry[]): void => {
     return;
   }
   if (size < REGISTRY_COMPACT_BYTES) return;
+  const lockPath = `${path}.compact.lock`;
+  let lockFd: number | null = null;
   try {
-    // dedupe by latest-wins, then atomicWrite the compact form.
-    const deduped = dedupe(parsed);
+    // Open exclusive — fails fast if another process is compacting.
+    // We DO NOT retry: a parallel listProjects will defer; a parallel
+    // registerProject is unaffected (it just appends).
+    lockFd = openSync(lockPath, "wx");
+    // Re-read the registry from disk INSIDE the lock so any rows
+    // appended between the caller's readRaw and our compaction land
+    // in the deduped output.
+    const rawAtLock = readRaw();
+    const deduped = dedupe(rawAtLock);
     const body = deduped.map((e) => JSON.stringify(e)).join("\n") + (deduped.length > 0 ? "\n" : "");
     atomicWrite(path, body, false);
+    closeSync(lockFd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // best-effort
+    }
+    lockFd = null;
   } catch {
-    // best-effort; failure leaves the registry as-is
+    // EEXIST → another writer is compacting; defer. Other errors are
+    // best-effort. Either way, ensure we release the lock if held.
+    if (lockFd !== null) {
+      try {
+        closeSync(lockFd);
+        unlinkSync(lockPath);
+      } catch {
+        // best-effort
+      }
+    }
   }
 };
 

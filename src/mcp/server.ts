@@ -78,17 +78,19 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     // of slow queries could thus accumulate more than max_inflight
     // actual operations, defeating the cap. Capture the underlying
     // promise outside the race and use it to schedule the release.
+    //
+    // codex round 3 P1: use .then(release, release) instead of
+    // .finally() — pre-fix the chained finally rejected unhandled
+    // when dispatchGraphTool threw, terminating the server under
+    // Node's default unhandled-rejection behavior. The dual-arm
+    // form swallows both outcomes safely.
     const innerPromise = dispatchGraphTool(
       request.params.name,
       request.params.arguments ?? {},
       cwd,
     );
-    // Release the slot only after the underlying work has fully
-    // settled, regardless of whether the client-visible response
-    // came from the timeout race.
-    innerPromise.finally(() => {
-      slot.release();
-    });
+    const releaseOnce = (): void => slot.release();
+    innerPromise.then(releaseOnce, releaseOnce);
     try {
       const outcome = await withDeadline(() => innerPromise, bootCfgDeadlineMs);
       if (outcome.kind === "timeout") {
