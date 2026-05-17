@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TOKENOMY_VERSION } from "../core/version.js";
-import { stableStringify } from "../util/json.js";
+import { compactJson } from "../util/json.js";
 import { dispatchGraphTool } from "./handlers.js";
 import { markServerModeActive, registerRepo, stopAllWorkers } from "./rebuild-worker.js";
 import { loadConfig } from "../core/config.js";
@@ -60,7 +60,7 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
         content: [
           {
             type: "text",
-            text: stableStringify({
+            text: compactJson({
               ok: false,
               code: "busy",
               retry_after_ms: 50,
@@ -86,7 +86,7 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
           content: [
             {
               type: "text",
-              text: stableStringify({
+              text: compactJson({
                 ok: false,
                 code: "timeout",
                 elapsed_ms: outcome.elapsed_ms,
@@ -99,7 +99,7 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
       }
       const result = outcome.value;
       return {
-        content: [{ type: "text", text: stableStringify(result) }],
+        content: [{ type: "text", text: compactJson(result) }],
         isError: !result.ok,
       };
     } catch (err) {
@@ -108,7 +108,7 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
         content: [
           {
             type: "text",
-            text: stableStringify({
+            text: compactJson({
               ok: false,
               code: "internal",
               message,
