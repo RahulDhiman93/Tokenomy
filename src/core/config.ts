@@ -122,6 +122,12 @@ export const DEFAULT_CONFIG: Config = {
       enabled: true,
       debounce_ms: 150,
     },
+    // 0.1.10+ PSEC2: default false. The graph builder prefers
+    // Tokenomy's process-local typescript so a malicious repo can't
+    // drop a `node_modules/typescript/index.js` that runs during
+    // `tokenomy graph build`. Set true to re-enable the repo-local
+    // resolver for unusual TS versions Tokenomy can't read.
+    allow_repo_local_typescript: false,
   },
   redact: {
     enabled: true,

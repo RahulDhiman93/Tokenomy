@@ -152,7 +152,9 @@ const deltaBuildFromSnapshot = async (
   const repoPath = identity.repoPath;
   try {
     const deadline = performance.now() + cfg.graph.build_timeout_ms;
-    const tsLoaded = await loadTypescript(repoPath);
+    const tsLoaded = await loadTypescript(repoPath, {
+    allowRepoLocal: cfg.graph.allow_repo_local_typescript === true,
+  });
     if (!tsLoaded.ok) return tsLoaded;
 
     const staleSet = new Set(staleFiles);
@@ -435,7 +437,9 @@ const buildGraphFromFiles = async (
 ): Promise<BuildGraphResult> => {
   const repoId = identity.repoId;
   const repoPath = identity.repoPath;
-  const tsLoaded = await loadTypescript(repoPath);
+  const tsLoaded = await loadTypescript(repoPath, {
+    allowRepoLocal: cfg.graph.allow_repo_local_typescript === true,
+  });
   if (!tsLoaded.ok) return tsLoaded;
 
   const deadline = performance.now() + cfg.graph.build_timeout_ms;
