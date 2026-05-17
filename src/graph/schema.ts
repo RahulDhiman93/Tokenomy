@@ -1,5 +1,12 @@
 export const GRAPH_SCHEMA_VERSION = 1;
 
+// Forward-compat band. Loader accepts any version in [MIN, MAX] verbatim;
+// version < MIN gets quarantined as legacy-unreadable; version > MAX gets
+// a warn log and a parse attempt (P2b — preserves any future fields the
+// reader doesn't know about).
+export const MIN_SUPPORTED_SCHEMA_VERSION = 1;
+export const MAX_KNOWN_SCHEMA_VERSION = 1;
+
 export type NodeKind =
   | "file"
   | "external-module"
@@ -73,6 +80,12 @@ export interface GraphMeta {
   // post-upgrade build `undefined !== currentFingerprint` naturally marks
   // stale → one free rebuild on upgrade.
   tsconfig_fingerprint?: string;
+  // 0.1.10+: sha256 of the snapshot.json bytes at write time. Loader
+  // recomputes and quarantines on mismatch (data corruption, half-written
+  // pair after crash, or tampered file). Optional for backwards-compat:
+  // pre-0.1.10 meta lacks this field and triggers a one-time rebuild
+  // (not a quarantine).
+  snapshot_sha256?: string;
 }
 
 export interface GraphBuildLogEntry {

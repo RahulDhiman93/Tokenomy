@@ -149,6 +149,38 @@ export const graphRebuildStatsPath = (
   cfg?: StorageLocationConfig,
 ): string => join(graphDir(identity, cfg), ".rebuild-stats.json");
 
+// 0.1.10+: per-build temp dir for paired (snapshot+meta) commit. The
+// writer drops both files here, computes snapshot_sha256, then renames
+// both into place. Crash between renames leaves the snapshot in its
+// final position with a stale meta — caught at load time by the SHA
+// check and quarantined. PID + rand keeps two builds on the same repo
+// from sharing a temp directory.
+export const graphCommitTempDir = (
+  identity: RepoIdentityLike,
+  cfg: StorageLocationConfig | undefined,
+  pid: number,
+  rand: string,
+): string => join(graphDir(identity, cfg), `.commit-${pid}-${rand}`);
+
+// 0.1.10+: prefix used by `sweepOrphanCommitDirs` to find dead-pid
+// commit temp dirs at build start.
+export const GRAPH_COMMIT_TEMP_PREFIX = ".commit-";
+
+// 0.1.10+: corrupt-snapshot quarantine root. Loader moves both files
+// (snapshot.json + meta.json) under <iso>/ when their SHA or repo_id
+// doesn't match.
+export const graphCorruptDir = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".corrupt");
+
+// 0.1.10+: rolling integrity counter. JSON: { verified, mismatched,
+// quarantined_total, last_quarantine_at }. Updated by the loader.
+export const graphIntegrityStatsPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".integrity.json");
+
 // 0.1.8+: per-repo Raven storage. Same dual-mode as graph.
 export const ravenRepoDir = (
   identity: RepoIdentityLike,
