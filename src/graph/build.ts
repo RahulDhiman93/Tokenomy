@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import {
@@ -681,7 +681,32 @@ const postBuildSuccess = (
         cur.ino === startSnap.ino &&
         cur.mtimeMs === startSnap.mtimeMs &&
         cur.size === startSnap.size;
-      if (unchanged) rmSync(dirty, { force: true });
+      if (unchanged) {
+        // 0.1.10+ P10d: foreign-user .dirty. When the sentinel was
+        // written by another uid (e.g. root from a CI hook, or sudo)
+        // rmSync raises EPERM and the sentinel never clears — every
+        // subsequent read flags stale, every read triggers a rebuild,
+        // every rebuild can't clear, and the loop never exits.
+        // Fall back to truncating the file via writeFileSync, which
+        // only needs write perms (not unlink perms). On hard EPERM
+        // surface a one-shot stderr note so the user can fix the owner.
+        try {
+          rmSync(dirty, { force: true });
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code === "EPERM" || code === "EACCES") {
+            try {
+              writeFileSync(dirty, "");
+            } catch {
+              process.stderr.write(
+                `[tokenomy] sentinel-clear-failed-eperm: ${dirty} — chown to current user to resolve\n`,
+              );
+            }
+          } else {
+            throw e;
+          }
+        }
+      }
       // Else: leave it. The next rebuild cycle (read-side or worker) picks up.
     }
   } catch {
