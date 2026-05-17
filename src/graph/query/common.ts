@@ -1,10 +1,46 @@
+import { statSync } from "node:fs";
 import type { Config } from "../../core/types.js";
 import { resolveRepoId } from "../repo-id.js";
+import { graphSnapshotPath } from "../../core/paths.js";
 import type { Edge, Graph, GraphMeta, Node, NodeKind } from "../schema.js";
 import { JsonGraphStore } from "../store.js";
 import { getGraphStaleStatus } from "../stale.js";
 import { readLastGraphBuildFailure } from "../build-log.js";
 import type { FailOpen, QueryResult } from "../types.js";
+
+// 0.1.10+ P8d: process-local LRU cache for loaded snapshots. Pre-
+// 0.1.10 every query re-parsed snapshot.json from disk on every
+// cache miss (handlers.ts's queryCache only memoizes the rendered
+// response, not the parsed graph). Sub-100ms parse penalty on big
+// graphs across burst reads.
+//
+// Key: snapshot path (absolute). Validity: snapshot mtimeMs +
+// meta.built_at MUST match what the loader sees on entry, else
+// re-parse. LRU cap of 4 distinct repos keeps memory bounded for
+// multi-repo MCP sessions while still covering the common
+// 1-2 repo case for free.
+interface SnapshotCacheEntry {
+  mtimeMs: number;
+  built_at: string;
+  graph: Graph;
+  meta: GraphMeta;
+}
+const SNAPSHOT_CACHE_MAX = 4;
+const snapshotCache = new Map<string, SnapshotCacheEntry>();
+
+const touchCache = (key: string, entry: SnapshotCacheEntry): void => {
+  snapshotCache.delete(key);
+  snapshotCache.set(key, entry);
+  while (snapshotCache.size > SNAPSHOT_CACHE_MAX) {
+    const oldest = snapshotCache.keys().next().value;
+    if (oldest === undefined) break;
+    snapshotCache.delete(oldest);
+  }
+};
+
+export const _resetSnapshotCacheForTests = (): void => {
+  snapshotCache.clear();
+};
 
 export interface GraphQueryContext {
   graph: Graph;
@@ -40,8 +76,31 @@ export const loadGraphContext = (
   if (!config.graph.enabled) return fail("graph-disabled");
   const identity = resolveRepoId(cwd);
   const store = new JsonGraphStore();
-  const graph = store.loadGraph(identity, config.graph);
-  const meta = store.loadMeta(identity, config.graph);
+
+  // 0.1.10+ P8d: snapshot LRU. Cheap stat probe vs cached entry's
+  // mtimeMs + built_at; matching pair reuses the parsed graph +
+  // meta. Mismatch falls through to a fresh load.
+  const snapPath = graphSnapshotPath(identity, config.graph);
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(snapPath).mtimeMs;
+  } catch {
+    mtimeMs = 0;
+  }
+  const cached = snapshotCache.get(snapPath);
+  let graph: Graph | null;
+  let meta: GraphMeta | null;
+  if (cached && cached.mtimeMs === mtimeMs && mtimeMs > 0) {
+    graph = cached.graph;
+    meta = cached.meta;
+    touchCache(snapPath, cached);
+  } else {
+    graph = store.loadGraph(identity, config.graph);
+    meta = store.loadMeta(identity, config.graph);
+    if (graph && meta && mtimeMs > 0) {
+      touchCache(snapPath, { mtimeMs, built_at: meta.built_at, graph, meta });
+    }
+  }
   if (!graph || !meta) return readLastGraphBuildFailure(identity, config.graph) ?? fail("graph-not-built");
 
   let staleFlag: boolean;
