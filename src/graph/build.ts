@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import {
@@ -703,9 +703,25 @@ const postBuildSuccess = (
         } catch (e) {
           const code = (e as NodeJS.ErrnoException).code;
           if (code === "EPERM" || code === "EACCES") {
+            // 0.1.10+ codex round 5 P2: rename the foreign-owned
+            // sentinel out of the way instead of truncating in place.
+            // A zero-byte .dirty still triggers worker registration,
+            // fs.watch/poll gates, and reflectPostBuildSentinel's
+            // existsSync — pre-fix the EPERM recovery continued the
+            // very loop it was meant to break. renameSync only needs
+            // write perm on the parent dir, not on the file, so a
+            // foreign-owned sentinel can still be moved aside.
+            const aside = `${dirty}.foreign-${process.pid}-${Date.now()}`;
             try {
-              writeFileSync(dirty, "");
+              renameSync(dirty, aside);
             } catch {
+              // renameSync also failed — fall back to truncate as
+              // the least-bad option and log so doctor can surface.
+              try {
+                writeFileSync(dirty, "");
+              } catch {
+                // empty
+              }
               process.stderr.write(
                 `[tokenomy] sentinel-clear-failed-eperm: ${dirty} — chown to current user to resolve\n`,
               );

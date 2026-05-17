@@ -348,7 +348,15 @@ const switchToPollMode = (entry: WorkerEntry): void => {
     } catch {
       mtime = 0;
     }
-    if (mtime > 0 && mtime !== entry.pollLastMtimeMs) {
+    if (mtime === 0) {
+      // 0.1.10+ codex round 5 P2: sentinel disappeared (rebuild
+      // cleared it). Reset the watermark so a future edit that
+      // happens to recreate .dirty with the same mtime (coarse-mtime
+      // filesystems) still schedules. Pre-fix the watermark kept the
+      // old non-zero value and read-side staleness silently waited
+      // for the 60s lag fallback.
+      entry.pollLastMtimeMs = 0;
+    } else if (mtime !== entry.pollLastMtimeMs) {
       entry.pollLastMtimeMs = mtime;
       schedule(entry);
     }

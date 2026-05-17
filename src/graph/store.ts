@@ -288,34 +288,38 @@ export class JsonGraphStore implements GraphStore {
     if (declaredSha !== null) {
       const actualSha = sha256OfString(raw);
       if (actualSha !== declaredSha) {
-        // 0.1.10+ codex round 4 P2: don't quarantine if the mismatch
-        // is from an in-flight paired commit. The writer renames
-        // snapshot first then meta; a read landing between sees a
-        // fresh snapshot with the OLD meta's sha. Wait briefly and
-        // recheck — a real corruption is stable across re-reads.
-        // 50ms is plenty for a single renameSync to complete.
-        sleepSync(50);
-        let raw2 = "";
-        let meta2: unknown = null;
+        // 0.1.10+ codex round 5 P2: in-flight paired commit detection.
+        // The writer (save() above) creates <graphDir>/.commit-<pid>-*
+        // BEFORE either rename and removes it AFTER both renames
+        // complete. If such a dir exists at mismatch time, a writer
+        // is mid-commit and quarantining would clobber a healthy
+        // rebuild. Return null (treated as missing → caller rebuilds
+        // or retries) instead.
+        //
+        // Pre-fix the 50ms sleep+recheck wasn't enough because
+        // commitRename's own retry posture (50/150/300ms backoff)
+        // can keep meta unrenamed for hundreds of milliseconds under
+        // Windows AV / Search Indexer locks.
+        const dir = graphDir(identity, cfg);
+        let commitInFlight = false;
         try {
-          raw2 = readFileSync(snapPath, "utf8");
-          meta2 = safeParse<unknown>(readFileSync(metaPath, "utf8"));
+          for (const name of readdirSync(dir)) {
+            if (name.startsWith(GRAPH_COMMIT_TEMP_PREFIX)) {
+              commitInFlight = true;
+              break;
+            }
+          }
         } catch {
+          commitInFlight = false;
+        }
+        if (commitInFlight) {
+          // Caller (loadGraphContext) treats null + meta-load also
+          // null as "graph-not-built", which triggers a rebuild OR
+          // retry on the next query. Either is safe; neither
+          // quarantines healthy data.
           return null;
         }
-        const declared2 =
-          meta2 &&
-          typeof meta2 === "object" &&
-          typeof (meta2 as { snapshot_sha256?: unknown }).snapshot_sha256 === "string"
-            ? ((meta2 as { snapshot_sha256: string }).snapshot_sha256)
-            : null;
-        if (declared2 !== null && sha256OfString(raw2) === declared2) {
-          // Re-read landed after the meta commit; the pair is now
-          // consistent. Continue with the fresh data instead of
-          // quarantining the live snapshot.
-          const reparsed = safeParse<Graph>(raw2);
-          return reparsed ?? null;
-        }
+        // No commit in flight — real corruption.
         quarantine(identity, cfg, snapPath, metaPath, "snapshot-sha-mismatch");
         return null;
       }
