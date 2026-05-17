@@ -50,8 +50,16 @@ export const clipResultToBudget = <T extends { ok: boolean; truncated?: { droppe
   let serialized = JSON.stringify(copy);
   if (utf8Bytes(serialized) <= budgetBytes) return copy;
 
-  let dropped = 0;
-  while (utf8Bytes(serialized) > budgetBytes) {
+  // 0.1.10+ P8c: binary-search truncation. Pre-0.1.10 the loop did
+  // `slice(0, n-1)` + a full stringify per dropped element — O(n)
+  // stringifies for a 10K-element array clipped to half its size.
+  // Now: for the currently-largest array, binary-search the largest
+  // prefix length that still fits under budget. O(log n) stringifies
+  // per array, repeated until either we fit or no array has elements
+  // left to drop.
+  let totalDropped = 0;
+  let safety = 32; // hard cap on outer iterations across distinct arrays
+  while (utf8Bytes(serialized) > budgetBytes && safety-- > 0) {
     const candidates = findArrayPaths(copy)
       .filter((candidate) => candidate.length > 0)
       .sort((a, b) => b.length - a.length);
@@ -59,14 +67,34 @@ export const clipResultToBudget = <T extends { ok: boolean; truncated?: { droppe
     if (!largest) break;
     const arr = getAtPath(copy, largest.path);
     if (!Array.isArray(arr) || arr.length === 0) break;
-    const next = arr.slice(0, arr.length - 1);
-    setAtPath(copy, largest.path, next);
-    dropped++;
+    const origLen = arr.length;
+    let lo = 0;
+    let hi = origLen;
+    // Find the largest len in [0, origLen) such that the result fits.
+    // Even at len=0 the result might still exceed budget — in that
+    // case we drop the entire array and let the next iteration target
+    // the next-largest array.
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      const trimmed = arr.slice(0, mid);
+      setAtPath(copy, largest.path, trimmed);
+      const probe = utf8Bytes(JSON.stringify(copy));
+      if (probe <= budgetBytes) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    // Commit the largest length that fit; if 0 fits, that's still the
+    // commit and we'll move to the next-largest array on the next pass.
+    setAtPath(copy, largest.path, arr.slice(0, lo));
+    totalDropped += origLen - lo;
     serialized = JSON.stringify(copy);
+    if (lo === origLen) break; // nothing dropped this round — bail
   }
 
-  if (dropped > 0 && copy.ok) {
-    copy.truncated = { dropped_count: dropped };
+  if (totalDropped > 0 && copy.ok) {
+    copy.truncated = { dropped_count: totalDropped };
   }
   return copy;
 };
