@@ -274,12 +274,12 @@ export interface GraphConfig {
     enabled: boolean;
     debounce_ms: number;
   };
-  // 0.1.10+ PSEC2: opt-in to use the TypeScript installed in the target
-  // repo's node_modules. Default false — Tokenomy prefers its own
-  // bundled/process-local typescript, which is safe against a repo
-  // dropping a malicious `node_modules/typescript/index.js`. Set true
-  // ONLY if your repo pins an unusual TS version that the bundled one
-  // can't read.
+  // 0.1.10+ PSEC2 (codex round 4): the LOADER prefers process-local
+  // typescript first; this flag controls the repo-local FALLBACK
+  // when process-local resolution fails. Default true so prod
+  // installs without a bundled typescript keep building TS repos.
+  // Security-sensitive deployments can flip to false to require
+  // bundled typescript and refuse repo-local execution.
   allow_repo_local_typescript?: boolean;
 }
 

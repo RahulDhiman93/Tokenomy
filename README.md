@@ -158,11 +158,12 @@ Step 2 — Then ask me about each optional feature, one at a time.
      • Quarantine corrupt graph snapshots: ON. Loader recomputes
        SHA on every load; mismatch moves the pair to
        `<graphDir>/.corrupt/<iso>/` and rebuilds. No action needed.
-     • Repo-local TypeScript trust gate: OFF by default. Tokenomy
-       uses its own bundled TS so a malicious repo can't drop a
-       `node_modules/typescript/index.js` that runs during build.
-       Enable ONLY if my repo pins an unusual TS version.
-       Enable (UNSAFE): tokenomy config set graph.allow_repo_local_typescript true
+     • Repo-local TypeScript fallback: ON by default for
+       back-compat. Loader prefers Tokenomy's bundled TS first; it
+       only falls back to the repo's `node_modules/typescript` when
+       bundled is missing. To enforce bundled-only and refuse the
+       fallback (security-sensitive deploys): set the flag to false.
+       Lockdown: tokenomy config set graph.allow_repo_local_typescript false
 
   i) Multi-repo graph + Raven (0.1.3+) — register the graph in EACH
      repo I want it for. Run `tokenomy init --graph-path "$PWD"` in

@@ -304,9 +304,29 @@ export class JsonGraphStore implements GraphStore {
         let commitInFlight = false;
         try {
           for (const name of readdirSync(dir)) {
-            if (name.startsWith(GRAPH_COMMIT_TEMP_PREFIX)) {
+            if (!name.startsWith(GRAPH_COMMIT_TEMP_PREFIX)) continue;
+            // 0.1.10+ codex round 6 P2: only treat the commit dir as
+            // live when its pid is still alive. A crashed writer
+            // leaves the dir behind; that's the exact case where the
+            // mismatch IS real and should quarantine. Pre-fix the
+            // check passed for orphan dirs too.
+            const rest = name.slice(GRAPH_COMMIT_TEMP_PREFIX.length);
+            const dashIdx = rest.indexOf("-");
+            const pidStr = dashIdx > 0 ? rest.slice(0, dashIdx) : rest;
+            const pid = Number.parseInt(pidStr, 10);
+            if (!Number.isFinite(pid) || pid <= 0) continue;
+            try {
+              process.kill(pid, 0);
               commitInFlight = true;
               break;
+            } catch (e) {
+              if ((e as NodeJS.ErrnoException).code === "EPERM") {
+                // Not our process but alive — treat as in-flight.
+                commitInFlight = true;
+                break;
+              }
+              // ESRCH (or anything else) → dead pid, orphan dir;
+              // keep scanning for a live one.
             }
           }
         } catch {

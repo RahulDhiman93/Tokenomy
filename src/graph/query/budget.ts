@@ -91,6 +91,12 @@ export const clipResultToBudget = <T extends { ok: boolean; truncated?: { droppe
     totalDropped += origLen - lo;
     serialized = JSON.stringify(copy);
     if (lo === origLen) break; // nothing dropped this round — bail
+    // 0.1.10+ codex round 6 P2: even when lo=0 (couldn't keep any
+    // elements of THIS array), continue iterating — the next-largest
+    // array might still trim to a positive prefix that fits the
+    // remaining budget. Pre-fix the loop only broke on "no
+    // candidates left", but a binary-search to 0 on one array while
+    // others stayed full silently zeroed one section.
   }
 
   if (totalDropped > 0 && copy.ok) {
