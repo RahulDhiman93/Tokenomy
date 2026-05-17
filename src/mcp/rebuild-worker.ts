@@ -53,6 +53,12 @@ interface WorkerEntry {
   // 0.1.10+ P7: last observed sentinel mtimeMs for the poll loop's
   // edge-trigger. -1 = not yet observed; 0 = sentinel absent.
   pollLastMtimeMs: number;
+  // 0.1.10+ codex round 7 P2: also track size + inode. On coarse-
+  // mtime filesystems an append to .dirty can change size only;
+  // the poll loop would otherwise miss the edit until the 60s
+  // ensureFreshGraph lag fallback.
+  pollLastSize: number;
+  pollLastIno: number;
   mode: WatcherMode;
   timer: NodeJS.Timeout | null;
   cwd: string;
@@ -337,27 +343,43 @@ const switchToPollMode = (entry: WorkerEntry): void => {
   }
   entry.mode = "poll";
   entry.pollLastMtimeMs = -1;
+  entry.pollLastSize = -1;
+  entry.pollLastIno = -1;
   const tick = (): void => {
     if (shuttingDown) return;
     const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);
-    let mtime = 0;
+    let stat: { mtimeMs: number; size: number; ino: number } | null = null;
     try {
       if (existsSync(sentinel)) {
-        mtime = statSync(sentinel).mtimeMs;
+        const s = statSync(sentinel);
+        stat = { mtimeMs: s.mtimeMs, size: s.size, ino: s.ino };
       }
     } catch {
-      mtime = 0;
+      stat = null;
     }
-    if (mtime === 0) {
+    if (stat === null) {
       // 0.1.10+ codex round 5 P2: sentinel disappeared (rebuild
       // cleared it). Reset the watermark so a future edit that
       // happens to recreate .dirty with the same mtime (coarse-mtime
-      // filesystems) still schedules. Pre-fix the watermark kept the
-      // old non-zero value and read-side staleness silently waited
-      // for the 60s lag fallback.
+      // filesystems) still schedules.
       entry.pollLastMtimeMs = 0;
-    } else if (mtime !== entry.pollLastMtimeMs) {
-      entry.pollLastMtimeMs = mtime;
+      entry.pollLastSize = 0;
+      entry.pollLastIno = 0;
+      return;
+    }
+    // 0.1.10+ codex round 7 P2: trigger on ANY of mtime / size /
+    // ino change. Coarse-mtime filesystems can return identical
+    // mtimeMs across appends to the same file; size catches those.
+    // inode change covers rotation/replace (markGraphDirty's cap
+    // path atomicWrites a new file).
+    if (
+      stat.mtimeMs !== entry.pollLastMtimeMs ||
+      stat.size !== entry.pollLastSize ||
+      stat.ino !== entry.pollLastIno
+    ) {
+      entry.pollLastMtimeMs = stat.mtimeMs;
+      entry.pollLastSize = stat.size;
+      entry.pollLastIno = stat.ino;
       schedule(entry);
     }
   };
@@ -541,6 +563,8 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
     watcher,
     pollTimer: null,
     pollLastMtimeMs: -1,
+    pollLastSize: -1,
+    pollLastIno: -1,
     mode: initialMode,
     timer: null,
     cwd,

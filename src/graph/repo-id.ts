@@ -48,11 +48,15 @@ const resolveGitRoot = (cwd: string): string | null => {
   }
   if (!hit) return null;
   try {
-    // 0.1.10+ P6c: prefer the verified absolute git binary. When the
-    // verifier returns null (unsafe prefix or not found), fall back
-    // to PATH-resolved "git" so existing users in unusual layouts
-    // keep working — the verifier's stderr warning surfaces the risk.
-    const gitBin = getVerifiedGitBin() ?? "git";
+    // 0.1.10+ P6c (codex round 7 P1): require verified git. Pre-fix
+    // a `?? "git"` fallback would have re-exposed the PATH-hijack
+    // surface this lockdown was meant to prevent — the verifier
+    // returned null specifically because the only PATH entry was
+    // unsafe. Now: when the verifier returns null, refuse to spawn
+    // git at all; the ancestor-walk in resolveRepoIdSync still
+    // identifies the repo root cheaply.
+    const gitBin = getVerifiedGitBin();
+    if (!gitBin) return null;
     const out = execFileSync(gitBin, ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",

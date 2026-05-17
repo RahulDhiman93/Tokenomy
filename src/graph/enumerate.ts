@@ -49,8 +49,12 @@ const isCodeFile = (relPath: string): boolean => {
 
 const enumerateViaGit = (repoPath: string): string[] | null => {
   try {
-    // 0.1.10+ P6c: prefer the verified absolute git binary.
-    const gitBin = getVerifiedGitBin() ?? "git";
+    // 0.1.10+ P6c (codex round 7 P1): require verified git; falling
+    // back to plain "git" went through PATH unverified and defeated
+    // the hardening. When git isn't safely available we return null
+    // and the caller drops to the walk-based enumeration.
+    const gitBin = getVerifiedGitBin();
+    if (!gitBin) return null;
     const out = execFileSync(
       gitBin,
       ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],

@@ -42,23 +42,38 @@ const isUnderSafePrefix = (absPath: string): boolean => {
 
 // In-process PATH walk. No subprocess, no helper executed; we just
 // check whether each PATH entry contains an executable `git` file.
+//
+// codex round 7 P1: when an early PATH entry resolves to an unsafe
+// prefix (the hijack scenario the verifier is meant to catch), keep
+// scanning subsequent PATH entries for a safe candidate instead of
+// stopping at the first hit. Pre-fix the first match returned null
+// and callers fell back to plain "git" via PATH — re-exposing the
+// very attack the lockdown was meant to prevent.
 const resolvePathInProcess = (): string | null => {
   const path = process.env["PATH"];
   if (!path) return null;
   const entries = path.split(delimiter).filter((e) => e.length > 0);
   const candidates = isPosix() ? ["git"] : ["git.exe", "git.cmd"];
+  let firstUnsafe: string | null = null;
   for (const entry of entries) {
     for (const name of candidates) {
       const full = join(entry, name);
       try {
         const st = statSync(full);
-        if (st.isFile()) return full;
+        if (!st.isFile()) continue;
+        if (isUnderSafePrefix(full)) {
+          return full;
+        }
+        if (firstUnsafe === null) firstUnsafe = full;
       } catch {
         // missing or unreadable — try next
       }
     }
   }
-  return null;
+  // Surface the first unsafe candidate so the caller can decide:
+  // a one-shot warning gets emitted at the verifier boundary, but
+  // the verifier itself returns null so callers fail closed.
+  return firstUnsafe;
 };
 
 const which = (): string | null => {
