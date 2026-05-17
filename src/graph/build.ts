@@ -10,6 +10,7 @@ import {
   type StorageLocationConfig,
 } from "../core/paths.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
+import { maybeCompactRebuildStats } from "./freshness-stats.js";
 import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
 import { computeTsconfigFingerprint } from "./tsconfig-fingerprint.js";
@@ -664,6 +665,13 @@ const postBuildSuccess = (
   startSnap: DirtySnapshot | null,
 ): void => {
   postBuildHousekeeping(identity, cfg);
+  // 0.1.10+ P10e: fold the NDJSON delta log into the snapshot when it
+  // crosses 1MB. Best-effort; failure leaves the log in place.
+  try {
+    maybeCompactRebuildStats(identity, cfg);
+  } catch {
+    // best-effort
+  }
   try {
     const dirty = graphDirtySentinelPath(identity, cfg.graph);
     if (existsSync(dirty)) {

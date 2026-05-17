@@ -15,6 +15,11 @@ import { buildGraph } from "../graph/build.js";
 import { safeParse } from "../util/json.js";
 import { atomicWrite } from "../util/atomic.js";
 import { appendGitignoreLine } from "../util/gitignore.js";
+import {
+  recordRebuildDelta,
+  recordWorkerInactiveDelta,
+  readFoldedStats,
+} from "../graph/freshness-stats.js";
 
 // 0.1.9+: in-process rebuild worker. Watches `<graphDir>` for changes
 // to the `.dirty` sentinel and triggers a debounced `buildGraph`. The
@@ -115,44 +120,39 @@ const readStats = (path: string): RebuildStats => {
   };
 };
 
+// 0.1.10+ P10e: delegate to the NDJSON-append delta logger so this
+// write doesn't race recordScopedStaleSample. Local helper kept for
+// clarity at call site.
 const recordRebuild = (
   identity: RepoIdentityLike,
   cfg: Config,
   duration_ms: number,
 ): void => {
   try {
-    const path = graphRebuildStatsPath(identity, cfg.graph);
-    const prev = readStats(path);
-    // codex round 2 P2: default missing numerics. When a scoped-stale
-    // query writes the stats file first, only `stale_in_scope_*` are
-    // populated; `prev.count` and `prev.total_ms` come back undefined
-    // and `undefined + N === NaN`. NaN serializes as null and the
-    // freshness counters silently break.
-    const prevCount = typeof prev.count === "number" ? prev.count : 0;
-    const prevTotal = typeof prev.total_ms === "number" ? prev.total_ms : 0;
-    const next: RebuildStats = {
-      count: prevCount + 1,
-      last_ms: duration_ms,
-      total_ms: prevTotal + duration_ms,
-      last_ts: new Date().toISOString(),
-      worker_active: true,
-      // codex round 1 P3: carry forward scoped-stale counters written
-      // by `recordScopedStaleSample` in freshness-stats.ts. They live
-      // in the same JSON file but on different write paths.
-      stale_in_scope_hits: prev.stale_in_scope_hits ?? 0,
-      stale_in_scope_misses: prev.stale_in_scope_misses ?? 0,
-    };
-    atomicWrite(path, JSON.stringify(next));
+    recordRebuildDelta(identity, cfg, duration_ms);
   } catch {
     // best-effort
   }
 };
 
-// Public accessor for `tokenomy report` / `analyze`.
+// Public accessor for `tokenomy report` / `analyze`. 0.1.10+ folds
+// the NDJSON delta log on top of the snapshot so concurrent writes
+// from the worker + handlers + markStatsInactive all surface.
 export const readRebuildStats = (
   identity: RepoIdentityLike,
   cfg: Config,
-): RebuildStats => readStats(graphRebuildStatsPath(identity, cfg.graph));
+): RebuildStats => {
+  const folded = readFoldedStats(identity, cfg);
+  return {
+    count: folded.count,
+    last_ms: folded.last_ms,
+    total_ms: folded.total_ms,
+    last_ts: folded.last_ts,
+    worker_active: folded.worker_active,
+    stale_in_scope_hits: folded.stale_in_scope_hits,
+    stale_in_scope_misses: folded.stale_in_scope_misses,
+  };
+};
 
 // Whether the rebuild worker is currently watching a repo. Used by
 // `ensureFreshGraph` to decide between "skip the rebuild kick, worker
@@ -539,12 +539,7 @@ export const markStatsInactive = (
   cfg: Config,
 ): void => {
   try {
-    const path = graphRebuildStatsPath(identity, cfg.graph);
-    if (!existsSync(path)) return;
-    const cur = readStats(path);
-    cur.worker_active = false;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(cur));
+    recordWorkerInactiveDelta(identity, cfg);
   } catch {
     // best-effort
   }

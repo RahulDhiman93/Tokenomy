@@ -149,6 +149,16 @@ export const graphRebuildStatsPath = (
   cfg?: StorageLocationConfig,
 ): string => join(graphDir(identity, cfg), ".rebuild-stats.json");
 
+// 0.1.10+ P10e: append-only NDJSON delta log. Concurrent writers
+// (rebuild worker recordRebuild + MCP handlers recordScopedStaleSample
+// + worker shutdown markStatsInactive) each append a single line;
+// readers fold deltas at read time. Avoids the read-modify-write race
+// that lost increments under parallel MCP queries pre-0.1.10.
+export const graphRebuildStatsLogPath = (
+  identity: RepoIdentityLike,
+  cfg?: StorageLocationConfig,
+): string => join(graphDir(identity, cfg), ".rebuild-stats.log");
+
 // 0.1.10+: per-build temp dir for paired (snapshot+meta) commit. The
 // writer drops both files here, computes snapshot_sha256, then renames
 // both into place. Crash between renames leaves the snapshot in its

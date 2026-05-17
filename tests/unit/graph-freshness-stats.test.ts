@@ -10,6 +10,7 @@ import {
 import {
   graphDir,
   graphDirtySentinelPath,
+  graphRebuildStatsLogPath,
   graphRebuildStatsPath,
 } from "../../src/core/paths.js";
 import { resolveRepoId } from "../../src/graph/repo-id.js";
@@ -88,7 +89,7 @@ test("collectGraphFreshness: tolerates malformed stats JSON", () => {
   });
 });
 
-test("recordScopedStaleSample: increments hits + misses cumulatively", () => {
+test("recordScopedStaleSample: increments hits + misses cumulatively (P10e: NDJSON deltas)", () => {
   withTmpHomeAndRepo((_home, repo) => {
     const identity = resolveRepoId(repo);
     mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
@@ -98,13 +99,12 @@ test("recordScopedStaleSample: increments hits + misses cumulatively", () => {
     const stats = collectGraphFreshness(identity, DEFAULT_CONFIG);
     assert.equal(stats.stale_in_scope_hits, 2);
     assert.equal(stats.stale_in_scope_misses, 1);
-    const raw = readFileSync(
-      graphRebuildStatsPath(identity, DEFAULT_CONFIG.graph),
-      "utf8",
-    );
-    const parsed = JSON.parse(raw);
-    assert.equal(parsed.stale_in_scope_hits, 2);
-    assert.equal(parsed.stale_in_scope_misses, 1);
+    // 0.1.10+: writes go to the NDJSON delta log, not the snapshot
+    // JSON. Folded read confirms the cumulative count; the log file
+    // contains one line per call.
+    const logPath = graphRebuildStatsLogPath(identity, DEFAULT_CONFIG.graph);
+    const lines = readFileSync(logPath, "utf8").trim().split("\n");
+    assert.equal(lines.length, 3);
   });
 });
 
@@ -113,9 +113,29 @@ test("recordScopedStaleSample: best-effort on malformed prior stats", () => {
     const identity = resolveRepoId(repo);
     mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
     writeFileSync(graphRebuildStatsPath(identity, DEFAULT_CONFIG.graph), "{ bad");
-    // safeParse returns null; recordScopedStaleSample re-initializes.
+    // Snapshot is malformed; recordScopedStaleSample appends to the
+    // log regardless. Folded read returns the delta count.
     recordScopedStaleSample(identity, DEFAULT_CONFIG, true);
     const stats = collectGraphFreshness(identity, DEFAULT_CONFIG);
     assert.equal(stats.stale_in_scope_hits, 1);
+  });
+});
+
+test("recordScopedStaleSample: concurrent parallel writes don't lose increments (P10e)", async () => {
+  await new Promise<void>((resolve) => {
+    withTmpHomeAndRepo((_home, repo) => {
+      const identity = resolveRepoId(repo);
+      mkdirSync(graphDir(identity, DEFAULT_CONFIG.graph), { recursive: true });
+      const N = 100;
+      // Fire N appends in tight succession. Append-only NDJSON keeps
+      // each line atomic for sub-PIPE_BUF writes, so even at high
+      // contention every increment survives.
+      for (let i = 0; i < N; i++) {
+        recordScopedStaleSample(identity, DEFAULT_CONFIG, i % 2 === 0);
+      }
+      const stats = collectGraphFreshness(identity, DEFAULT_CONFIG);
+      assert.equal(stats.stale_in_scope_hits + stats.stale_in_scope_misses, N);
+      resolve();
+    });
   });
 });
