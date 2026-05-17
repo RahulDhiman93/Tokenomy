@@ -67,6 +67,39 @@ const debugLog = (entry: Record<string, unknown>): void => {
 const MAX_STDIN_BYTES = 10 * 1024 * 1024;
 const TIMEOUT_MS = 2_500;
 
+// 0.1.10+ P6: pre-scan nesting depth before handing the payload to
+// JSON.parse. Node's parser is non-recursive for objects/arrays so a
+// 100K-deep array won't stack-overflow, but it still allocates an
+// O(depth) intermediate structure. A 5MB ballooning of `[[[...]]]`
+// burns CPU + RSS for no useful work. Reject early past MAX_JSON_DEPTH.
+const MAX_JSON_DEPTH = 64;
+const exceedsJsonDepth = (s: string, max: number): boolean => {
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inStr) {
+      if (c === 0x5c /* \\ */) escape = true;
+      else if (c === 0x22 /* " */) inStr = false;
+      continue;
+    }
+    if (c === 0x22) {
+      inStr = true;
+    } else if (c === 0x7b /* { */ || c === 0x5b /* [ */) {
+      depth++;
+      if (depth > max) return true;
+    } else if (c === 0x7d /* } */ || c === 0x5d /* ] */) {
+      if (depth > 0) depth--;
+    }
+  }
+  return false;
+};
+
 // 0.1.5+: hard wall-clock kill switch on the hook process. If anything
 // in the dispatch path runs longer than this, the watchdog fires
 // process.exit(0) so Claude Code never sees a slow / hung hook. The
@@ -144,8 +177,14 @@ const main = async (): Promise<void> => {
       | PreHookInput
       | UserPromptHookInput
       | SessionStartHookInput;
+    const stdinStr = buf.toString("utf8");
+    if (exceedsJsonDepth(stdinStr, MAX_JSON_DEPTH)) {
+      debugLog({ phase: "json-depth-cap", stdin_bytes: buf.length });
+      process.exit(0);
+      return;
+    }
     try {
-      parsed = JSON.parse(buf.toString("utf8")) as
+      parsed = JSON.parse(stdinStr) as
         | HookInput
         | PreHookInput
         | UserPromptHookInput
