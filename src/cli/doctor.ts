@@ -129,7 +129,7 @@ const smokeSpawnCheck = async (): Promise<CheckResult> => {
     tool_use_id: "doctor",
     tool_response: { content: [{ type: "text", text: "x" }] },
   };
-  const start = Date.now();
+  const start = performance.now();
   const child = spawn(p, [], { stdio: ["pipe", "pipe", "pipe"] });
   // 0.1.7+: a hook that exits before reading stdin can race the
   // `child.stdin.end()` write below and propagate EPIPE as an uncaught
@@ -149,7 +149,7 @@ const smokeSpawnCheck = async (): Promise<CheckResult> => {
   child.stdout.on("data", (c: Buffer) => chunks.push(c));
   const [code] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
   clearTimeout(timer);
-  const elapsed = Date.now() - start;
+  const elapsed = Math.round(performance.now() - start);
   const stdoutLen = Buffer.concat(chunks).length;
   return {
     name: "Smoke spawn hook (empty mcp call)",

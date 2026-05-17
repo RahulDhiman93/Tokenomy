@@ -109,7 +109,7 @@ const deltaBuildFromSnapshot = async (
   const repoId = identity.repoId;
   const repoPath = identity.repoPath;
   try {
-    const deadline = Date.now() + cfg.graph.build_timeout_ms;
+    const deadline = performance.now() + cfg.graph.build_timeout_ms;
     const tsLoaded = await loadTypescript(repoPath);
     if (!tsLoaded.ok) return tsLoaded;
 
@@ -171,7 +171,7 @@ const deltaBuildFromSnapshot = async (
     const addedErrors: Graph["parse_errors"] = [];
     const localSkipped: string[] = [];
     for (const file of expanded) {
-      if (Date.now() > deadline) return fail("timeout");
+      if (performance.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
       // 0.1.8+: every per-file IO step is now best-effort. Pre-0.1.8 a
       // mid-build rebase/rm would throw out of statSync/sha256/read and
@@ -404,7 +404,7 @@ const buildGraphFromFiles = async (
   const tsLoaded = await loadTypescript(repoPath);
   if (!tsLoaded.ok) return tsLoaded;
 
-  const deadline = Date.now() + cfg.graph.build_timeout_ms;
+  const deadline = performance.now() + cfg.graph.build_timeout_ms;
   const fileSet = new Set(files);
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -432,7 +432,7 @@ const buildGraphFromFiles = async (
 
   const localSkipped: string[] = [];
   for (const file of files) {
-    if (Date.now() > deadline) return fail("timeout");
+    if (performance.now() > deadline) return fail("timeout");
     const absPath = join(repoPath, ...file.split("/"));
     let st;
     try {
@@ -668,7 +668,7 @@ const postBuildSuccess = (
 };
 
 export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraphResult> => {
-  const start = Date.now();
+  const start = performance.now();
   const identity = resolveRepoId(options.cwd);
   const store = new JsonGraphStore();
 
@@ -744,7 +744,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               node_count: existingMeta.node_count,
               edge_count: existingMeta.edge_count,
               parse_error_count: existingMeta.parse_error_count,
-              duration_ms: Date.now() - start,
+              duration_ms: Math.round(performance.now() - start),
               skipped_files: existingMeta.skipped_files ?? [],
             },
           };
@@ -776,7 +776,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
                 options.config,
               );
               if (delta.ok) {
-                delta.data.duration_ms = Date.now() - start;
+                delta.data.duration_ms = Math.round(performance.now() - start);
                 logGraphBuild(identity, delta, options.config.graph);
                 // 0.1.8+ codex round 2: clear `.dirty` + async-failure
                 // here too. Pre-fix the delta path returned BEFORE the
@@ -813,7 +813,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
       logGraphBuild(identity, built, options.config.graph);
       return built;
     }
-    built.data.duration_ms = Date.now() - start;
+    built.data.duration_ms = Math.round(performance.now() - start);
     logGraphBuild(identity, built, options.config.graph);
     // 0.1.8+: shared post-success cleanup (housekeeping + `.dirty` +
     // async-failure clear). See postBuildSuccess.

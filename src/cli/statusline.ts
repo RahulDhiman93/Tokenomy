@@ -201,8 +201,8 @@ export const renderStatusLine = (state: StatusLineState): string => {
 const STATUSLINE_BUDGET_MS = 50;
 
 export const runStatusLine = (argv: string[]): number => {
-  const start = Date.now();
-  const overBudget = (): boolean => Date.now() - start > STATUSLINE_BUDGET_MS;
+  const start = performance.now();
+  const overBudget = (): boolean => performance.now() - start > STATUSLINE_BUDGET_MS;
   try {
     // 0.1.8+ codex round 10: subdir-config loading deferred — the
     // statusline 50ms budget cannot afford an extra `git rev-parse` on

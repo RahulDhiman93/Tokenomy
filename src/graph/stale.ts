@@ -63,7 +63,7 @@ const mtimeDriftFiles = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.files;
     }
@@ -87,7 +87,7 @@ const mtimeDriftFiles = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       files: drift,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
   }
   return drift;
@@ -120,7 +120,7 @@ const addedFilesSince = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.files;
     }
@@ -137,7 +137,7 @@ const addedFilesSince = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       files: added,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
   }
   return added;
@@ -170,7 +170,7 @@ const cachedTsconfigFingerprint = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.fingerprint;
     }
@@ -184,7 +184,7 @@ const cachedTsconfigFingerprint = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       fingerprint: fp,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
   }
   return fp;

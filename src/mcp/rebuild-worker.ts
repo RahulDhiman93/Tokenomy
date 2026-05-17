@@ -161,7 +161,7 @@ export const isWorkerActive = (repoPath: string): boolean => workers.has(repoPat
 
 const triggerBuild = (entry: WorkerEntry): void => {
   if (shuttingDown) return;
-  const start = Date.now();
+  const start = performance.now();
   // codex round 7 P2: re-load config so a mid-session edit to
   // `.tokenomy.json` (e.g. raising `graph.max_files` after a
   // repo-too-large failure, or adding an exclude pattern) is honored
@@ -221,7 +221,7 @@ const triggerBuild = (entry: WorkerEntry): void => {
         // lie about server state to the next `tokenomy report`.
         if (shuttingDown) return;
         if (!workers.has(entry.identity.repoPath)) return;
-        recordRebuild(entry.identity, entry.cfg, Date.now() - start);
+        recordRebuild(entry.identity, entry.cfg, Math.round(performance.now() - start));
         // codex round 4 P2: postBuildSuccess deliberately leaves
         // `.dirty` in place when it detects a mid-build edit (the
         // inode/mtime/size guard). fs.watch may have coalesced the

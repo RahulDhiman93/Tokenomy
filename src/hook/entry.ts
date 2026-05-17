@@ -128,7 +128,7 @@ const readStdin = (): Promise<Buffer | null> =>
   });
 
 const main = async (): Promise<void> => {
-  const hookStart = Date.now();
+  const hookStart = performance.now();
   // 0.1.5+: hard kill switch — anything past 1s exits 0 with empty stdout.
   installHookWatchdog();
   try {
@@ -172,7 +172,7 @@ const main = async (): Promise<void> => {
         phase: out ? "session-start-golem" : "session-start-passthrough",
         session_id: sessionInput.session_id,
         event: "SessionStart",
-        elapsed_ms: Date.now() - hookStart,
+        elapsed_ms: Math.round(performance.now() - hookStart),
       });
       if (out) process.stdout.write(JSON.stringify(out));
       process.exit(0);
@@ -186,7 +186,7 @@ const main = async (): Promise<void> => {
         phase: out ? "prompt-nudged" : "prompt-passthrough",
         session_id: promptInput.session_id,
         event: "UserPromptSubmit",
-        elapsed_ms: Date.now() - hookStart,
+        elapsed_ms: Math.round(performance.now() - hookStart),
         prompt_len: promptInput.prompt?.length ?? 0,
       });
       if (out) process.stdout.write(JSON.stringify(out));
@@ -202,7 +202,7 @@ const main = async (): Promise<void> => {
         session_id: preInput.session_id,
         tool: preInput.tool_name,
         event: "PreToolUse",
-        elapsed_ms: Date.now() - hookStart,
+        elapsed_ms: Math.round(performance.now() - hookStart),
         // Diagnostics for Phase-1 passthrough investigations: capture the
         // first-order tool_input fields so we can see whether e.g. Claude
         // Code sent a relative path or an explicit limit.
@@ -253,7 +253,7 @@ const main = async (): Promise<void> => {
       response_bytes: respBytes,
       top_keys: topKeys,
       content_shape: contentShape,
-      elapsed_ms: Date.now() - hookStart,
+      elapsed_ms: Math.round(performance.now() - hookStart),
     });
     if (output) process.stdout.write(JSON.stringify(output));
     process.exit(0);
