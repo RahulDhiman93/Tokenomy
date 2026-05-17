@@ -345,6 +345,16 @@ const switchToPollMode = (entry: WorkerEntry): void => {
   entry.pollLastMtimeMs = -1;
   entry.pollLastSize = -1;
   entry.pollLastIno = -1;
+  // 0.1.10+ codex round 9 P3: watcher.on("error") records
+  // worker_active:false BEFORE calling here; the polling worker is
+  // still very much alive, so re-flip the flag back to true.
+  // Otherwise tokenomy report shows inactive for repos that fell
+  // back to polling mid-session.
+  try {
+    recordWorkerActiveDelta(entry.identity, entry.cfg);
+  } catch {
+    // best-effort
+  }
   const tick = (): void => {
     if (shuttingDown) return;
     const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);

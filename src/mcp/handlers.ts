@@ -333,11 +333,30 @@ const buildHealthReport = (cwd: string): QueryResult<HealthReport> => {
   // never seen a quarantine" rather than "broken".
   let integrityOk = true;
   try {
-    const integ = healthSafeParse<{ mismatched?: number }>(
-      fsReadFileSync(graphIntegrityStatsPath(identity, cfg.graph), "utf8"),
-    );
-    if (integ && typeof integ.mismatched === "number" && integ.mismatched > 0) {
-      integrityOk = false;
+    // 0.1.10+ codex round 9 P3: snapshot_integrity_ok must reflect
+    // CURRENT state, not cumulative mismatched count. Pre-fix any
+    // historical quarantine kept the flag false forever even after
+    // a healthy rebuild. New: compare last_quarantine_at against
+    // the meta's built_at — quarantines that pre-date the current
+    // pair are old news.
+    const integ = healthSafeParse<{
+      mismatched?: number;
+      last_quarantine_at?: string | null;
+    }>(fsReadFileSync(graphIntegrityStatsPath(identity, cfg.graph), "utf8"));
+    if (integ) {
+      const meta = healthSafeParse<{ built_at?: string }>(
+        fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+      );
+      const builtAt = typeof meta?.built_at === "string" ? Date.parse(meta.built_at) : NaN;
+      const lastQ =
+        typeof integ.last_quarantine_at === "string"
+          ? Date.parse(integ.last_quarantine_at)
+          : NaN;
+      // Healthy when no quarantine ever fired, OR when the current
+      // built_at post-dates the most recent quarantine.
+      if (Number.isFinite(lastQ) && (!Number.isFinite(builtAt) || builtAt <= lastQ)) {
+        integrityOk = false;
+      }
     }
   } catch {
     // best-effort

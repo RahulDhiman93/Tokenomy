@@ -30,12 +30,15 @@ P11/P12).
   runs `npm ls -g --json tokenomy` and warns on version mismatch.
 - **PSEC2 — Repo-local TypeScript trust gate.** The graph builder now
   prefers Tokenomy's bundled/process-local `typescript` over the
-  repo's own `node_modules/typescript`. Repo-local resolution is
-  opt-in via `cfg.graph.allow_repo_local_typescript` (default false).
-  A malicious repo can no longer drop a `node_modules/typescript/
-  index.js` that runs during `tokenomy graph build`. `loadTypescript`
-  result now carries `source: "bundled" | "repo-local"` so doctor /
-  health can surface the path used.
+  repo's own `node_modules/typescript`. Repo-local resolution is the
+  fallback when bundled is missing, controlled by
+  `cfg.graph.allow_repo_local_typescript` (default true so prod
+  installs without bundled TS keep working; codex round 4 flip from
+  the initial opt-in default). Security-sensitive deployments
+  lock down with `tokenomy config set graph.allow_repo_local_typescript
+  false`. `loadTypescript` result carries
+  `source: "bundled" | "repo-local"` so doctor / health surface the
+  path used per build.
 
 ### Storage atomicity
 
