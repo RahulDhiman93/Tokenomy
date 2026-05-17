@@ -1,8 +1,56 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, resolve as pathResolve } from "node:path";
 import type { Config, HookInput } from "../core/types.js";
 import { graphDir, graphDirtySentinelPath } from "../core/paths.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import { atomicWrite } from "../util/atomic.js";
+
+// 0.1.10+ P10c: cap the append-only sentinel so a failed-build loop
+// can't grow it without bound. Compaction keeps the most-recent
+// SENTINEL_MAX_ENTRIES lines and dedupes by file path so repeated
+// edits to the same file collapse.
+const SENTINEL_MAX_BYTES = 1_048_576; // 1MB
+const SENTINEL_MAX_ENTRIES = 10_000;
+
+const rotateSentinelIfOversize = (sentinel: string): void => {
+  let size = 0;
+  try {
+    size = statSync(sentinel).size;
+  } catch {
+    return;
+  }
+  if (size <= SENTINEL_MAX_BYTES) return;
+  let raw: string;
+  try {
+    raw = readFileSync(sentinel, "utf8");
+  } catch {
+    return;
+  }
+  const lines = raw.split("\n").filter((l) => l.length > 0);
+  const kept = lines.slice(-SENTINEL_MAX_ENTRIES);
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (let i = kept.length - 1; i >= 0; i--) {
+    const line = kept[i]!;
+    const tab = line.indexOf("\t");
+    const path = tab >= 0 ? line.slice(tab + 1).trim() : line;
+    if (seen.has(path)) continue;
+    seen.add(path);
+    deduped.push(line);
+  }
+  deduped.reverse();
+  try {
+    atomicWrite(sentinel, deduped.length > 0 ? `${deduped.join("\n")}\n` : "", false);
+  } catch {
+    // best-effort
+  }
+};
 
 // Graph-dirty sentinel for PostToolUse on Edit / Write / MultiEdit.
 //
@@ -41,6 +89,7 @@ export const markGraphDirty = (input: HookInput, cfg: Config): void => {
     }
     const sentinel = graphDirtySentinelPath(identity, cfg.graph);
     mkdirSync(dirname(sentinel), { recursive: true });
+    rotateSentinelIfOversize(sentinel);
     // codex round 4 P2: resolve the recorded file_path to an
     // ABSOLUTE path before writing. PostToolUse `cwd` can be a
     // subdirectory of the repo (e.g. `cwd=/repo/src`,

@@ -253,6 +253,11 @@ export const readDirtySentinel = (
   }
   const files = new Set<string>();
   let oldest = Number.POSITIVE_INFINITY;
+  // 0.1.10+ P10c: detect drive-letter paths regardless of process
+  // platform. On POSIX, `isAbsolute("C:\\repo\\src\\a.ts")` returns
+  // false, so a Windows-written sentinel read on POSIX would fall
+  // through to relative-path handling and emit a corrupt key.
+  const isWindowsDriveAbs = (p: string): boolean => /^[A-Za-z]:[/\\]/.test(p);
   for (const line of raw.split("\n")) {
     if (!line) continue;
     const tab = line.indexOf("\t");
@@ -260,12 +265,17 @@ export const readDirtySentinel = (
     const ts = Date.parse(line.slice(0, tab));
     let file = line.slice(tab + 1).trim();
     if (!file) continue;
-    // codex round 2 P2: cross-platform path normalization. On Windows
-    // Claude Code emits `C:\repo\src\a.ts`; on POSIX `/repo/src/a.ts`.
-    // Graph nodes always use forward-slash repo-relative ids. Use
-    // node:path.isAbsolute + node:path.relative so we handle both,
-    // then convert backslashes for the comparison.
-    if (isAbsolute(file)) {
+    if (isWindowsDriveAbs(file)) {
+      // Sentinel line is a Windows absolute path. On a POSIX reader
+      // there's no meaningful mapping to repo-relative; drop it. On
+      // Windows the OS-native isAbsolute would have caught it below,
+      // but treating it explicitly keeps the path through normalize.
+      if (sep === "/") continue;
+      if (!repoPath) continue;
+      const rel = relative(repoPath, file);
+      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      file = rel;
+    } else if (isAbsolute(file)) {
       if (!repoPath) {
         // No repo context to anchor against — best to drop than to
         // produce a path that never matches a graph node.
