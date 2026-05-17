@@ -161,22 +161,51 @@ P11/P12).
 - Per-phase commits on `feat/reliability-0.1.10` keep the review
   paging tractable.
 
-### Deferred (will ship in a follow-up 0.1.10.x or 0.1.11)
+### Additional phases shipped after the P13 commit
+
+- **P8a — compactJson on the MCP response path.** Dropped the
+  pretty-print indent emitted by `stableStringify` for every MCP
+  reply; cuts wire bytes ~30-50% on typical payloads.
+- **P8b — glob compile caps + ReDoS guard.** Patterns longer than
+  256 chars or with more than 16 `*` chars get rejected via
+  `GlobCompileError`. `compileGlobs` logs the failed pattern and
+  skips it instead of crashing the whole enumerate.
+- **P9a — Multi-repo discovery in `tokenomy report`.** New
+  `cli/report-repos.ts` scans `~/.tokenomy/graphs/<repoId>/` plus
+  in-repo entries via `projects.json`. Report renders a
+  "Repos tracked: N" table with shortId · path · nodes ·
+  last_build · integrity status. Pre-0.1.10 the report only
+  counted the cwd's repo, so users with N tracked repos saw a
+  single-repo summary.
+- **P9g — Repo identity canonicalization.** `resolveRepoId` hashes
+  `realpathSync.native(path)` so symlinked workspaces and macOS
+  case variants collapse to one identity. Display repoPath
+  remains the lexical resolve() so users see what they typed.
+- **P11 — README zero-touch walkthrough entries.** Section h3)
+  walks the user through `mcp.max_inflight`,
+  `mcp.tool_deadline_ms`, the quarantine default, and the
+  repo-local TypeScript trust gate (with UNSAFE warning).
+- **P12c — Backup retention.** `backupFile` prunes
+  `*.tokenomy-bak-*` siblings down to the newest 10 after each
+  fresh backup. Init/uninstall cycles no longer accumulate
+  hundreds of backups next to `settings.json`.
+
+### Still deferred (follow-up 0.1.10.x or 0.1.11)
 
 - **P4b** cross-process build lock with pid + hrtime + uuid.
 - **P6 Zod input validation + size caps** for every MCP tool.
 - **P6b** OSS-search response byte cap + untrusted-snippet labeling.
 - **P6c** git binary absolute-path lockdown.
 - **P7** watcher self-heal (EMFILE/ENOSPC backoff) + polling fallback.
-- **P8 / P8a–d** NDJSON events log + rotation + compactJson + glob
-  ReDoS guard + budget binary-search truncation + snapshot LRU.
-- **P9 / P9a–g** report multi-repo discovery + feature coverage
-  audit + per-repo roll-up + drift-catcher test + analyze rollups +
-  realpath canonicalization.
-- **P10 stdio keepalive.**
-- **P11 README zero-touch updates** for the new opt-in flags.
-- **P12 / P12b–d** CI matrix (linux/win/mac), npm audit gates,
-  backup retention, projects-registry compaction.
+- **P8** NDJSON events log + rotation.
+- **P8c** budget binary-search truncation.
+- **P8d** process-local snapshot LRU cache.
+- **P9b–f** per-repo roll-up CLI flag, feature-coverage drift
+  test, Raven scoped+total split, analyze rollups.
+- **P10 stdio keepalive** (SDK shape verification needed).
+- **P12** CI matrix (linux/win/mac).
+- **P12b** npm audit gates (`audit:supply`, `audit:vuln` scripts).
+- **P12d** projects.json → projects.jsonl + compaction.
 
 ## [0.1.9] — 2026-05-16
 
