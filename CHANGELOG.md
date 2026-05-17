@@ -190,22 +190,51 @@ P11/P12).
   fresh backup. Init/uninstall cycles no longer accumulate
   hundreds of backups next to `settings.json`.
 
+### Second batch (post-checkpoint, same session)
+
+- **P6b** OSS-search response cap (5 MB) + `snippet_caveat` on
+  every repo-search result so an attacker-planted comment in a
+  matched file ships framed as data, not as a directive.
+- **P6c** `util/git-bin.ts` resolves git via `which`/`where`, then
+  verifies the absolute path is under a known-safe prefix
+  (`/usr/bin`, `/usr/local/bin`, `/opt`, `/Applications`, Windows
+  `Program Files\Git\`). `GIT_EXEC_PATH` env override bypasses for
+  airgapped systems / containers. Wired into `repo-id.ts` +
+  `enumerate.ts`.
+- **P7** watcher self-heal + polling fallback. `WorkerEntry.mode`
+  is `"watch"|"poll"|"off"`. `fs.watch` failure (EMFILE, ENOSPC,
+  ENOTSUP) falls through to a `setInterval(500).unref()` that
+  statSyncs the sentinel and edge-triggers schedule on mtime
+  change. `inotify-quota` failures write a structured
+  `.last-async-failure.json` with the actionable hint.
+- **P8c** binary-search truncation in `clipResultToBudget`. Each
+  array drops via `O(log n)` stringifies instead of O(n).
+- **P8d** process-local snapshot LRU cache (max 4 entries) keyed
+  on snapshot path + mtimeMs. Eliminates the sub-100ms re-parse
+  penalty on burst reads.
+- **P9a** multi-repo discovery in `tokenomy report`. (already
+  recorded above)
+- **P9g** repo identity canonicalization. (already recorded above)
+- **P12** cross-platform CI matrix: ubuntu/macos/windows × node
+  20/22 = 6 jobs. Non-Linux jobs are `continue-on-error` while
+  the test suite gets fully cross-platform.
+- **P12b** `audit:supply` + `audit:vuln` npm scripts, wired into
+  CI as soft-fail steps.
+- **P12d** projects registry lazy compaction. `listProjects()`
+  folds the dedupe pass into the on-disk file when it crosses
+  1 MB.
+
 ### Still deferred (follow-up 0.1.10.x or 0.1.11)
 
 - **P4b** cross-process build lock with pid + hrtime + uuid.
 - **P6 Zod input validation + size caps** for every MCP tool.
-- **P6b** OSS-search response byte cap + untrusted-snippet labeling.
-- **P6c** git binary absolute-path lockdown.
-- **P7** watcher self-heal (EMFILE/ENOSPC backoff) + polling fallback.
-- **P8** NDJSON events log + rotation.
-- **P8c** budget binary-search truncation.
-- **P8d** process-local snapshot LRU cache.
-- **P9b–f** per-repo roll-up CLI flag, feature-coverage drift
-  test, Raven scoped+total split, analyze rollups.
+- **P8** NDJSON events log + rotation (P8a, P8b, P8c, P8d all
+  shipped; the durable event-log piece is the only P8 sub-phase
+  still outstanding).
+- **P9b–f** per-repo roll-up `--repos-top` CLI flag,
+  feature-coverage drift test, Raven scoped+total split, analyze
+  rollups, HTML report parity.
 - **P10 stdio keepalive** (SDK shape verification needed).
-- **P12** CI matrix (linux/win/mac).
-- **P12b** npm audit gates (`audit:supply`, `audit:vuln` scripts).
-- **P12d** projects.json → projects.jsonl + compaction.
 
 ## [0.1.9] — 2026-05-16
 
