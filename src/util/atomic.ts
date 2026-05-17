@@ -43,12 +43,22 @@ export class AtomicWriteError extends Error {
   readonly path: string;
   override readonly cause: unknown;
   readonly attempts: number;
+  // 0.1.10+ codex round 8 P3: surface the errno code so callers
+  // branching on `(e as NodeJS.ErrnoException).code === "EACCES"`
+  // keep working when they catch AtomicWriteError instead of the
+  // raw fs throw. Pre-fix the wrapper hid the code, forcing every
+  // caller to recurse into `cause.code`.
+  readonly code?: string;
   constructor(path: string, cause: unknown, attempts: number) {
     super(`atomicWrite failed for ${path} after ${attempts} attempt(s): ${String(cause)}`);
     this.name = "AtomicWriteError";
     this.path = path;
     this.cause = cause;
     this.attempts = attempts;
+    if (cause && typeof cause === "object") {
+      const innerCode = (cause as { code?: unknown }).code;
+      if (typeof innerCode === "string") this.code = innerCode;
+    }
   }
 }
 

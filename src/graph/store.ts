@@ -200,6 +200,40 @@ const commitRename = (from: string, to: string): void => {
   }
 };
 
+// 0.1.10+ codex round 8 P2: in-flight commit detection used by every
+// quarantine site (parse failure AND SHA mismatch). Returns true when
+// a live-pid .commit-<pid>-* dir exists in the graphDir. Orphan dirs
+// from crashed prior writers (dead pid) are NOT treated as in-flight.
+const commitInFlight = (
+  identity: RepoIdentityLike,
+  cfg: StorageLocationConfig | undefined,
+): boolean => {
+  const dir = graphDir(identity, cfg);
+  if (!existsSync(dir)) return false;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  for (const name of entries) {
+    if (!name.startsWith(GRAPH_COMMIT_TEMP_PREFIX)) continue;
+    const rest = name.slice(GRAPH_COMMIT_TEMP_PREFIX.length);
+    const dashIdx = rest.indexOf("-");
+    const pidStr = dashIdx > 0 ? rest.slice(0, dashIdx) : rest;
+    const pid = Number.parseInt(pidStr, 10);
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") return true;
+      // ESRCH or other → dead pid, orphan; keep scanning.
+    }
+  }
+  return false;
+};
+
 // Best-effort: remove `.commit-<pid>-*` dirs in graphDir whose pid is
 // no longer alive. Cheap (one readdir + N kill(0) syscalls). Called at
 // the top of `save()` so a crashed prior build doesn't leave orphans.
@@ -253,6 +287,13 @@ export class JsonGraphStore implements GraphStore {
     }
     const parsed = safeParse<unknown>(raw);
     if (!isGraph(parsed)) {
+      // 0.1.10+ codex round 8 P2: same in-flight commit detection
+      // as the SHA mismatch path. A copyFileSync fallback inside
+      // commitRename can produce a partial snapshot during the
+      // copy window; quarantining it would clobber a healthy
+      // rebuild. Return null when a live commit dir is present so
+      // the caller retries / rebuilds.
+      if (commitInFlight(identity, cfg)) return null;
       quarantine(identity, cfg, snapPath, metaPath, "snapshot-parse-failed");
       return null;
     }
@@ -300,39 +341,7 @@ export class JsonGraphStore implements GraphStore {
         // commitRename's own retry posture (50/150/300ms backoff)
         // can keep meta unrenamed for hundreds of milliseconds under
         // Windows AV / Search Indexer locks.
-        const dir = graphDir(identity, cfg);
-        let commitInFlight = false;
-        try {
-          for (const name of readdirSync(dir)) {
-            if (!name.startsWith(GRAPH_COMMIT_TEMP_PREFIX)) continue;
-            // 0.1.10+ codex round 6 P2: only treat the commit dir as
-            // live when its pid is still alive. A crashed writer
-            // leaves the dir behind; that's the exact case where the
-            // mismatch IS real and should quarantine. Pre-fix the
-            // check passed for orphan dirs too.
-            const rest = name.slice(GRAPH_COMMIT_TEMP_PREFIX.length);
-            const dashIdx = rest.indexOf("-");
-            const pidStr = dashIdx > 0 ? rest.slice(0, dashIdx) : rest;
-            const pid = Number.parseInt(pidStr, 10);
-            if (!Number.isFinite(pid) || pid <= 0) continue;
-            try {
-              process.kill(pid, 0);
-              commitInFlight = true;
-              break;
-            } catch (e) {
-              if ((e as NodeJS.ErrnoException).code === "EPERM") {
-                // Not our process but alive — treat as in-flight.
-                commitInFlight = true;
-                break;
-              }
-              // ESRCH (or anything else) → dead pid, orphan dir;
-              // keep scanning for a live one.
-            }
-          }
-        } catch {
-          commitInFlight = false;
-        }
-        if (commitInFlight) {
+        if (commitInFlight(identity, cfg)) {
           // Caller (loadGraphContext) treats null + meta-load also
           // null as "graph-not-built", which triggers a rebuild OR
           // retry on the next query. Either is safe; neither

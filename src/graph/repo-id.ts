@@ -48,15 +48,14 @@ const resolveGitRoot = (cwd: string): string | null => {
   }
   if (!hit) return null;
   try {
-    // 0.1.10+ P6c (codex round 7 P1): require verified git. Pre-fix
-    // a `?? "git"` fallback would have re-exposed the PATH-hijack
-    // surface this lockdown was meant to prevent — the verifier
-    // returned null specifically because the only PATH entry was
-    // unsafe. Now: when the verifier returns null, refuse to spawn
-    // git at all; the ancestor-walk in resolveRepoIdSync still
-    // identifies the repo root cheaply.
+    // 0.1.10+ P6c (codex round 8 P2): when git is unverified, fall
+    // back to the in-process ancestor walk (`dir` already holds the
+    // dir containing `.git`). Pre-fix we returned null and
+    // resolveRepoId then used `resolve(cwd)` — a call from a
+    // subdirectory loaded config + .tokenomy-graph from that
+    // subdir instead of the actual repo root.
     const gitBin = getVerifiedGitBin();
-    if (!gitBin) return null;
+    if (!gitBin) return dir;
     const out = execFileSync(gitBin, ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",
