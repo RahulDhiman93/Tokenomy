@@ -1,17 +1,12 @@
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import { projectsRegistryPath } from "../core/paths.js";
-import { atomicWrite } from "./atomic.js";
 import { safeParse } from "./json.js";
 
 // 0.1.8+: project registry — JSONL at `~/.tokenomy/projects.json`.
@@ -87,55 +82,19 @@ const dedupe = (entries: ProjectRegistryEntry[]): ProjectRegistryEntry[] => {
 // re-parsed every line on every call.
 const REGISTRY_COMPACT_BYTES = 1_048_576;
 
-// 0.1.10+ codex round 3 P3: compaction is a destructive rewrite —
-// a concurrent registerProject() append between the read and the
-// atomicWrite would lose the appended row. Per-call lock-file
-// pattern with a short timeout avoids the race; on lock contention
-// we just defer compaction to the next read. Worst case: registry
-// stays above threshold for another listProjects cycle, which is
-// a non-issue compared to losing a registration.
-const maybeCompact = (path: string, parsed: ProjectRegistryEntry[]): void => {
-  let size = 0;
-  try {
-    size = statSync(path).size;
-  } catch {
-    return;
-  }
-  if (size < REGISTRY_COMPACT_BYTES) return;
-  const lockPath = `${path}.compact.lock`;
-  let lockFd: number | null = null;
-  try {
-    // Open exclusive — fails fast if another process is compacting.
-    // We DO NOT retry: a parallel listProjects will defer; a parallel
-    // registerProject is unaffected (it just appends).
-    lockFd = openSync(lockPath, "wx");
-    // Re-read the registry from disk INSIDE the lock so any rows
-    // appended between the caller's readRaw and our compaction land
-    // in the deduped output.
-    const rawAtLock = readRaw();
-    const deduped = dedupe(rawAtLock);
-    const body = deduped.map((e) => JSON.stringify(e)).join("\n") + (deduped.length > 0 ? "\n" : "");
-    atomicWrite(path, body, false);
-    closeSync(lockFd);
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // best-effort
-    }
-    lockFd = null;
-  } catch {
-    // EEXIST → another writer is compacting; defer. Other errors are
-    // best-effort. Either way, ensure we release the lock if held.
-    if (lockFd !== null) {
-      try {
-        closeSync(lockFd);
-        unlinkSync(lockPath);
-      } catch {
-        // best-effort
-      }
-    }
-  }
-};
+// 0.1.10+ codex round 4 P2: lazy compaction removed from the
+// listProjects path. The previous lock-file approach only blocked
+// other compactors, not concurrent registerProject appends — a
+// register landing after readRaw but before atomicWrite would have
+// its row lost when the compacted body replaced the file. Without
+// an OS-level shared/exclusive lock primitive (Node has no flock),
+// safe in-process compaction would need to teach registerProject
+// to coordinate, which breaks its current append-only guarantee.
+// Defer compaction to a future dedicated CLI command (e.g.
+// `tokenomy projects compact`) that runs out of band of any live
+// MCP server, so writers and readers stay race-free. listProjects
+// already dedupes on read; the worst impact of unbounded growth is
+// extra parse cost on `tokenomy doctor --all-repos`, not data loss.
 
 // 0.1.8+: register / refresh a project. Idempotent on `repoRoot`. Appends
 // a single line; readers dedupe latest-wins.
@@ -161,19 +120,7 @@ export const registerProject = (
   }
 };
 
-export const listProjects = (): ProjectRegistryEntry[] => {
-  const raw = readRaw();
-  // 0.1.10+ P12d: lazy compaction. When the registry grows past
-  // REGISTRY_COMPACT_BYTES, fold dedupe into the on-disk file so
-  // future reads parse fewer lines. Best-effort; failure to compact
-  // never affects the returned list.
-  try {
-    maybeCompact(projectsRegistryPath(), raw);
-  } catch {
-    // best-effort
-  }
-  return dedupe(raw);
-};
+export const listProjects = (): ProjectRegistryEntry[] => dedupe(readRaw());
 
 // 0.1.8+: drop entries whose repoRoot no longer exists on disk. Returns the
 // pruned list; caller can re-write the file to compact it.

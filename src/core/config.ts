@@ -130,12 +130,16 @@ export const DEFAULT_CONFIG: Config = {
       enabled: true,
       debounce_ms: 150,
     },
-    // 0.1.10+ PSEC2: default false. The graph builder prefers
-    // Tokenomy's process-local typescript so a malicious repo can't
-    // drop a `node_modules/typescript/index.js` that runs during
-    // `tokenomy graph build`. Set true to re-enable the repo-local
-    // resolver for unusual TS versions Tokenomy can't read.
-    allow_repo_local_typescript: false,
+    // 0.1.10+ PSEC2 (codex round 4 P2): default TRUE for back-compat.
+    // The loader still prefers Tokenomy's bundled/process-local
+    // typescript when available, but falls back to the repo's own
+    // node_modules/typescript when not. The pre-0.1.10 install
+    // path had typescript as an optional peer/dev dep — a default
+    // of false would break upgrades for users whose Tokenomy
+    // install can't find a process-local typescript. Security-
+    // sensitive deployments can flip this to false; the doctor
+    // probe surfaces which path was used per-build.
+    allow_repo_local_typescript: true,
   },
   redact: {
     enabled: true,

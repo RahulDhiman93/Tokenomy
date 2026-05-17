@@ -288,6 +288,34 @@ export class JsonGraphStore implements GraphStore {
     if (declaredSha !== null) {
       const actualSha = sha256OfString(raw);
       if (actualSha !== declaredSha) {
+        // 0.1.10+ codex round 4 P2: don't quarantine if the mismatch
+        // is from an in-flight paired commit. The writer renames
+        // snapshot first then meta; a read landing between sees a
+        // fresh snapshot with the OLD meta's sha. Wait briefly and
+        // recheck — a real corruption is stable across re-reads.
+        // 50ms is plenty for a single renameSync to complete.
+        sleepSync(50);
+        let raw2 = "";
+        let meta2: unknown = null;
+        try {
+          raw2 = readFileSync(snapPath, "utf8");
+          meta2 = safeParse<unknown>(readFileSync(metaPath, "utf8"));
+        } catch {
+          return null;
+        }
+        const declared2 =
+          meta2 &&
+          typeof meta2 === "object" &&
+          typeof (meta2 as { snapshot_sha256?: unknown }).snapshot_sha256 === "string"
+            ? ((meta2 as { snapshot_sha256: string }).snapshot_sha256)
+            : null;
+        if (declared2 !== null && sha256OfString(raw2) === declared2) {
+          // Re-read landed after the meta commit; the pair is now
+          // consistent. Continue with the fresh data instead of
+          // quarantining the live snapshot.
+          const reparsed = safeParse<Graph>(raw2);
+          return reparsed ?? null;
+        }
         quarantine(identity, cfg, snapPath, metaPath, "snapshot-sha-mismatch");
         return null;
       }

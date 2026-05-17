@@ -135,30 +135,23 @@ const appendDelta = (logPath: string, delta: Partial<StoredStats>): void => {
 
 const STATS_LOG_COMPACT_THRESHOLD = 1_048_576; // 1MB
 
-// Called from postBuildSuccess after a successful rebuild. Folds the
-// log into the snapshot and truncates the log so the read path stays
-// cheap. Best-effort — failure leaves the log in place and the next
-// read still works (it just folds more deltas).
+// 0.1.10+ codex round 4 P3: compaction removed. Like
+// projects-registry, this path read the log, wrote a snapshot, then
+// unlinked the log — a concurrent appendDelta between those steps
+// would be dropped. Without a portable shared/exclusive lock, safe
+// compaction requires teaching every writer to coordinate, which
+// breaks the append-only guarantee that made P10e race-free.
+// readFoldedStats already replays the log on every read; the worst
+// impact of unbounded log growth is extra parse cost on
+// `tokenomy report`, not data loss.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const maybeCompactRebuildStats = (
-  identity: RepoIdentityLike,
-  cfg: Config,
+  _identity: RepoIdentityLike,
+  _cfg: Config,
 ): void => {
-  const logPath = graphRebuildStatsLogPath(identity, cfg.graph);
-  let size = 0;
-  try {
-    size = statSync(logPath).size;
-  } catch {
-    return;
-  }
-  if (size < STATS_LOG_COMPACT_THRESHOLD) return;
-  try {
-    const folded = readFoldedStats(identity, cfg);
-    const snapshotPath = graphRebuildStatsPath(identity, cfg.graph);
-    atomicWrite(snapshotPath, JSON.stringify(folded), false);
-    unlinkSync(logPath);
-  } catch {
-    // best-effort
-  }
+  // No-op. See block comment above. A future
+  // `tokenomy report --compact-stats` CLI command can fold + truncate
+  // out of band of the MCP server.
 };
 
 export const collectGraphFreshness = (
