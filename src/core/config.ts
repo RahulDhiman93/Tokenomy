@@ -13,6 +13,14 @@ export const DEFAULT_CONFIG: Config = {
     max_text_bytes: 16_000,
     per_block_head: 4_000,
     per_block_tail: 2_000,
+    // 0.1.10+ P4: cap parallel tool calls so a burst of agent
+    // requests can't pile up arbitrary inflight work on the server.
+    // Overflow → {code:"busy"} immediately; agent retries.
+    max_inflight: 8,
+    // 0.1.10+ P4: per-tool wall-time deadline. Inner handlers are
+    // racey-checked at branch points; expiration returns
+    // {code:"timeout", elapsed_ms}.
+    tool_deadline_ms: 5_000,
     shape_trim: {
       enabled: true,
       max_items: 50,

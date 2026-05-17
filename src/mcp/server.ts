@@ -6,6 +6,7 @@ import { markServerModeActive, registerRepo, stopAllWorkers } from "./rebuild-wo
 import { loadConfig } from "../core/config.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { TOOL_DEFS } from "./schemas.js";
+import { acquire, configureInflight, withDeadline } from "./inflight.js";
 
 export const startGraphServer = async (cwd: string): Promise<void> => {
   const [{ Server }, { StdioServerTransport }, { CallToolRequestSchema, ListToolsRequestSchema }] =
@@ -20,6 +21,31 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     { capabilities: { tools: {} } },
   );
 
+  // 0.1.10+ P4: configure inflight cap from cfg. Cfg may be a
+  // subdir-resolved value; the resolved value lands here once, at
+  // server boot. Tests / dev users tune via `.tokenomy.json` and
+  // restart the server.
+  let bootCfgInflight = 8;
+  let bootCfgDeadlineMs = 5_000;
+  try {
+    let cfgPath = cwd;
+    try {
+      cfgPath = resolveRepoId(cwd).repoPath;
+    } catch {
+      // best-effort
+    }
+    const bootCfg = loadConfig(cfgPath);
+    if (typeof bootCfg.mcp.max_inflight === "number") {
+      bootCfgInflight = bootCfg.mcp.max_inflight;
+    }
+    if (typeof bootCfg.mcp.tool_deadline_ms === "number") {
+      bootCfgDeadlineMs = bootCfg.mcp.tool_deadline_ms;
+    }
+  } catch {
+    // best-effort — defaults stand
+  }
+  configureInflight(bootCfgInflight);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // 0.1.10+ P3: top-level structured-error catch. Any throw from
@@ -27,12 +53,51 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     // {ok:false, code:"internal", request_id} payload. Pre-0.1.10 a
     // bare throw escaped to the SDK and killed the transport.
     const request_id = randomUUID();
+    // 0.1.10+ P4: inflight cap. Overflow returns busy synchronously.
+    const slot = acquire();
+    if (slot === null) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: stableStringify({
+              ok: false,
+              code: "busy",
+              retry_after_ms: 50,
+              request_id,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
     try {
-      const result = await dispatchGraphTool(
-        request.params.name,
-        request.params.arguments ?? {},
-        cwd,
+      // 0.1.10+ P4: per-tool deadline. The inner dispatch isn't
+      // cancellable mid-flight today (cooperative cancel requires
+      // signal threading through every BFS); the deadline just
+      // surfaces a structured timeout response. The inner work
+      // continues to its natural completion.
+      const outcome = await withDeadline(
+        () => dispatchGraphTool(request.params.name, request.params.arguments ?? {}, cwd),
+        bootCfgDeadlineMs,
       );
+      if (outcome.kind === "timeout") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: stableStringify({
+                ok: false,
+                code: "timeout",
+                elapsed_ms: outcome.elapsed_ms,
+                request_id,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      const result = outcome.value;
       return {
         content: [{ type: "text", text: stableStringify(result) }],
         isError: !result.ok,
@@ -53,6 +118,8 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
         ],
         isError: true,
       };
+    } finally {
+      slot.release();
     }
   });
 
