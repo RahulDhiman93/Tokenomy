@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "../core/types.js";
 import { loadConfig } from "../core/config.js";
@@ -37,8 +37,22 @@ import {
 // `resolveRepoId` and is the unique key — more discriminating than
 // `repoId` under symlinks/worktrees.
 
+// 0.1.10+ P7: worker observation mode. "watch" is fs.watch-driven
+// (cheap inotify slot), "poll" is setInterval+statSync fallback for
+// hosts where fs.watch doesn't work (NFS/FUSE/SMB, EMFILE quota,
+// EBADF). "off" is the terminal state — the worker has decided this
+// repo isn't watchable and the legacy read-driven path takes over.
+export type WatcherMode = "watch" | "poll" | "off";
+
 interface WorkerEntry {
-  watcher: FSWatcher;
+  // 0.1.10+ P7: watcher may be null when the entry is in poll mode.
+  watcher: FSWatcher | null;
+  // 0.1.10+ P7: polling-mode handle. Null in watch mode.
+  pollTimer: NodeJS.Timeout | null;
+  // 0.1.10+ P7: last observed sentinel mtimeMs for the poll loop's
+  // edge-trigger. -1 = not yet observed; 0 = sentinel absent.
+  pollLastMtimeMs: number;
+  mode: WatcherMode;
   timer: NodeJS.Timeout | null;
   cwd: string;
   identity: RepoIdentityLike;
@@ -58,6 +72,11 @@ interface WorkerEntry {
   build_in_flight: boolean;
   rerun_pending: boolean;
 }
+
+// 0.1.10+ P7: poll fallback interval. 500ms default — frequent enough
+// that an interactive user doesn't perceive lag, sparse enough that
+// the unref'd timer doesn't dominate CPU on idle repos.
+const POLL_INTERVAL_MS = 500;
 
 // Hard cap on consecutive retried failures before the worker gives
 // up on this repo and waits for an external signal (fresh `.dirty`
@@ -301,6 +320,42 @@ const triggerBuild = (entry: WorkerEntry): void => {
     });
 };
 
+// 0.1.10+ P7: switch this entry from watch to poll mode. Closes the
+// fs.watch handle (if any), starts a setInterval that statSyncs the
+// sentinel and schedules a rebuild on mtime change. .unref() so the
+// timer doesn't keep the process alive.
+const switchToPollMode = (entry: WorkerEntry): void => {
+  if (entry.mode === "poll" && entry.pollTimer !== null) return;
+  if (entry.watcher) {
+    try {
+      entry.watcher.close();
+    } catch {
+      // best-effort
+    }
+    entry.watcher = null;
+  }
+  entry.mode = "poll";
+  entry.pollLastMtimeMs = -1;
+  const tick = (): void => {
+    if (shuttingDown) return;
+    const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);
+    let mtime = 0;
+    try {
+      if (existsSync(sentinel)) {
+        mtime = statSync(sentinel).mtimeMs;
+      }
+    } catch {
+      mtime = 0;
+    }
+    if (mtime > 0 && mtime !== entry.pollLastMtimeMs) {
+      entry.pollLastMtimeMs = mtime;
+      schedule(entry);
+    }
+  };
+  entry.pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+  entry.pollTimer.unref();
+};
+
 const schedule = (entry: WorkerEntry): void => {
   // codex round 10 P2: if a build is already running, don't queue
   // another timer that will race the lock. Mark "rerun after this
@@ -403,7 +458,8 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
     // best-effort
   }
 
-  let watcher: FSWatcher;
+  let watcher: FSWatcher | null = null;
+  let initialMode: WatcherMode = "watch";
   try {
     watcher = watch(dir, { persistent: false }, (_event, filename) => {
       // codex round 6 P2: filename CAN be null on some platforms
@@ -426,28 +482,57 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
       const entry = workers.get(identity.repoPath);
       if (entry) schedule(entry);
     });
-  } catch {
-    // fs.watch failed (unsupported FS, EMFILE, etc). Leave the repo
-    // unwatched; ensureFreshGraph's legacy path will keep working.
-    return;
+  } catch (err) {
+    // 0.1.10+ P7: classify fs.watch failure and fall back to polling
+    // on hosts where the kernel can't help us (EMFILE inotify quota,
+    // EBADF transient, ENOSPC out-of-watches, ENOTSUP on certain
+    // network mounts). Pre-0.1.10 we'd unregister and let the legacy
+    // read-driven path take over; polling keeps the worker writing
+    // freshness samples and serving the lag-aware fast-path.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EMFILE" || code === "ENOSPC") {
+      // Surface inotify-quota hits to the async-failure sentinel so
+      // doctor / report can show the actionable hint.
+      try {
+        writeAsyncBuildFailure(
+          identity,
+          {
+            ts: new Date().toISOString(),
+            reason: "inotify-quota",
+            hint: "raise fs.inotify.max_user_watches and restart the server",
+          },
+          cfg.graph,
+        );
+      } catch {
+        // best-effort
+      }
+    }
+    initialMode = "poll";
+    watcher = null;
   }
 
-  watcher.on("error", () => {
-    // Best-effort: drop this repo so the legacy read-driven path
-    // takes over rather than us silently sitting on a broken watcher.
-    // codex round 3 P2: also flip stats to inactive — otherwise
-    // `tokenomy report`/analyze keeps claiming the worker is alive
-    // after fs.watch errored out.
-    try {
-      markStatsInactive(identity, cfg);
-    } catch {
-      // best-effort
-    }
-    unregisterRepo(identity.repoPath);
-  });
+  if (watcher !== null) {
+    watcher.on("error", () => {
+      // Best-effort: drop into polling rather than unregistering. A
+      // single fs.watch error in a long session usually means the
+      // kernel handle got invalidated (rename, remount); polling
+      // keeps the freshness signal alive until the worker can
+      // re-bind on the next registerRepo.
+      try {
+        markStatsInactive(identity, cfg);
+      } catch {
+        // best-effort
+      }
+      const entry = workers.get(identity.repoPath);
+      if (entry) switchToPollMode(entry);
+    });
+  }
 
   const entry: WorkerEntry = {
     watcher,
+    pollTimer: null,
+    pollLastMtimeMs: -1,
+    mode: initialMode,
     timer: null,
     cwd,
     identity,
@@ -457,6 +542,7 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
     rerun_pending: false,
   };
   workers.set(identity.repoPath, entry);
+  if (initialMode === "poll") switchToPollMode(entry);
 
   // codex round 4 P3: mark worker_active=true in the stats file at
   // registration so `tokenomy report` / `analyze` show the worker as
@@ -499,10 +585,13 @@ export const unregisterRepo = (repoPath: string): void => {
   const entry = workers.get(repoPath);
   if (!entry) return;
   if (entry.timer) clearTimeout(entry.timer);
-  try {
-    entry.watcher.close();
-  } catch {
-    // best-effort
+  if (entry.pollTimer) clearInterval(entry.pollTimer);
+  if (entry.watcher) {
+    try {
+      entry.watcher.close();
+    } catch {
+      // best-effort
+    }
   }
   workers.delete(repoPath);
 };
