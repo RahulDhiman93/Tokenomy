@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sha256String } from "./hash.js";
+import { getVerifiedGitBin } from "../util/git-bin.js";
 
 // 0.1.10+ P9g: canonicalize repo identity through realpathSync.native.
 // Pre-0.1.10 `resolve(repoPath)` returned the lexical path — a symlink
@@ -47,7 +48,12 @@ const resolveGitRoot = (cwd: string): string | null => {
   }
   if (!hit) return null;
   try {
-    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    // 0.1.10+ P6c: prefer the verified absolute git binary. When the
+    // verifier returns null (unsafe prefix or not found), fall back
+    // to PATH-resolved "git" so existing users in unusual layouts
+    // keep working — the verifier's stderr warning surfaces the risk.
+    const gitBin = getVerifiedGitBin() ?? "git";
+    const out = execFileSync(gitBin, ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

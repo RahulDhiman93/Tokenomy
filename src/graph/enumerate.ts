@@ -5,6 +5,7 @@ import { basename, join, posix, relative } from "node:path";
 import type { Config } from "../core/types.js";
 import { compileGlobs, matchesAny } from "../util/glob.js";
 import { isWindowsReservedName } from "../util/win-reserved.js";
+import { getVerifiedGitBin } from "../util/git-bin.js";
 import type { FailOpen } from "./types.js";
 
 const CODE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -48,8 +49,10 @@ const isCodeFile = (relPath: string): boolean => {
 
 const enumerateViaGit = (repoPath: string): string[] | null => {
   try {
+    // 0.1.10+ P6c: prefer the verified absolute git binary.
+    const gitBin = getVerifiedGitBin() ?? "git";
     const out = execFileSync(
-      "git",
+      gitBin,
       ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
       {
         cwd: repoPath,
