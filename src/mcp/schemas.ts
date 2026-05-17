@@ -242,6 +242,19 @@ const RAW_TOOL_DEFS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // 0.1.10+ P5: server liveness + snapshot integrity probe. Clients
+    // call this to verify the server is alive, the rebuild worker is
+    // active, the snapshot integrity check passed at last load, and
+    // the inflight counter has headroom.
+    name: "health",
+    description: "Server liveness + snapshot integrity snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Post-process: inject `path` into every tool's properties. Skip

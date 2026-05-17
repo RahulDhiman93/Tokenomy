@@ -12,7 +12,21 @@ import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
 import { recordScopedStaleSample } from "../graph/freshness-stats.js";
 import { resolveRepoId } from "../graph/repo-id.js";
-import { isServerModeActive, isWorkerActive, registerRepo } from "./rebuild-worker.js";
+import {
+  isServerModeActive,
+  isWorkerActive,
+  readRebuildStats,
+  registerRepo,
+} from "./rebuild-worker.js";
+import { inflightCount, inflightMax } from "./inflight.js";
+import { TOKENOMY_VERSION } from "../core/version.js";
+import {
+  graphIntegrityStatsPath,
+  graphMetaPath,
+} from "../core/paths.js";
+import { readFileSync as fsReadFileSync } from "node:fs";
+import { safeParse as healthSafeParse } from "../util/json.js";
+import { GRAPH_SCHEMA_VERSION } from "../graph/schema.js";
 import {
   clearAsyncBuildFailure,
   readAsyncBuildFailure,
@@ -282,6 +296,80 @@ const withGraphContext = <T>(
 // cross-process concurrency.
 const inFlightRebuilds = new Set<string>();
 
+// 0.1.10+ P5: server boot time, monotonic. health.uptime_ms reports
+// performance.now() - serverBootMs so a slow server can be diagnosed.
+const serverBootMs = performance.now();
+
+// 0.1.10+ P5: assemble the health response. Reads cheap state only
+// (in-memory worker map, inflight counters, on-disk integrity counter,
+// folded rebuild stats). No graph load.
+interface HealthReport {
+  worker_active: boolean;
+  last_build_ms: number;
+  schema_version: number;
+  snapshot_integrity_ok: boolean;
+  snapshot_sha256: string | null;
+  inflight: number;
+  inflight_max: number;
+  version: string;
+  uptime_ms: number;
+}
+
+const buildHealthReport = (cwd: string): QueryResult<HealthReport> => {
+  let identity: { repoId: string; repoPath: string };
+  try {
+    identity = resolveRepoId(cwd);
+  } catch {
+    identity = { repoId: cwd, repoPath: cwd };
+  }
+  let cfg: Config;
+  try {
+    cfg = loadConfig(identity.repoPath);
+  } catch {
+    cfg = loadConfig(cwd);
+  }
+  const rb = readRebuildStats(identity, cfg);
+  // Integrity: read .integrity.json if it exists. Absence is "ok=true,
+  // never seen a quarantine" rather than "broken".
+  let integrityOk = true;
+  try {
+    const integ = healthSafeParse<{ mismatched?: number }>(
+      fsReadFileSync(graphIntegrityStatsPath(identity, cfg.graph), "utf8"),
+    );
+    if (integ && typeof integ.mismatched === "number" && integ.mismatched > 0) {
+      integrityOk = false;
+    }
+  } catch {
+    // best-effort
+  }
+  // Snapshot sha256: pulled from meta if present.
+  let snapshotSha: string | null = null;
+  try {
+    const meta = healthSafeParse<{ snapshot_sha256?: string }>(
+      fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+    );
+    if (meta && typeof meta.snapshot_sha256 === "string") {
+      snapshotSha = meta.snapshot_sha256;
+    }
+  } catch {
+    // best-effort
+  }
+  return {
+    ok: true,
+    data: {
+      worker_active: isWorkerActive(identity.repoPath),
+      last_build_ms: rb.last_ms,
+      schema_version: GRAPH_SCHEMA_VERSION,
+      snapshot_integrity_ok: integrityOk,
+      snapshot_sha256: snapshotSha,
+      inflight: inflightCount(),
+      inflight_max: inflightMax(),
+      version: TOKENOMY_VERSION,
+      uptime_ms: Math.round(performance.now() - serverBootMs),
+    },
+  };
+};
+
 const startBackgroundRebuild = (cwd: string, cfg: Config): void => {
   let identity: { repoId: string; repoPath: string };
   try {
@@ -534,6 +622,14 @@ export const dispatchGraphTool = async (
     argPath = validated.absolute;
   }
   const effectiveCwd = argPath ?? cwd;
+
+  // 0.1.10+ P5: health tool is server-only, no graph load required.
+  // Returns a snapshot of worker/integrity/inflight state for client
+  // health probes. Skips the cross-repo registration + graph load
+  // dance entirely since the answer doesn't depend on graph data.
+  if (name === "health") {
+    return buildHealthReport(effectiveCwd);
+  }
 
   if (RAVEN_TOOLS.has(name)) {
     return dispatchRavenTool(name, args, effectiveCwd);
