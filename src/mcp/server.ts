@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { TOKENOMY_VERSION } from "../core/version.js";
 import { stableStringify } from "../util/json.js";
 import { dispatchGraphTool } from "./handlers.js";
@@ -21,15 +22,38 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await dispatchGraphTool(
-      request.params.name,
-      request.params.arguments ?? {},
-      cwd,
-    );
-    return {
-      content: [{ type: "text", text: stableStringify(result) }],
-      isError: !result.ok,
-    };
+    // 0.1.10+ P3: top-level structured-error catch. Any throw from
+    // dispatchGraphTool or its descendants is converted to a clean
+    // {ok:false, code:"internal", request_id} payload. Pre-0.1.10 a
+    // bare throw escaped to the SDK and killed the transport.
+    const request_id = randomUUID();
+    try {
+      const result = await dispatchGraphTool(
+        request.params.name,
+        request.params.arguments ?? {},
+        cwd,
+      );
+      return {
+        content: [{ type: "text", text: stableStringify(result) }],
+        isError: !result.ok,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text",
+            text: stableStringify({
+              ok: false,
+              code: "internal",
+              message,
+              request_id,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
   });
 
   const transport = new StdioServerTransport();
