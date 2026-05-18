@@ -117,11 +117,12 @@ test("listGraphRepos: in-repo graphs surface via projects.json registry", () => 
   });
 });
 
-test("listGraphRepos: integrity_ok false when .integrity.json shows mismatched > 0", () => {
+test("listGraphRepos: integrity_ok reflects current build vs last quarantine (codex round 12 P2)", () => {
   withTmpHome(() => {
     const root = legacyGraphRootDir();
-    const dir = join(root, "id-quarantine");
-    writeMeta(dir, {
+    // Quarantine AFTER the build → integrity_ok false
+    const dirBad = join(root, "id-quarantine");
+    writeMeta(dirBad, {
       schema_version: 1,
       repo_id: "id-quarantine",
       repo_path: "/repos/q",
@@ -130,10 +131,38 @@ test("listGraphRepos: integrity_ok false when .integrity.json shows mismatched >
       edge_count: 0,
     });
     writeFileSync(
-      join(dir, ".integrity.json"),
-      JSON.stringify({ verified: 5, mismatched: 1, quarantined_total: 1, last_quarantine_at: "x" }),
+      join(dirBad, ".integrity.json"),
+      JSON.stringify({
+        verified: 5,
+        mismatched: 1,
+        quarantined_total: 1,
+        last_quarantine_at: "2026-05-16T00:00:00.000Z",
+      }),
+    );
+    // Rebuild AFTER the quarantine → integrity_ok true even though
+    // mismatched > 0 in cumulative counter
+    const dirOk = join(root, "id-recovered");
+    writeMeta(dirOk, {
+      schema_version: 1,
+      repo_id: "id-recovered",
+      repo_path: "/repos/r",
+      built_at: "2026-05-17T00:00:00.000Z",
+      node_count: 1,
+      edge_count: 0,
+    });
+    writeFileSync(
+      join(dirOk, ".integrity.json"),
+      JSON.stringify({
+        verified: 5,
+        mismatched: 1,
+        quarantined_total: 1,
+        last_quarantine_at: "2026-05-16T00:00:00.000Z",
+      }),
     );
     const out = listGraphRepos();
-    assert.equal(out.repos[0]!.integrity_ok, false);
+    const bad = out.repos.find((r) => r.repoId === "id-quarantine");
+    const ok = out.repos.find((r) => r.repoId === "id-recovered");
+    assert.equal(bad?.integrity_ok, false);
+    assert.equal(ok?.integrity_ok, true);
   });
 });

@@ -41,6 +41,7 @@ interface MinimalMeta {
 
 interface MinimalIntegrity {
   mismatched?: number;
+  last_quarantine_at?: string | null;
 }
 
 const summarize = (
@@ -67,13 +68,23 @@ const summarize = (
       // best-effort
     }
   }
+  // 0.1.10+ codex round 12 P2: integrity_ok must reflect CURRENT
+  // state, not cumulative mismatched. Pre-fix a historical
+  // quarantine kept the flag false forever and rendered
+  // `QUARANTINE` in the report even after a successful rebuild.
+  // Compare last_quarantine_at against meta.built_at — quarantines
+  // pre-dating the current pair are old news.
   let integrityOk = true;
   const integPath = join(graphDir, ".integrity.json");
   if (existsSync(integPath)) {
     try {
       const integ = safeParse<MinimalIntegrity>(readFileSync(integPath, "utf8"));
-      if (integ && typeof integ.mismatched === "number" && integ.mismatched > 0) {
-        integrityOk = false;
+      if (integ && typeof integ.last_quarantine_at === "string") {
+        const lastQ = Date.parse(integ.last_quarantine_at);
+        const builtAt = typeof meta.built_at === "string" ? Date.parse(meta.built_at) : NaN;
+        if (Number.isFinite(lastQ) && (!Number.isFinite(builtAt) || builtAt <= lastQ)) {
+          integrityOk = false;
+        }
       }
     } catch {
       // best-effort
@@ -128,7 +139,13 @@ export const listGraphRepos = (): { repos: RepoSummary[]; unreadable_count: numb
     } catch {
       raw = "";
     }
-    const seen = new Set(repos.map((r) => r.repoId));
+    // 0.1.10+ codex round 12 P2: collect in-repo summaries FIRST,
+    // then dedupe against home entries by keeping the newer
+    // built_at. Pre-fix a `seen` set seeded from home entries
+    // dropped the registry entry before its built_at could be
+    // compared — `tokenomy report` could show stale home-mode
+    // node counts while a newer in-repo graph existed.
+    const inRepoSummaries: RepoSummary[] = [];
     for (const line of raw.split("\n")) {
       if (!line) continue;
       const entry = safeParse<{ repoId?: string; repoRoot?: string }>(line);
@@ -142,15 +159,25 @@ export const listGraphRepos = (): { repos: RepoSummary[]; unreadable_count: numb
       const dir = join(entry.repoRoot, ".tokenomy-graph");
       if (!existsSync(dir)) continue;
       const fallbackId = typeof entry.repoId === "string" ? entry.repoId : entry.repoRoot;
-      if (seen.has(fallbackId)) continue;
       const r = summarize(dir, "in-repo", fallbackId, entry.repoRoot);
-      if (r) {
-        repos.push(r);
-        seen.add(r.repoId);
-      } else {
-        unreadable++;
-      }
+      if (r) inRepoSummaries.push(r);
+      else unreadable++;
     }
+    // Merge: when both a home + in-repo summary exist for the same
+    // repoId, keep whichever has the newer last_build_at.
+    const byId = new Map(repos.map((r) => [r.repoId, r] as const));
+    for (const inRepo of inRepoSummaries) {
+      const prior = byId.get(inRepo.repoId);
+      if (!prior) {
+        byId.set(inRepo.repoId, inRepo);
+        continue;
+      }
+      const priorTs = prior.last_build_at ? Date.parse(prior.last_build_at) : 0;
+      const newTs = inRepo.last_build_at ? Date.parse(inRepo.last_build_at) : 0;
+      if (newTs >= priorTs) byId.set(inRepo.repoId, inRepo);
+    }
+    repos.length = 0;
+    repos.push(...byId.values());
   }
 
   // Sort newest build first; unbuilt last.
