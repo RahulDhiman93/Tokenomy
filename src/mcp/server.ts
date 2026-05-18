@@ -57,8 +57,17 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
   }
   configureInflight(bootCfgInflight);
 
-  // Build-triggering tools get the longer build deadline.
-  const BUILD_TOOLS = new Set(["build_or_update_graph"]);
+  // Build-triggering tools get the longer build deadline. On a
+  // fresh or purged repo, the cacheable read tools also await
+  // buildGraph via ensureFreshGraph's `missing` branch, so they
+  // need the same generous deadline. codex round 15 P2.
+  const BUILD_TOOLS = new Set([
+    "build_or_update_graph",
+    "get_minimal_context",
+    "get_impact_radius",
+    "get_review_context",
+    "find_usages",
+  ]);
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
