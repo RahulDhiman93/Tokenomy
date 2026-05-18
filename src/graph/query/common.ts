@@ -105,37 +105,21 @@ export const loadGraphContext = (
       liveBuiltAt = null;
     }
   }
-  // 0.1.10+ codex round 6 P2: cache hits must NOT bypass the
-  // integrity check. Pre-fix a mtime+built_at match returned the
-  // cached graph without re-verifying snapshot_sha256, so a
-  // tampered snapshot with preserved mtime/meta kept serving stale
-  // data until cache eviction. Now: on shape match, route through
-  // loadGraph anyway — the LRU stays useful because loadGraph
-  // re-reads + re-verifies the file but loadGraph is fast enough
-  // (sub-30ms on big graphs) that the cache benefit was mostly the
-  // index reconstruction the WeakMap downstream already caches. If
-  // loadGraph's integrity check passes, attach the cached parsed
-  // value; if it quarantines or returns null, fall through to a
-  // full miss path that won't use stale cache.
+  // 0.1.10+ codex round 13 P2: always honor the fresh loadGraph
+  // result. The previous "reuse cached parsed graph when shape
+  // matches" optimisation served stale data after an mtime-
+  // preserving restore (rsync, backup recovery) that swapped in
+  // new bytes loadGraph just verified. The WeakMap index cache
+  // downstream is keyed on Graph reference; a fresh parse rebuilds
+  // the index once per cache miss, which is cheap compared to
+  // serving stale data. Cache write still happens so the next call
+  // can hit (when nothing changed) — but read path doesn't trust
+  // cached parsed value over loadGraph's verified result.
+  void cached;
+  void liveBuiltAt;
   graph = store.loadGraph(identity, config.graph);
   meta = store.loadMeta(identity, config.graph);
-  if (
-    graph &&
-    meta &&
-    cached &&
-    cached.mtimeMs === mtimeMs &&
-    mtimeMs > 0 &&
-    liveBuiltAt !== null &&
-    cached.built_at === liveBuiltAt
-  ) {
-    // Hot-path optimisation: integrity passed AND the cache shape
-    // still matches the on-disk pair. Reuse the cached parsed graph
-    // (same object reference triggers WeakMap index cache hit
-    // downstream). loadGraph's SHA check has already fired.
-    graph = cached.graph;
-    meta = cached.meta;
-    touchCache(snapPath, cached);
-  } else if (graph && meta && mtimeMs > 0) {
+  if (graph && meta && mtimeMs > 0) {
     touchCache(snapPath, { mtimeMs, built_at: meta.built_at, graph, meta });
   }
   if (!graph || !meta) return readLastGraphBuildFailure(identity, config.graph) ?? fail("graph-not-built");
