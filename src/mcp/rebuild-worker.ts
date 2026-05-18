@@ -373,7 +373,15 @@ const switchToPollMode = (entry: WorkerEntry): void => {
     try {
       if (existsSync(sentinel)) {
         const s = statSync(sentinel);
-        stat = { mtimeMs: s.mtimeMs, size: s.size, ino: s.ino };
+        // codex round 10 P2: treat zero-byte sentinels as absent —
+        // empty `.dirty` from EPERM/truncate recovery or
+        // rotateSentinelIfOversize otherwise schedules useless
+        // rebuilds in poll mode every tick. The non-poll paths
+        // already gate on size > 0 (worker re-arm, fs.watch event,
+        // registerRepo bootstrap).
+        if (s.size > 0) {
+          stat = { mtimeMs: s.mtimeMs, size: s.size, ino: s.ino };
+        }
       }
     } catch {
       stat = null;

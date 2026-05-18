@@ -418,34 +418,44 @@ export class JsonGraphStore implements GraphStore {
     const commitDir = graphCommitTempDir(identity, cfg, process.pid, rand);
     mkdirSync(commitDir, { recursive: true });
 
-    const snapTmp = join(commitDir, "snapshot.json");
-    const metaTmp = join(commitDir, "meta.json");
-
-    const snapBody = serializeGraphSnapshot(graph);
-    atomicWrite(snapTmp, snapBody, false);
-    const snapSha = sha256OfString(snapBody);
-
-    const metaWithSha: GraphMeta = { ...meta, snapshot_sha256: snapSha };
-    atomicWrite(metaTmp, serializeGraphMeta(metaWithSha), false);
-
-    // Sequential rename — snapshot first, then meta. If we crash between
-    // them, the loader sees a fresh snapshot whose SHA the stale meta no
-    // longer references; integrity check quarantines, build re-runs.
-    //
-    // codex round 3 P2: wrap each rename in retry-with-copy-fallback so
-    // an antivirus / Windows Search Indexer holding the live target
-    // open doesn't crash the commit. Mirrors atomicWrite's posture
-    // for the rename phase since these are the only ones that touch
-    // the canonical files.
-    const snapFinal = graphSnapshotPath(identity, cfg);
-    const metaFinal = graphMetaPath(identity, cfg);
-    commitRename(snapTmp, snapFinal);
-    commitRename(metaTmp, metaFinal);
-
+    // 0.1.10+ codex round 10 P2: ensure the live-pid commit dir is
+    // removed even when commitRename throws (atomicWrite failure on
+    // either temp file, or both rename + copy fallbacks failing on
+    // the canonical paths). Pre-fix a thrown save() left the dir
+    // behind; sweepOrphanCommitDirs only removes dead-pid dirs, so
+    // a long-lived MCP server's commitInFlight() check then
+    // suppressed all future quarantines on this repo until process
+    // restart.
     try {
-      rmSync(commitDir, { recursive: true, force: true });
-    } catch {
-      // best-effort
+      const snapTmp = join(commitDir, "snapshot.json");
+      const metaTmp = join(commitDir, "meta.json");
+
+      const snapBody = serializeGraphSnapshot(graph);
+      atomicWrite(snapTmp, snapBody, false);
+      const snapSha = sha256OfString(snapBody);
+
+      const metaWithSha: GraphMeta = { ...meta, snapshot_sha256: snapSha };
+      atomicWrite(metaTmp, serializeGraphMeta(metaWithSha), false);
+
+      // Sequential rename — snapshot first, then meta. If we crash between
+      // them, the loader sees a fresh snapshot whose SHA the stale meta no
+      // longer references; integrity check quarantines, build re-runs.
+      //
+      // codex round 3 P2: wrap each rename in retry-with-copy-fallback so
+      // an antivirus / Windows Search Indexer holding the live target
+      // open doesn't crash the commit. Mirrors atomicWrite's posture
+      // for the rename phase since these are the only ones that touch
+      // the canonical files.
+      const snapFinal = graphSnapshotPath(identity, cfg);
+      const metaFinal = graphMetaPath(identity, cfg);
+      commitRename(snapTmp, snapFinal);
+      commitRename(metaTmp, metaFinal);
+    } finally {
+      try {
+        rmSync(commitDir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
     }
   }
 }

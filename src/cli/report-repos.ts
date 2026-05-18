@@ -132,7 +132,13 @@ export const listGraphRepos = (): { repos: RepoSummary[]; unreadable_count: numb
     for (const line of raw.split("\n")) {
       if (!line) continue;
       const entry = safeParse<{ repoId?: string; repoRoot?: string }>(line);
-      if (!entry?.repoRoot) continue;
+      // codex round 10 P2: a malformed registry row with
+      // {"repoRoot":123} would otherwise reach `join(123, ...)` and
+      // throw an Error("path must be a string") that crashed the
+      // whole `tokenomy report` invocation. Skip silently instead.
+      if (!entry || typeof entry.repoRoot !== "string" || entry.repoRoot.length === 0) {
+        continue;
+      }
       const dir = join(entry.repoRoot, ".tokenomy-graph");
       if (!existsSync(dir)) continue;
       const fallbackId = typeof entry.repoId === "string" ? entry.repoId : entry.repoRoot;
