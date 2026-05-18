@@ -44,6 +44,7 @@ test("graph mcp server: exposes tools and returns focused context", async () => 
         "get_minimal_context",
         "get_pr_readiness",
         "get_review_context",
+        "health",
         "list_agent_reviews",
         "read_handoff_packet",
         "record_agent_review",

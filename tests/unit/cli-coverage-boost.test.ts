@@ -441,8 +441,12 @@ test("analyze, scan, tune, and diff run against synthetic source transcripts", a
     const tunePath = writeGolemTune(tune.state);
     assert.equal(tunePath, golemTunePath());
 
+    // Use `--since=all` instead of `--since=4w`: synthetic data is
+    // dated 2026-04-18 which falls outside a 4-week window from any
+    // run-date past 2026-05-16. Pre-fix this test became a flake
+    // that hard-failed once the calendar moved.
     const diff = await captureOut(() =>
-      runDiff(["--tool", "mcp__fake__big", "--grep", "needle", "--tokenizer=heuristic", "--since=4w"]),
+      runDiff(["--tool", "mcp__fake__big", "--grep", "needle", "--tokenizer=heuristic", "--since=all"]),
     );
     assert.equal(diff.value, 0);
     assert.match(diff.out, /applied rules:/);
@@ -789,7 +793,7 @@ test("update source command uses fake npm and preserves graph init path", async 
       const updated = await captureOut(() => runUpdate({ force: true, tag: "latest" }));
       assert.equal(updated.value, 0);
       assert.match(updated.out, /Re-staging hook \+ config \+ graph registration/);
-      assert.match(readFileSync(npmArgsFile, "utf8"), /install -g tokenomy@latest/);
+      assert.match(readFileSync(npmArgsFile, "utf8"), /install -g --ignore-scripts tokenomy@latest/);
       assert.match(readFileSync(tokenomyArgsFile, "utf8"), new RegExp(`init --graph-path=${graphPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
       assert.match(readFileSync(tokenomyArgsFile, "utf8"), /--no-build/);
     } finally {

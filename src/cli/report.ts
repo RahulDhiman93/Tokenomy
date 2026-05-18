@@ -10,6 +10,7 @@ import { collectRavenStats, type RavenStats } from "../raven/stats.js";
 import { collectGraphFreshness, type GraphFreshnessStats } from "../graph/freshness-stats.js";
 import { loadConfig } from "../core/config.js";
 import { resolveRepoId } from "../graph/repo-id.js";
+import { listGraphRepos, type RepoSummary } from "./report-repos.js";
 
 // Per-1M-token pricing (USD). Used purely to estimate $ saved for the
 // "tokens saved" column. Users can override via `tokenomy config set
@@ -42,6 +43,11 @@ export interface ReportSummary {
   // counters and the current dirty-sentinel state so users can see
   // whether the in-process worker is keeping the snapshot warm.
   graph_freshness: GraphFreshnessStats;
+  // 0.1.10+ P9a: every repo with Tokenomy state on disk, not just
+  // the cwd's. Pre-0.1.10 the report only counted the cwd's repo;
+  // users running across N repos thought Tokenomy "only tracked one".
+  repos: RepoSummary[];
+  repos_unreadable: number;
 }
 
 const readEntries = (logPath: string, since?: Date): SavingsLogEntry[] => {
@@ -127,6 +133,8 @@ export const summarize = (
     by_day: dayRanking,
     window: { first_ts: first, last_ts: last },
     raven: opts.raven ?? collectRavenStats(false),
+    repos: [],
+    repos_unreadable: 0,
     graph_freshness: opts.graph_freshness ?? {
       worker_active: false,
       rebuild_count: 0,
@@ -170,6 +178,23 @@ const renderTui = (s: ReportSummary): string => {
   lines.push(`  last rebuild:      ${gf.last_rebuild_ts ?? "—"}`);
   lines.push(`  dirty pending:     ${fmtNum(gf.dirty_files_pending)} file(s)`);
   lines.push(`  scoped stale:      ${fmtNum(gf.stale_in_scope_hits)} hit / ${fmtNum(gf.stale_in_scope_misses)} miss`);
+  lines.push("");
+  // 0.1.10+ P9a: per-repo roll-up. Surfaces every repo with Tokenomy
+  // state on disk so users with multi-repo sessions see the full
+  // picture instead of a hardcoded "1".
+  lines.push(`Repos tracked:       ${fmtNum(s.repos.length)}${s.repos_unreadable > 0 ? `   (${s.repos_unreadable} unreadable)` : ""}`);
+  if (s.repos.length > 0) {
+    const top = s.repos.slice(0, 10);
+    for (const r of top) {
+      const short = r.repoId.length > 8 ? `${r.repoId.slice(0, 8)}…` : r.repoId;
+      const built = r.last_build_at ? r.last_build_at.replace("T", " ").slice(0, 19) : "—";
+      const integ = r.integrity_ok ? "ok" : "QUARANTINE";
+      lines.push(`  ${short.padEnd(10)} ${r.repoPath.padEnd(50)} ${String(r.node_count).padStart(6)} nodes  ${built}  ${integ}`);
+    }
+    if (s.repos.length > top.length) {
+      lines.push(`  …and ${s.repos.length - top.length} more`);
+    }
+  }
   lines.push("");
   lines.push("Top tools by tokens saved");
   for (const t of s.by_tool) {
@@ -335,6 +360,9 @@ export const runReport = (opts: ReportOptions): { summary: ReportSummary; htmlPa
     // best-effort
   }
   const summary = summarize(entries, { top: opts.top, pricePerMillion, raven, graph_freshness });
+  const reposList = listGraphRepos();
+  summary.repos = reposList.repos;
+  summary.repos_unreadable = reposList.unreadable_count;
   const html = renderHtml(summary);
   const tui = renderTui(summary);
   const htmlPath = opts.out ?? join(tokenomyDir(), "report.html");

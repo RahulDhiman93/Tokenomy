@@ -12,7 +12,21 @@ import { findUsages } from "../graph/query/usages.js";
 import { isGraphStaleCheap } from "../graph/stale.js";
 import { recordScopedStaleSample } from "../graph/freshness-stats.js";
 import { resolveRepoId } from "../graph/repo-id.js";
-import { isServerModeActive, isWorkerActive, registerRepo } from "./rebuild-worker.js";
+import {
+  isServerModeActive,
+  isWorkerActive,
+  readRebuildStats,
+  registerRepo,
+} from "./rebuild-worker.js";
+import { inflightCount, inflightMax } from "./inflight.js";
+import { TOKENOMY_VERSION } from "../core/version.js";
+import {
+  graphIntegrityStatsPath,
+  graphMetaPath,
+} from "../core/paths.js";
+import { readFileSync as fsReadFileSync } from "node:fs";
+import { safeParse as healthSafeParse } from "../util/json.js";
+import { GRAPH_SCHEMA_VERSION } from "../graph/schema.js";
 import {
   clearAsyncBuildFailure,
   readAsyncBuildFailure,
@@ -282,6 +296,111 @@ const withGraphContext = <T>(
 // cross-process concurrency.
 const inFlightRebuilds = new Set<string>();
 
+// 0.1.10+ P5: server boot time, monotonic. health.uptime_ms reports
+// performance.now() - serverBootMs so a slow server can be diagnosed.
+const serverBootMs = performance.now();
+
+// 0.1.10+ P5: assemble the health response. Reads cheap state only
+// (in-memory worker map, inflight counters, on-disk integrity counter,
+// folded rebuild stats). No graph load.
+interface HealthReport {
+  worker_active: boolean;
+  last_build_ms: number;
+  schema_version: number;
+  snapshot_integrity_ok: boolean;
+  snapshot_sha256: string | null;
+  inflight: number;
+  inflight_max: number;
+  version: string;
+  uptime_ms: number;
+}
+
+const buildHealthReport = (cwd: string): QueryResult<HealthReport> => {
+  let identity: { repoId: string; repoPath: string };
+  try {
+    identity = resolveRepoId(cwd);
+  } catch {
+    identity = { repoId: cwd, repoPath: cwd };
+  }
+  let cfg: Config;
+  try {
+    cfg = loadConfig(identity.repoPath);
+  } catch {
+    cfg = loadConfig(cwd);
+  }
+  const rb = readRebuildStats(identity, cfg);
+  // Integrity: read .integrity.json if it exists. Absence is "ok=true,
+  // never seen a quarantine" rather than "broken".
+  let integrityOk = true;
+  try {
+    // 0.1.10+ codex round 9 P3: snapshot_integrity_ok must reflect
+    // CURRENT state, not cumulative mismatched count. Pre-fix any
+    // historical quarantine kept the flag false forever even after
+    // a healthy rebuild. New: compare last_quarantine_at against
+    // the meta's built_at — quarantines that pre-date the current
+    // pair are old news.
+    const integ = healthSafeParse<{
+      mismatched?: number;
+      last_quarantine_at?: string | null;
+    }>(fsReadFileSync(graphIntegrityStatsPath(identity, cfg.graph), "utf8"));
+    if (integ) {
+      // codex round 14 P2: read meta defensively. When corruption
+      // just quarantined the pair, meta.json is missing — the
+      // readFileSync throws and the outer catch would otherwise
+      // leave integrityOk at true (false positive). Treat missing
+      // meta + last_quarantine_at present as integrity FAILURE.
+      let builtAt = NaN;
+      try {
+        const meta = healthSafeParse<{ built_at?: string }>(
+          fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+        );
+        builtAt = typeof meta?.built_at === "string" ? Date.parse(meta.built_at) : NaN;
+      } catch {
+        builtAt = NaN;
+      }
+      const lastQ =
+        typeof integ.last_quarantine_at === "string"
+          ? Date.parse(integ.last_quarantine_at)
+          : NaN;
+      // Healthy when no quarantine ever fired, OR when the current
+      // built_at post-dates the most recent quarantine. Missing
+      // meta + a quarantine timestamp present means corruption was
+      // just quarantined; surface integrity FALSE.
+      if (Number.isFinite(lastQ) && (!Number.isFinite(builtAt) || builtAt <= lastQ)) {
+        integrityOk = false;
+      }
+    }
+  } catch {
+    // best-effort
+  }
+  // Snapshot sha256: pulled from meta if present.
+  let snapshotSha: string | null = null;
+  try {
+    const meta = healthSafeParse<{ snapshot_sha256?: string }>(
+      fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+    );
+    if (meta && typeof meta.snapshot_sha256 === "string") {
+      snapshotSha = meta.snapshot_sha256;
+    }
+  } catch {
+    // best-effort
+  }
+  return {
+    ok: true,
+    data: {
+      worker_active: isWorkerActive(identity.repoPath),
+      last_build_ms: rb.last_ms,
+      schema_version: GRAPH_SCHEMA_VERSION,
+      snapshot_integrity_ok: integrityOk,
+      snapshot_sha256: snapshotSha,
+      inflight: inflightCount(),
+      inflight_max: inflightMax(),
+      version: TOKENOMY_VERSION,
+      uptime_ms: Math.round(performance.now() - serverBootMs),
+    },
+  };
+};
+
 const startBackgroundRebuild = (cwd: string, cfg: Config): void => {
   let identity: { repoId: string; repoPath: string };
   try {
@@ -534,6 +653,14 @@ export const dispatchGraphTool = async (
     argPath = validated.absolute;
   }
   const effectiveCwd = argPath ?? cwd;
+
+  // 0.1.10+ P5: health tool is server-only, no graph load required.
+  // Returns a snapshot of worker/integrity/inflight state for client
+  // health probes. Skips the cross-repo registration + graph load
+  // dance entirely since the answer doesn't depend on graph data.
+  if (name === "health") {
+    return buildHealthReport(effectiveCwd);
+  }
 
   if (RAVEN_TOOLS.has(name)) {
     return dispatchRavenTool(name, args, effectiveCwd);

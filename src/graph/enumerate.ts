@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { join, posix, relative } from "node:path";
+import { basename, join, posix, relative } from "node:path";
 import type { Config } from "../core/types.js";
 import { compileGlobs, matchesAny } from "../util/glob.js";
+import { isWindowsReservedName } from "../util/win-reserved.js";
+import { getVerifiedGitBin } from "../util/git-bin.js";
 import type { FailOpen } from "./types.js";
 
 const CODE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -47,8 +49,14 @@ const isCodeFile = (relPath: string): boolean => {
 
 const enumerateViaGit = (repoPath: string): string[] | null => {
   try {
+    // 0.1.10+ P6c (codex round 7 P1): require verified git; falling
+    // back to plain "git" went through PATH unverified and defeated
+    // the hardening. When git isn't safely available we return null
+    // and the caller drops to the walk-based enumeration.
+    const gitBin = getVerifiedGitBin();
+    if (!gitBin) return null;
     const out = execFileSync(
-      "git",
+      gitBin,
       ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
       {
         cwd: repoPath,
@@ -142,6 +150,16 @@ export const enumerateGraphFilesFromRaw = (
   const skipped: string[] = [];
   for (const candidate of raw.files) {
     if (!isCodeFile(candidate)) continue;
+    // 0.1.10+ P10h: skip Windows-reserved basenames (CON, PRN, AUX,
+    // NUL, COM1-9, LPT1-9). On Windows, opening them by name talks
+    // to the console / parallel-port device instead of a file; the
+    // graph parser hangs. Cross-platform skip so a repo committed
+    // on POSIX with a reserved-name file doesn't surprise Windows
+    // users.
+    if (isWindowsReservedName(basename(candidate))) {
+      skipped.push(candidate);
+      continue;
+    }
     const abs = join(repoPath, ...candidate.split("/"));
     if (!existsSync(abs)) continue;
     try {
@@ -175,6 +193,16 @@ export const enumerateGraphFiles = (repoPath: string, cfg: Config): EnumerateFil
   const skipped: string[] = [];
   for (const candidate of raw.files) {
     if (!isCodeFile(candidate)) continue;
+    // 0.1.10+ P10h: skip Windows-reserved basenames (CON, PRN, AUX,
+    // NUL, COM1-9, LPT1-9). On Windows, opening them by name talks
+    // to the console / parallel-port device instead of a file; the
+    // graph parser hangs. Cross-platform skip so a repo committed
+    // on POSIX with a reserved-name file doesn't surprise Windows
+    // users.
+    if (isWindowsReservedName(basename(candidate))) {
+      skipped.push(candidate);
+      continue;
+    }
     const abs = join(repoPath, ...candidate.split("/"));
     if (!existsSync(abs)) continue;
     try {

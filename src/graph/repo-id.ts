@@ -1,7 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sha256String } from "./hash.js";
+import { getVerifiedGitBin } from "../util/git-bin.js";
+
+// 0.1.10+ P9g: canonicalize repo identity through realpathSync.native.
+// Pre-0.1.10 `resolve(repoPath)` returned the lexical path — a symlink
+// to the repo, or a case-variant on macOS (case-insensitive APFS),
+// produced a DIFFERENT repoId, splitting the snapshot directory and
+// the registry entry across two surfaces for one underlying repo.
+// realpath collapses both. We keep the original `repoPath` for display
+// so the user still sees the path they actually used.
+const canonicalPath = (p: string): string => {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+};
 
 export interface RepoIdentity {
   repoId: string;
@@ -32,7 +48,15 @@ const resolveGitRoot = (cwd: string): string | null => {
   }
   if (!hit) return null;
   try {
-    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    // 0.1.10+ P6c (codex round 8 P2): when git is unverified, fall
+    // back to the in-process ancestor walk (`dir` already holds the
+    // dir containing `.git`). Pre-fix we returned null and
+    // resolveRepoId then used `resolve(cwd)` — a call from a
+    // subdirectory loaded config + .tokenomy-graph from that
+    // subdir instead of the actual repo root.
+    const gitBin = getVerifiedGitBin();
+    if (!gitBin) return dir;
+    const out = execFileSync(gitBin, ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -47,7 +71,11 @@ const resolveGitRoot = (cwd: string): string | null => {
 
 export const resolveRepoId = (cwd: string): RepoIdentity => {
   const repoPath = resolveGitRoot(cwd) ?? resolve(cwd);
-  return { repoId: sha256String(resolve(repoPath)), repoPath: resolve(repoPath) };
+  const displayPath = resolve(repoPath);
+  // hash the canonical (symlink-resolved, OS-normalized) path so two
+  // accesses through different symlinks or case variants land on the
+  // same repoId.
+  return { repoId: sha256String(canonicalPath(displayPath)), repoPath: displayPath };
 };
 
 // 0.1.8+ codex round 12: non-spawning ancestor-walk repo discovery. For

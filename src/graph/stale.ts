@@ -23,6 +23,26 @@ export interface StaleStatus {
 
 export type GraphStaleResult = StaleStatus | FailOpen;
 
+// 0.1.10+ equal-mtime defense (P10b): when mtime matches the recorded
+// value, also require size + inode match if meta carries them.
+// `touch -r` restores mtime without changing content, but inode or
+// size of a modified file will differ. Pre-0.1.10 meta lacks
+// file_sizes/file_inos — caller falls back to mtime-only behavior.
+export const fileLooksUnchanged = (
+  meta: GraphMeta,
+  file: string,
+  st: { ino: number; mtimeMs: number; size: number },
+): boolean => {
+  if (meta.file_mtimes[file] !== st.mtimeMs) return false;
+  if (meta.file_sizes !== undefined && meta.file_sizes[file] !== undefined) {
+    if (meta.file_sizes[file] !== st.size) return false;
+  }
+  if (meta.file_inos !== undefined && meta.file_inos[file] !== undefined) {
+    if (meta.file_inos[file] !== st.ino) return false;
+  }
+  return true;
+};
+
 // codex round 8 P2: helper used by the sentinel fast path to merge
 // hook-recorded edits with out-of-band drift (git checkout, external
 // editor, Bash codegen). Walks every file tracked in meta.file_mtimes;
@@ -40,6 +60,11 @@ export type GraphStaleResult = StaleStatus | FailOpen;
 // caught within the window, while still amortizing tight burst-read
 // loops common in interactive agent sessions.
 const DRIFT_CACHE_TTL_MS = 750;
+// 0.1.10+ P10f: periodic sweep interval. Drift caches are queried by
+// repoPath; a user working across N repos leaves N entries that only
+// got TTL-checked on a hit-for-that-same-repo. Sweep every 5s so cold
+// entries don't leak across the process lifetime.
+const DRIFT_CACHE_SWEEP_INTERVAL_MS = 5000;
 interface DriftCacheEntry {
   ino: number;
   size: number;
@@ -63,7 +88,7 @@ const mtimeDriftFiles = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.files;
     }
@@ -71,14 +96,15 @@ const mtimeDriftFiles = (
   const drift: string[] = [];
   for (const file of Object.keys(meta.file_mtimes)) {
     const abs = join(repoPath, ...file.split("/"));
-    let cur = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      cur = statSync(abs).mtimeMs;
+      const s = statSync(abs);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       drift.push(file);
       continue;
     }
-    if (meta.file_mtimes[file] !== cur) drift.push(file);
+    if (!fileLooksUnchanged(meta, file, st)) drift.push(file);
   }
   if (sentinelStat) {
     driftCacheByRepo.set(repoPath, {
@@ -87,8 +113,9 @@ const mtimeDriftFiles = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       files: drift,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return drift;
 };
@@ -120,7 +147,7 @@ const addedFilesSince = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.files;
     }
@@ -137,8 +164,9 @@ const addedFilesSince = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       files: added,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return added;
 };
@@ -170,7 +198,7 @@ const cachedTsconfigFingerprint = (
       cached.size === sentinelStat.size &&
       cached.mtimeMs === sentinelStat.mtimeMs &&
       cached.built_at === meta.built_at &&
-      Date.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
+      performance.now() - cached.computed_at <= DRIFT_CACHE_TTL_MS
     ) {
       return cached.fingerprint;
     }
@@ -184,10 +212,44 @@ const cachedTsconfigFingerprint = (
       mtimeMs: sentinelStat.mtimeMs,
       built_at: meta.built_at,
       fingerprint: fp,
-      computed_at: Date.now(),
+      computed_at: performance.now(),
     });
+    ensureSweepTimer();
   }
   return fp;
+};
+
+// 0.1.10+ P10f: periodic sweep. Lazy-init on first cache write so a
+// short-lived CLI invocation (no caches touched → no timer) doesn't pay
+// the cost. The timer is `.unref()` so it doesn't keep the process
+// alive past natural exit.
+let sweepTimer: NodeJS.Timeout | null = null;
+const ensureSweepTimer = (): void => {
+  if (sweepTimer !== null) return;
+  sweepTimer = setInterval(() => {
+    const now = performance.now();
+    const stale = (computed_at: number): boolean =>
+      now - computed_at > DRIFT_CACHE_TTL_MS * 4;
+    for (const [k, v] of driftCacheByRepo) {
+      if (stale(v.computed_at)) driftCacheByRepo.delete(k);
+    }
+    for (const [k, v] of addedCacheByRepo) {
+      if (stale(v.computed_at)) addedCacheByRepo.delete(k);
+    }
+    for (const [k, v] of tsconfigFpCacheByRepo) {
+      if (stale(v.computed_at)) tsconfigFpCacheByRepo.delete(k);
+    }
+    if (
+      driftCacheByRepo.size === 0 &&
+      addedCacheByRepo.size === 0 &&
+      tsconfigFpCacheByRepo.size === 0 &&
+      sweepTimer !== null
+    ) {
+      clearInterval(sweepTimer);
+      sweepTimer = null;
+    }
+  }, DRIFT_CACHE_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
 };
 
 // Test affordance — clear between tests so per-repo cache doesn't bleed.
@@ -195,6 +257,10 @@ export const _resetDriftCacheForTests = (): void => {
   driftCacheByRepo.clear();
   addedCacheByRepo.clear();
   tsconfigFpCacheByRepo.clear();
+  if (sweepTimer !== null) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
+  }
 };
 
 export interface CheapStaleStatus {
@@ -232,6 +298,11 @@ export const readDirtySentinel = (
   }
   const files = new Set<string>();
   let oldest = Number.POSITIVE_INFINITY;
+  // 0.1.10+ P10c: detect drive-letter paths regardless of process
+  // platform. On POSIX, `isAbsolute("C:\\repo\\src\\a.ts")` returns
+  // false, so a Windows-written sentinel read on POSIX would fall
+  // through to relative-path handling and emit a corrupt key.
+  const isWindowsDriveAbs = (p: string): boolean => /^[A-Za-z]:[/\\]/.test(p);
   for (const line of raw.split("\n")) {
     if (!line) continue;
     const tab = line.indexOf("\t");
@@ -239,12 +310,17 @@ export const readDirtySentinel = (
     const ts = Date.parse(line.slice(0, tab));
     let file = line.slice(tab + 1).trim();
     if (!file) continue;
-    // codex round 2 P2: cross-platform path normalization. On Windows
-    // Claude Code emits `C:\repo\src\a.ts`; on POSIX `/repo/src/a.ts`.
-    // Graph nodes always use forward-slash repo-relative ids. Use
-    // node:path.isAbsolute + node:path.relative so we handle both,
-    // then convert backslashes for the comparison.
-    if (isAbsolute(file)) {
+    if (isWindowsDriveAbs(file)) {
+      // Sentinel line is a Windows absolute path. On a POSIX reader
+      // there's no meaningful mapping to repo-relative; drop it. On
+      // Windows the OS-native isAbsolute would have caught it below,
+      // but treating it explicitly keeps the path through normalize.
+      if (sep === "/") continue;
+      if (!repoPath) continue;
+      const rel = relative(repoPath, file);
+      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      file = rel;
+    } else if (isAbsolute(file)) {
       if (!repoPath) {
         // No repo context to anchor against — best to drop than to
         // produce a path that never matches a graph node.
@@ -318,14 +394,15 @@ export const getGraphStaleStatus = (
       stale.add(file);
       continue;
     }
-    let currentMtime = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      currentMtime = statSync(absPath).mtimeMs;
+      const s = statSync(absPath);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       stale.add(file);
       continue;
     }
-    if (meta.file_mtimes[file] === currentMtime) continue;
+    if (fileLooksUnchanged(meta, file, st)) continue;
     if (meta.file_hashes[file] !== sha256FileSync(absPath)) stale.add(file);
   }
 
@@ -368,7 +445,19 @@ export const isGraphStaleCheap = (
   // still happens at rebuild time, so a false-positive touch (mtime
   // bumped, content unchanged) collapses cheaply downstream.
   const sentinelPath = graphDirtySentinelPath(identity, cfg.graph);
-  if (existsSync(sentinelPath)) {
+  // 0.1.10+ P10d round-2 (codex P2): treat a zero-byte sentinel as
+  // "no drift". Pre-fix, the foreign-user EPERM truncate fallback
+  // left an empty .dirty in place — existsSync returned true and
+  // every read flagged stale → perpetual rebuild loop. An empty
+  // sentinel carries no entries; the parsed.files would be []
+  // anyway. Skip the whole fast-path in that case.
+  let sentinelSize = -1;
+  try {
+    sentinelSize = existsSync(sentinelPath) ? statSync(sentinelPath).size : -1;
+  } catch {
+    sentinelSize = -1;
+  }
+  if (sentinelSize > 0) {
     const parsed = readDirtySentinel(sentinelPath, identity.repoPath);
     // codex round 6 P3: lag_ms must distinguish "sentinel exists"
     // from "no sentinel". If oldest_ts isn't parseable (legacy
@@ -537,14 +626,15 @@ export const isGraphStaleCheap = (
       drift.add(file);
       continue;
     }
-    let currentMtime = 0;
+    let st: { ino: number; mtimeMs: number; size: number };
     try {
-      currentMtime = statSync(absPath).mtimeMs;
+      const s = statSync(absPath);
+      st = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
     } catch {
       drift.add(file);
       continue;
     }
-    if (meta.file_mtimes[file] !== currentMtime) drift.add(file);
+    if (!fileLooksUnchanged(meta, file, st)) drift.add(file);
   }
 
   const stale_files = [...drift].sort();

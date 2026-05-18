@@ -1,10 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { TOKENOMY_VERSION } from "../core/version.js";
-import { stableStringify } from "../util/json.js";
+import { compactJson } from "../util/json.js";
 import { dispatchGraphTool } from "./handlers.js";
 import { markServerModeActive, registerRepo, stopAllWorkers } from "./rebuild-worker.js";
 import { loadConfig } from "../core/config.js";
 import { resolveRepoId } from "../graph/repo-id.js";
 import { TOOL_DEFS } from "./schemas.js";
+import { acquire, configureInflight, withDeadline } from "./inflight.js";
 
 export const startGraphServer = async (cwd: string): Promise<void> => {
   const [{ Server }, { StdioServerTransport }, { CallToolRequestSchema, ListToolsRequestSchema }] =
@@ -19,17 +21,146 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     { capabilities: { tools: {} } },
   );
 
+  // 0.1.10+ P4: configure inflight cap from cfg. Cfg may be a
+  // subdir-resolved value; the resolved value lands here once, at
+  // server boot. Tests / dev users tune via `.tokenomy.json` and
+  // restart the server.
+  let bootCfgInflight = 8;
+  let bootCfgDeadlineMs = 5_000;
+  // 0.1.10+ codex round 14 P2: tools that internally trigger a
+  // full graph build (`build_or_update_graph`, and any read-path
+  // that hits ensureFreshGraph's await branch) can legitimately
+  // take longer than the 5s default. Bound them by the build
+  // timeout instead so a slow first build doesn't surface
+  // {code:"timeout"} to the client while the work continues in
+  // the background.
+  let bootCfgBuildTimeoutMs = 30_000;
+  try {
+    let cfgPath = cwd;
+    try {
+      cfgPath = resolveRepoId(cwd).repoPath;
+    } catch {
+      // best-effort
+    }
+    const bootCfg = loadConfig(cfgPath);
+    if (typeof bootCfg.mcp.max_inflight === "number") {
+      bootCfgInflight = bootCfg.mcp.max_inflight;
+    }
+    if (typeof bootCfg.mcp.tool_deadline_ms === "number") {
+      bootCfgDeadlineMs = bootCfg.mcp.tool_deadline_ms;
+    }
+    if (typeof bootCfg.graph.build_timeout_ms === "number") {
+      bootCfgBuildTimeoutMs = bootCfg.graph.build_timeout_ms;
+    }
+  } catch {
+    // best-effort — defaults stand
+  }
+  configureInflight(bootCfgInflight);
+
+  // Build-triggering tools get the longer build deadline. On a
+  // fresh or purged repo, the cacheable read tools also await
+  // buildGraph via ensureFreshGraph's `missing` branch, so they
+  // need the same generous deadline. codex round 15 P2.
+  const BUILD_TOOLS = new Set([
+    "build_or_update_graph",
+    "get_minimal_context",
+    "get_impact_radius",
+    "get_review_context",
+    "find_usages",
+  ]);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await dispatchGraphTool(
+    // 0.1.10+ P3: top-level structured-error catch. Any throw from
+    // dispatchGraphTool or its descendants is converted to a clean
+    // {ok:false, code:"internal", request_id} payload. Pre-0.1.10 a
+    // bare throw escaped to the SDK and killed the transport.
+    const request_id = randomUUID();
+    // 0.1.10+ P4: inflight cap. Overflow returns busy synchronously.
+    const slot = acquire();
+    if (slot === null) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: compactJson({
+              ok: false,
+              code: "busy",
+              retry_after_ms: 50,
+              request_id,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    // 0.1.10+ codex round 2 P2: hold the inflight slot until the
+    // inner dispatch actually settles. Pre-fix, withDeadline returns
+    // a timeout while the inner promise keeps running, and the
+    // surrounding `finally` released the slot immediately — a burst
+    // of slow queries could thus accumulate more than max_inflight
+    // actual operations, defeating the cap. Capture the underlying
+    // promise outside the race and use it to schedule the release.
+    //
+    // codex round 3 P1: use .then(release, release) instead of
+    // .finally() — pre-fix the chained finally rejected unhandled
+    // when dispatchGraphTool threw, terminating the server under
+    // Node's default unhandled-rejection behavior. The dual-arm
+    // form swallows both outcomes safely.
+    const innerPromise = dispatchGraphTool(
       request.params.name,
       request.params.arguments ?? {},
       cwd,
     );
-    return {
-      content: [{ type: "text", text: stableStringify(result) }],
-      isError: !result.ok,
-    };
+    const releaseOnce = (): void => slot.release();
+    innerPromise.then(releaseOnce, releaseOnce);
+    try {
+      // codex round 14 P2: build tools use the larger build
+      // deadline so a slow first build doesn't return {timeout}.
+      // max(...) so users explicitly tuning tool_deadline_ms up
+      // above build_timeout_ms still get the larger value.
+      const deadlineForCall = BUILD_TOOLS.has(request.params.name)
+        ? Math.max(bootCfgBuildTimeoutMs, bootCfgDeadlineMs)
+        : bootCfgDeadlineMs;
+      const outcome = await withDeadline(() => innerPromise, deadlineForCall);
+      if (outcome.kind === "timeout") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: compactJson({
+                ok: false,
+                code: "timeout",
+                elapsed_ms: outcome.elapsed_ms,
+                request_id,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      const result = outcome.value;
+      return {
+        content: [{ type: "text", text: compactJson(result) }],
+        isError: !result.ok,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text",
+            text: compactJson({
+              ok: false,
+              code: "internal",
+              message,
+              request_id,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
   });
 
   const transport = new StdioServerTransport();

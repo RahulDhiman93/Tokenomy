@@ -13,6 +13,14 @@ export const DEFAULT_CONFIG: Config = {
     max_text_bytes: 16_000,
     per_block_head: 4_000,
     per_block_tail: 2_000,
+    // 0.1.10+ P4: cap parallel tool calls so a burst of agent
+    // requests can't pile up arbitrary inflight work on the server.
+    // Overflow → {code:"busy"} immediately; agent retries.
+    max_inflight: 8,
+    // 0.1.10+ P4: per-tool wall-time deadline. Inner handlers are
+    // racey-checked at branch points; expiration returns
+    // {code:"timeout", elapsed_ms}.
+    tool_deadline_ms: 5_000,
     shape_trim: {
       enabled: true,
       max_items: 50,
@@ -122,6 +130,16 @@ export const DEFAULT_CONFIG: Config = {
       enabled: true,
       debounce_ms: 150,
     },
+    // 0.1.10+ PSEC2 (codex round 4 P2): default TRUE for back-compat.
+    // The loader still prefers Tokenomy's bundled/process-local
+    // typescript when available, but falls back to the repo's own
+    // node_modules/typescript when not. The pre-0.1.10 install
+    // path had typescript as an optional peer/dev dep — a default
+    // of false would break upgrades for users whose Tokenomy
+    // install can't find a process-local typescript. Security-
+    // sensitive deployments can flip this to false; the doctor
+    // probe surfaces which path was used per-build.
+    allow_repo_local_typescript: true,
   },
   redact: {
     enabled: true,
@@ -301,6 +319,18 @@ const applyAggression = (cfg: Config): Config => {
       max_text_bytes: Math.round(cfg.mcp.max_text_bytes * m),
       per_block_head: Math.round(cfg.mcp.per_block_head * m),
       per_block_tail: Math.round(cfg.mcp.per_block_tail * m),
+      // 0.1.10+ codex round 3 P2: carry the new inflight/deadline
+      // keys through the aggression rebuild. Pre-fix
+      // applyAggression reconstructed `mcp` without them, dropping
+      // any user-tuned values from .tokenomy.json — the documented
+      // `tokenomy config set mcp.max_inflight 16` was a no-op under
+      // the default `conservative` aggression.
+      ...(typeof cfg.mcp.max_inflight === "number"
+        ? { max_inflight: cfg.mcp.max_inflight }
+        : {}),
+      ...(typeof cfg.mcp.tool_deadline_ms === "number"
+        ? { tool_deadline_ms: cfg.mcp.tool_deadline_ms }
+        : {}),
       profiles: cfg.mcp.profiles,
       disabled_profiles: cfg.mcp.disabled_profiles,
       shape_trim: cfg.mcp.shape_trim

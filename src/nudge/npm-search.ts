@@ -146,6 +146,13 @@ const decodeHtml = (value: string): string =>
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
 
+// 0.1.10+ P6b: byte cap on registry responses. A compromised
+// registry / mirror / proxy could otherwise return arbitrarily
+// large bodies and balloon RSS during `find_oss_alternatives`.
+// 5 MB is plenty for the largest legitimate npm search payloads;
+// destroy the request once the threshold is crossed.
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
 const fetchText = (url: string, timeoutMs: number): Promise<string | null> =>
   new Promise((resolve) => {
     const req = get(url, { headers: { "user-agent": "tokenomy" } }, (res) => {
@@ -155,8 +162,24 @@ const fetchText = (url: string, timeoutMs: number): Promise<string | null> =>
         return;
       }
       const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      let total = 0;
+      let bailed = false;
+      res.on("data", (chunk: Buffer) => {
+        if (bailed) return;
+        total += chunk.length;
+        if (total > MAX_RESPONSE_BYTES) {
+          bailed = true;
+          req.destroy();
+          res.destroy();
+          resolve(null);
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on("end", () => {
+        if (bailed) return;
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
     });
     req.setTimeout(timeoutMs, () => {
       req.destroy();

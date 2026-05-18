@@ -55,7 +55,12 @@ test("graph store: saves and loads graph snapshot + meta (in-repo location)", ()
       assert.equal(existsSync(graphSnapshotPath(identity)), true);
       assert.equal(existsSync(graphMetaPath(identity)), true);
       assert.deepEqual(store.loadGraph(identity), graph);
-      assert.deepEqual(store.loadMeta(identity), meta);
+      const loaded = store.loadMeta(identity);
+      assert.ok(loaded, "loadMeta must return a value");
+      assert.ok(typeof loaded!.snapshot_sha256 === "string", "snapshot_sha256 must be set");
+      assert.equal(loaded!.snapshot_sha256!.length, 64);
+      const { snapshot_sha256: _sha, ...rest } = loaded!;
+      assert.deepEqual(rest, meta);
     } finally {
       rmSync(repoPath, { recursive: true, force: true });
     }
@@ -92,6 +97,10 @@ test("graph store: legacy 'home' location still works for escape-hatch users", (
     assert.equal(existsSync(graphSnapshotPath(identity, cfg)), true);
     assert.equal(existsSync(graphMetaPath(identity, cfg)), true);
     assert.deepEqual(store.loadGraph(identity, cfg), graph);
-    assert.deepEqual(store.loadMeta(identity, cfg), meta);
+    const loaded = store.loadMeta(identity, cfg);
+    assert.ok(loaded);
+    assert.ok(typeof loaded!.snapshot_sha256 === "string");
+    const { snapshot_sha256: _sha, ...rest } = loaded!;
+    assert.deepEqual(rest, meta);
   });
 });

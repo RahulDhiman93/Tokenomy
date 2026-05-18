@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "../core/types.js";
 import { loadConfig } from "../core/config.js";
@@ -15,6 +15,12 @@ import { buildGraph } from "../graph/build.js";
 import { safeParse } from "../util/json.js";
 import { atomicWrite } from "../util/atomic.js";
 import { appendGitignoreLine } from "../util/gitignore.js";
+import {
+  recordRebuildDelta,
+  recordWorkerActiveDelta,
+  recordWorkerInactiveDelta,
+  readFoldedStats,
+} from "../graph/freshness-stats.js";
 
 // 0.1.9+: in-process rebuild worker. Watches `<graphDir>` for changes
 // to the `.dirty` sentinel and triggers a debounced `buildGraph`. The
@@ -32,8 +38,28 @@ import { appendGitignoreLine } from "../util/gitignore.js";
 // `resolveRepoId` and is the unique key — more discriminating than
 // `repoId` under symlinks/worktrees.
 
+// 0.1.10+ P7: worker observation mode. "watch" is fs.watch-driven
+// (cheap inotify slot), "poll" is setInterval+statSync fallback for
+// hosts where fs.watch doesn't work (NFS/FUSE/SMB, EMFILE quota,
+// EBADF). "off" is the terminal state — the worker has decided this
+// repo isn't watchable and the legacy read-driven path takes over.
+export type WatcherMode = "watch" | "poll" | "off";
+
 interface WorkerEntry {
-  watcher: FSWatcher;
+  // 0.1.10+ P7: watcher may be null when the entry is in poll mode.
+  watcher: FSWatcher | null;
+  // 0.1.10+ P7: polling-mode handle. Null in watch mode.
+  pollTimer: NodeJS.Timeout | null;
+  // 0.1.10+ P7: last observed sentinel mtimeMs for the poll loop's
+  // edge-trigger. -1 = not yet observed; 0 = sentinel absent.
+  pollLastMtimeMs: number;
+  // 0.1.10+ codex round 7 P2: also track size + inode. On coarse-
+  // mtime filesystems an append to .dirty can change size only;
+  // the poll loop would otherwise miss the edit until the 60s
+  // ensureFreshGraph lag fallback.
+  pollLastSize: number;
+  pollLastIno: number;
+  mode: WatcherMode;
   timer: NodeJS.Timeout | null;
   cwd: string;
   identity: RepoIdentityLike;
@@ -53,6 +79,11 @@ interface WorkerEntry {
   build_in_flight: boolean;
   rerun_pending: boolean;
 }
+
+// 0.1.10+ P7: poll fallback interval. 500ms default — frequent enough
+// that an interactive user doesn't perceive lag, sparse enough that
+// the unref'd timer doesn't dominate CPU on idle repos.
+const POLL_INTERVAL_MS = 500;
 
 // Hard cap on consecutive retried failures before the worker gives
 // up on this repo and waits for an external signal (fresh `.dirty`
@@ -115,44 +146,39 @@ const readStats = (path: string): RebuildStats => {
   };
 };
 
+// 0.1.10+ P10e: delegate to the NDJSON-append delta logger so this
+// write doesn't race recordScopedStaleSample. Local helper kept for
+// clarity at call site.
 const recordRebuild = (
   identity: RepoIdentityLike,
   cfg: Config,
   duration_ms: number,
 ): void => {
   try {
-    const path = graphRebuildStatsPath(identity, cfg.graph);
-    const prev = readStats(path);
-    // codex round 2 P2: default missing numerics. When a scoped-stale
-    // query writes the stats file first, only `stale_in_scope_*` are
-    // populated; `prev.count` and `prev.total_ms` come back undefined
-    // and `undefined + N === NaN`. NaN serializes as null and the
-    // freshness counters silently break.
-    const prevCount = typeof prev.count === "number" ? prev.count : 0;
-    const prevTotal = typeof prev.total_ms === "number" ? prev.total_ms : 0;
-    const next: RebuildStats = {
-      count: prevCount + 1,
-      last_ms: duration_ms,
-      total_ms: prevTotal + duration_ms,
-      last_ts: new Date().toISOString(),
-      worker_active: true,
-      // codex round 1 P3: carry forward scoped-stale counters written
-      // by `recordScopedStaleSample` in freshness-stats.ts. They live
-      // in the same JSON file but on different write paths.
-      stale_in_scope_hits: prev.stale_in_scope_hits ?? 0,
-      stale_in_scope_misses: prev.stale_in_scope_misses ?? 0,
-    };
-    atomicWrite(path, JSON.stringify(next));
+    recordRebuildDelta(identity, cfg, duration_ms);
   } catch {
     // best-effort
   }
 };
 
-// Public accessor for `tokenomy report` / `analyze`.
+// Public accessor for `tokenomy report` / `analyze`. 0.1.10+ folds
+// the NDJSON delta log on top of the snapshot so concurrent writes
+// from the worker + handlers + markStatsInactive all surface.
 export const readRebuildStats = (
   identity: RepoIdentityLike,
   cfg: Config,
-): RebuildStats => readStats(graphRebuildStatsPath(identity, cfg.graph));
+): RebuildStats => {
+  const folded = readFoldedStats(identity, cfg);
+  return {
+    count: folded.count,
+    last_ms: folded.last_ms,
+    total_ms: folded.total_ms,
+    last_ts: folded.last_ts,
+    worker_active: folded.worker_active,
+    stale_in_scope_hits: folded.stale_in_scope_hits,
+    stale_in_scope_misses: folded.stale_in_scope_misses,
+  };
+};
 
 // Whether the rebuild worker is currently watching a repo. Used by
 // `ensureFreshGraph` to decide between "skip the rebuild kick, worker
@@ -161,7 +187,7 @@ export const isWorkerActive = (repoPath: string): boolean => workers.has(repoPat
 
 const triggerBuild = (entry: WorkerEntry): void => {
   if (shuttingDown) return;
-  const start = Date.now();
+  const start = performance.now();
   // codex round 7 P2: re-load config so a mid-session edit to
   // `.tokenomy.json` (e.g. raising `graph.max_files` after a
   // repo-too-large failure, or adding an exclude pattern) is honored
@@ -221,15 +247,26 @@ const triggerBuild = (entry: WorkerEntry): void => {
         // lie about server state to the next `tokenomy report`.
         if (shuttingDown) return;
         if (!workers.has(entry.identity.repoPath)) return;
-        recordRebuild(entry.identity, entry.cfg, Date.now() - start);
+        recordRebuild(entry.identity, entry.cfg, Math.round(performance.now() - start));
         // codex round 4 P2: postBuildSuccess deliberately leaves
         // `.dirty` in place when it detects a mid-build edit (the
         // inode/mtime/size guard). fs.watch may have coalesced the
         // mid-build append into a single event we already consumed,
         // so the worker can otherwise go idle while `.dirty` still
         // exists. Re-arm a follow-up build if so.
-        if (existsSync(graphDirtySentinelPath(entry.identity, entry.cfg.graph))) {
-          schedule(entry);
+        //
+        // opencode round 1 P3: gate on size > 0 — the foreign-user
+        // EPERM truncate-fallback leaves an empty `.dirty`, and
+        // rotateSentinelIfOversize can write an empty file too.
+        // Pre-fix existsSync was true for those, scheduling a
+        // useless rebuild every cycle.
+        try {
+          const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);
+          if (existsSync(sentinel) && statSync(sentinel).size > 0) {
+            schedule(entry);
+          }
+        } catch {
+          // best-effort
         }
         return;
       }
@@ -299,6 +336,84 @@ const triggerBuild = (entry: WorkerEntry): void => {
         schedule(entry);
       }
     });
+};
+
+// 0.1.10+ P7: switch this entry from watch to poll mode. Closes the
+// fs.watch handle (if any), starts a setInterval that statSyncs the
+// sentinel and schedules a rebuild on mtime change. .unref() so the
+// timer doesn't keep the process alive.
+const switchToPollMode = (entry: WorkerEntry): void => {
+  if (entry.mode === "poll" && entry.pollTimer !== null) return;
+  if (entry.watcher) {
+    try {
+      entry.watcher.close();
+    } catch {
+      // best-effort
+    }
+    entry.watcher = null;
+  }
+  entry.mode = "poll";
+  entry.pollLastMtimeMs = -1;
+  entry.pollLastSize = -1;
+  entry.pollLastIno = -1;
+  // 0.1.10+ codex round 9 P3: watcher.on("error") records
+  // worker_active:false BEFORE calling here; the polling worker is
+  // still very much alive, so re-flip the flag back to true.
+  // Otherwise tokenomy report shows inactive for repos that fell
+  // back to polling mid-session.
+  try {
+    recordWorkerActiveDelta(entry.identity, entry.cfg);
+  } catch {
+    // best-effort
+  }
+  const tick = (): void => {
+    if (shuttingDown) return;
+    const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);
+    let stat: { mtimeMs: number; size: number; ino: number } | null = null;
+    try {
+      if (existsSync(sentinel)) {
+        const s = statSync(sentinel);
+        // codex round 10 P2: treat zero-byte sentinels as absent —
+        // empty `.dirty` from EPERM/truncate recovery or
+        // rotateSentinelIfOversize otherwise schedules useless
+        // rebuilds in poll mode every tick. The non-poll paths
+        // already gate on size > 0 (worker re-arm, fs.watch event,
+        // registerRepo bootstrap).
+        if (s.size > 0) {
+          stat = { mtimeMs: s.mtimeMs, size: s.size, ino: s.ino };
+        }
+      }
+    } catch {
+      stat = null;
+    }
+    if (stat === null) {
+      // 0.1.10+ codex round 5 P2: sentinel disappeared (rebuild
+      // cleared it). Reset the watermark so a future edit that
+      // happens to recreate .dirty with the same mtime (coarse-mtime
+      // filesystems) still schedules.
+      entry.pollLastMtimeMs = 0;
+      entry.pollLastSize = 0;
+      entry.pollLastIno = 0;
+      return;
+    }
+    // 0.1.10+ codex round 7 P2: trigger on ANY of mtime / size /
+    // ino change. Coarse-mtime filesystems can return identical
+    // mtimeMs across appends to the same file; size catches those.
+    // inode change covers rotation/replace (markGraphDirty's cap
+    // path atomicWrites a new file).
+    if (
+      stat.mtimeMs !== entry.pollLastMtimeMs ||
+      stat.size !== entry.pollLastSize ||
+      stat.ino !== entry.pollLastIno
+    ) {
+      entry.pollLastMtimeMs = stat.mtimeMs;
+      entry.pollLastSize = stat.size;
+      entry.pollLastIno = stat.ino;
+      schedule(entry);
+    }
+  };
+  entry.pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+  entry.pollTimer.unref();
 };
 
 const schedule = (entry: WorkerEntry): void => {
@@ -403,7 +518,8 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
     // best-effort
   }
 
-  let watcher: FSWatcher;
+  let watcher: FSWatcher | null = null;
+  let initialMode: WatcherMode = "watch";
   try {
     watcher = watch(dir, { persistent: false }, (_event, filename) => {
       // codex round 6 P2: filename CAN be null on some platforms
@@ -422,32 +538,70 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
       // schedule a redundant no-op rebuild after every successful
       // build — costly on large graphs. Only schedule when the
       // sentinel actually exists at event time.
-      if (!existsSync(graphDirtySentinelPath(identity, cfg.graph))) return;
+      // opencode round 1 P3: size > 0 — see explanation in the
+      // worker re-arm path above.
+      try {
+        const sentinel = graphDirtySentinelPath(identity, cfg.graph);
+        if (!existsSync(sentinel) || statSync(sentinel).size === 0) return;
+      } catch {
+        return;
+      }
       const entry = workers.get(identity.repoPath);
       if (entry) schedule(entry);
     });
-  } catch {
-    // fs.watch failed (unsupported FS, EMFILE, etc). Leave the repo
-    // unwatched; ensureFreshGraph's legacy path will keep working.
-    return;
+  } catch (err) {
+    // 0.1.10+ P7: classify fs.watch failure and fall back to polling
+    // on hosts where the kernel can't help us (EMFILE inotify quota,
+    // EBADF transient, ENOSPC out-of-watches, ENOTSUP on certain
+    // network mounts). Pre-0.1.10 we'd unregister and let the legacy
+    // read-driven path take over; polling keeps the worker writing
+    // freshness samples and serving the lag-aware fast-path.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EMFILE" || code === "ENOSPC") {
+      // Surface inotify-quota hits to the async-failure sentinel so
+      // doctor / report can show the actionable hint.
+      try {
+        writeAsyncBuildFailure(
+          identity,
+          {
+            ts: new Date().toISOString(),
+            reason: "inotify-quota",
+            hint: "raise fs.inotify.max_user_watches and restart the server",
+          },
+          cfg.graph,
+        );
+      } catch {
+        // best-effort
+      }
+    }
+    initialMode = "poll";
+    watcher = null;
   }
 
-  watcher.on("error", () => {
-    // Best-effort: drop this repo so the legacy read-driven path
-    // takes over rather than us silently sitting on a broken watcher.
-    // codex round 3 P2: also flip stats to inactive — otherwise
-    // `tokenomy report`/analyze keeps claiming the worker is alive
-    // after fs.watch errored out.
-    try {
-      markStatsInactive(identity, cfg);
-    } catch {
-      // best-effort
-    }
-    unregisterRepo(identity.repoPath);
-  });
+  if (watcher !== null) {
+    watcher.on("error", () => {
+      // Best-effort: drop into polling rather than unregistering. A
+      // single fs.watch error in a long session usually means the
+      // kernel handle got invalidated (rename, remount); polling
+      // keeps the freshness signal alive until the worker can
+      // re-bind on the next registerRepo.
+      try {
+        markStatsInactive(identity, cfg);
+      } catch {
+        // best-effort
+      }
+      const entry = workers.get(identity.repoPath);
+      if (entry) switchToPollMode(entry);
+    });
+  }
 
   const entry: WorkerEntry = {
     watcher,
+    pollTimer: null,
+    pollLastMtimeMs: -1,
+    pollLastSize: -1,
+    pollLastIno: -1,
+    mode: initialMode,
     timer: null,
     cwd,
     identity,
@@ -457,6 +611,7 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
     rerun_pending: false,
   };
   workers.set(identity.repoPath, entry);
+  if (initialMode === "poll") switchToPollMode(entry);
 
   // codex round 4 P3: mark worker_active=true in the stats file at
   // registration so `tokenomy report` / `analyze` show the worker as
@@ -477,6 +632,12 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
       stale_in_scope_misses: prev.stale_in_scope_misses ?? 0,
     };
     atomicWrite(statsPath, JSON.stringify(next));
+    // codex round 2 P2: also append a worker_active:true delta to
+    // the NDJSON log. The folded reader replays the log AFTER the
+    // snapshot, so a previous-session shutdown's worker_active:false
+    // delta would otherwise stick across restarts until the next
+    // rebuild fired its own worker_active:true delta.
+    recordWorkerActiveDelta(identity, cfg);
   } catch {
     // best-effort
   }
@@ -487,7 +648,11 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
   // only reports FUTURE changes, so without this kick the sentinel
   // would sit forever and every read would observe stale data.
   try {
-    if (existsSync(graphDirtySentinelPath(identity, cfg.graph))) {
+    // opencode round 1 P3: empty sentinel doesn't represent a real
+    // pending edit — see size-guard rationale in the worker re-arm
+    // and fs.watch event paths.
+    const sentinel = graphDirtySentinelPath(identity, cfg.graph);
+    if (existsSync(sentinel) && statSync(sentinel).size > 0) {
       schedule(entry);
     }
   } catch {
@@ -499,10 +664,13 @@ export const unregisterRepo = (repoPath: string): void => {
   const entry = workers.get(repoPath);
   if (!entry) return;
   if (entry.timer) clearTimeout(entry.timer);
-  try {
-    entry.watcher.close();
-  } catch {
-    // best-effort
+  if (entry.pollTimer) clearInterval(entry.pollTimer);
+  if (entry.watcher) {
+    try {
+      entry.watcher.close();
+    } catch {
+      // best-effort
+    }
   }
   workers.delete(repoPath);
 };
@@ -539,12 +707,7 @@ export const markStatsInactive = (
   cfg: Config,
 ): void => {
   try {
-    const path = graphRebuildStatsPath(identity, cfg.graph);
-    if (!existsSync(path)) return;
-    const cur = readStats(path);
-    cur.worker_active = false;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(cur));
+    recordWorkerInactiveDelta(identity, cfg);
   } catch {
     // best-effort
   }

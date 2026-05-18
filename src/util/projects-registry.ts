@@ -1,4 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { projectsRegistryPath } from "../core/paths.js";
 import { safeParse } from "./json.js";
@@ -69,6 +75,27 @@ const dedupe = (entries: ProjectRegistryEntry[]): ProjectRegistryEntry[] => {
   return [...merged.values()];
 };
 
+// 0.1.10+ P12d: compaction threshold. When the registry grows past
+// this many bytes, the next read folds dedupe into the on-disk
+// representation. Pre-0.1.10 the append-only file could hold tens of
+// thousands of rows across years of project work; listProjects()
+// re-parsed every line on every call.
+const REGISTRY_COMPACT_BYTES = 1_048_576;
+
+// 0.1.10+ codex round 4 P2: lazy compaction removed from the
+// listProjects path. The previous lock-file approach only blocked
+// other compactors, not concurrent registerProject appends — a
+// register landing after readRaw but before atomicWrite would have
+// its row lost when the compacted body replaced the file. Without
+// an OS-level shared/exclusive lock primitive (Node has no flock),
+// safe in-process compaction would need to teach registerProject
+// to coordinate, which breaks its current append-only guarantee.
+// Defer compaction to a future dedicated CLI command (e.g.
+// `tokenomy projects compact`) that runs out of band of any live
+// MCP server, so writers and readers stay race-free. listProjects
+// already dedupes on read; the worst impact of unbounded growth is
+// extra parse cost on `tokenomy doctor --all-repos`, not data loss.
+
 // 0.1.8+: register / refresh a project. Idempotent on `repoRoot`. Appends
 // a single line; readers dedupe latest-wins.
 export const registerProject = (
@@ -84,6 +111,9 @@ export const registerProject = (
       ...(entry.last_built_at ? { last_built_at: entry.last_built_at } : {}),
       ...(entry.raven_enabled !== undefined ? { raven_enabled: entry.raven_enabled } : {}),
     };
+    // 0.1.10+ P12d: appendFileSync is atomic for sub-PIPE_BUF writes
+    // on POSIX (rows are ~150 bytes). Concurrent registerProject
+    // calls from parallel processes interleave safely.
     appendFileSync(path, JSON.stringify(row) + "\n");
   } catch {
     // best-effort; registry write must never block the caller

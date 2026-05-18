@@ -91,7 +91,7 @@ export const scan = async (
   emit: (call: ToolCall) => void,
 ): Promise<{ files: number; lines: number; bytes: number; elapsed_ms: number }> => {
   const files = enumerateTranscripts(opts.roots);
-  const start = Date.now();
+  const start = performance.now();
   let lineCount = 0;
   let byteCount = 0;
   let processed = 0;
@@ -126,7 +126,7 @@ export const scan = async (
           file_index: i + 1,
           file_total: files.length,
           bytes_read: byteCount,
-          elapsed_ms: Date.now() - start,
+          elapsed_ms: Math.round(performance.now() - start),
         });
       }
     }
@@ -136,7 +136,7 @@ export const scan = async (
     files: processed,
     lines: lineCount,
     bytes: byteCount,
-    elapsed_ms: Date.now() - start,
+    elapsed_ms: Math.round(performance.now() - start),
   };
 };
 

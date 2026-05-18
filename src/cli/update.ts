@@ -313,12 +313,46 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
   }
 
   process.stdout.write(`Installing tokenomy@${target} globally…\n`);
-  const install = runNpm(["install", "-g", `tokenomy@${target}`], true);
+  // 0.1.10+ PSEC1: --ignore-scripts. A compromised registry or any
+  // transitive dep with a pre/postinstall lifecycle script would
+  // otherwise execute under the user's shell. Tokenomy never depends
+  // on install scripts in its own package; pinning them off costs
+  // nothing and closes the RCE surface.
+  const install = runNpm(["install", "-g", "--ignore-scripts", `tokenomy@${target}`], true);
   if (install.status !== 0) {
     process.stderr.write(
-      `tokenomy update: \`npm install -g tokenomy@${target}\` exited ${install.status}.\n`,
+      `tokenomy update: \`npm install -g --ignore-scripts tokenomy@${target}\` exited ${install.status}.\n`,
     );
     return install.status;
+  }
+
+  // 0.1.10+ PSEC1: verify the installed version matches the target.
+  // npm ls -g prints the resolved version; mismatch (e.g. dist-tag
+  // moved between resolve + install) gets surfaced so the user can
+  // re-run rather than silently running an unexpected build.
+  const lsResult = runNpm(["ls", "-g", "--json", "--depth=0", "tokenomy"], false, 10_000);
+  if (lsResult.status === 0) {
+    try {
+      const parsed = JSON.parse(lsResult.stdout) as {
+        dependencies?: Record<string, { version?: string }>;
+      };
+      const installedVersion = parsed?.dependencies?.tokenomy?.version;
+      if (typeof installedVersion === "string" && resolved && installedVersion !== resolved) {
+        // 0.1.10+ codex round 16 P2: bail before re-init. Pre-fix
+        // we logged a warning and still spawned `tokenomy init`,
+        // which would stage the mismatched package the
+        // verification just flagged — leaving the user on an
+        // unexpected build (e.g. dist-tag moved between resolve
+        // and install).
+        process.stderr.write(
+          `tokenomy update: version-mismatch — expected ${resolved}, got ${installedVersion}. ` +
+            "Re-run `tokenomy update` to converge; skipping re-init this round.\n",
+        );
+        return 1;
+      }
+    } catch {
+      // best-effort
+    }
   }
 
   // Restage hook so the fresh dist/ under ~/.tokenomy/bin/dist/ reflects

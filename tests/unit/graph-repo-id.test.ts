@@ -25,8 +25,12 @@ test("graph repo id: falls back to cwd outside git", () => {
   const dir = mkdtempSync(join(tmpdir(), "tokenomy-repo-id-"));
   try {
     const result = resolveRepoId(dir);
+    // 0.1.10+ P9g: repoPath stays at the lexical path the user
+    // supplied so display surfaces show what the user typed. repoId
+    // hashes the realpath so symlink + macOS case variants collapse
+    // to one identity.
     assert.equal(result.repoPath, resolve(dir));
-    assert.equal(result.repoId, sha256String(resolve(dir)));
+    assert.equal(result.repoId, sha256String(realpathSync(dir)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

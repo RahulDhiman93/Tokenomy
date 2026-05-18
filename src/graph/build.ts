@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../core/types.js";
 import {
@@ -10,6 +10,7 @@ import {
   type StorageLocationConfig,
 } from "../core/paths.js";
 import { TOKENOMY_VERSION } from "../core/version.js";
+import { maybeCompactRebuildStats } from "./freshness-stats.js";
 import { enumerateAllFiles, enumerateGraphFiles } from "./enumerate.js";
 import { fingerprintExcludes } from "./exclude-fingerprint.js";
 import { computeTsconfigFingerprint } from "./tsconfig-fingerprint.js";
@@ -82,6 +83,48 @@ const buildOwnerMap = (nodes: Node[]): Map<string, string> => {
 // Stale expansion: stale files + any file whose prior edges point INTO a
 // stale file (direct importer). Catches renamed/deleted exports whose
 // importers would otherwise keep dangling edges.
+// TOCTOU guard for per-file reads. Stats + hashes + reads + re-stats the
+// file; if any of {ino,mtimeMs,size} differs across the read, retries
+// once. Second instability returns ok:false with reason
+// "unstable-during-build" so the caller surfaces a parse_error and
+// leaves `.dirty` in place for the next build to pick up.
+const safeReadStable = (
+  absPath: string,
+): { ok: true; source: string; sha: string; stat: { ino: number; mtimeMs: number; size: number } } | { ok: false; reason: string } => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let st1: { ino: number; mtimeMs: number; size: number };
+    try {
+      const s = statSync(absPath);
+      st1 = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
+    } catch (e) {
+      return { ok: false, reason: `stat failed: ${(e as Error).message}` };
+    }
+    let sha: string;
+    try {
+      sha = sha256FileSync(absPath);
+    } catch (e) {
+      return { ok: false, reason: `hash failed: ${(e as Error).message}` };
+    }
+    let source: string;
+    try {
+      source = readFileSync(absPath, "utf8");
+    } catch (e) {
+      return { ok: false, reason: `read failed: ${(e as Error).message}` };
+    }
+    let st2: { ino: number; mtimeMs: number; size: number };
+    try {
+      const s = statSync(absPath);
+      st2 = { ino: s.ino, mtimeMs: s.mtimeMs, size: s.size };
+    } catch (e) {
+      return { ok: false, reason: `stat failed: ${(e as Error).message}` };
+    }
+    if (st1.ino === st2.ino && st1.mtimeMs === st2.mtimeMs && st1.size === st2.size) {
+      return { ok: true, source, sha, stat: st1 };
+    }
+  }
+  return { ok: false, reason: "unstable-during-build" };
+};
+
 const expandStaleWithImporters = (
   edges: Edge[],
   staleSet: Set<string>,
@@ -109,8 +152,10 @@ const deltaBuildFromSnapshot = async (
   const repoId = identity.repoId;
   const repoPath = identity.repoPath;
   try {
-    const deadline = Date.now() + cfg.graph.build_timeout_ms;
-    const tsLoaded = await loadTypescript(repoPath);
+    const deadline = performance.now() + cfg.graph.build_timeout_ms;
+    const tsLoaded = await loadTypescript(repoPath, {
+    allowRepoLocal: cfg.graph.allow_repo_local_typescript === true,
+  });
     if (!tsLoaded.ok) return tsLoaded;
 
     const staleSet = new Set(staleFiles);
@@ -162,41 +207,31 @@ const deltaBuildFromSnapshot = async (
     // getGraphStaleStatus puts them in stale_files.
     const file_hashes: Record<string, string> = { ...prevMeta.file_hashes };
     const file_mtimes: Record<string, number> = { ...prevMeta.file_mtimes };
-    // Drop hashes for removed files so the new meta is accurate.
+    const file_sizes: Record<string, number> = { ...(prevMeta.file_sizes ?? {}) };
+    const file_inos: Record<string, number> = { ...(prevMeta.file_inos ?? {}) };
+    // Drop entries for removed files so the new meta is accurate.
     for (const f of Object.keys(file_hashes)) if (!allFileSet.has(f)) delete file_hashes[f];
     for (const f of Object.keys(file_mtimes)) if (!allFileSet.has(f)) delete file_mtimes[f];
+    for (const f of Object.keys(file_sizes)) if (!allFileSet.has(f)) delete file_sizes[f];
+    for (const f of Object.keys(file_inos)) if (!allFileSet.has(f)) delete file_inos[f];
 
     const addedNodes: Node[] = [];
     const addedEdges: Edge[] = [];
     const addedErrors: Graph["parse_errors"] = [];
     const localSkipped: string[] = [];
     for (const file of expanded) {
-      if (Date.now() > deadline) return fail("timeout");
+      if (performance.now() > deadline) return fail("timeout");
       const absPath = join(repoPath, ...file.split("/"));
-      // 0.1.8+: every per-file IO step is now best-effort. Pre-0.1.8 a
-      // mid-build rebase/rm would throw out of statSync/sha256/read and
-      // abort the whole delta. Codex round 1 catch.
-      let st;
-      try {
-        st = statSync(absPath);
-      } catch (e) {
-        addedErrors.push({ file, message: `stat failed: ${(e as Error).message}` });
+      const safe = safeReadStable(absPath);
+      if (!safe.ok) {
+        addedErrors.push({ file, message: safe.reason });
         continue;
       }
-      try {
-        file_hashes[file] = sha256FileSync(absPath);
-      } catch (e) {
-        addedErrors.push({ file, message: `hash failed: ${(e as Error).message}` });
-        continue;
-      }
-      file_mtimes[file] = st.mtimeMs;
-      let source: string;
-      try {
-        source = readFileSync(absPath, "utf8");
-      } catch (e) {
-        addedErrors.push({ file, message: `read failed: ${(e as Error).message}` });
-        continue;
-      }
+      file_hashes[file] = safe.sha;
+      file_mtimes[file] = safe.stat.mtimeMs;
+      file_sizes[file] = safe.stat.size;
+      file_inos[file] = safe.stat.ino;
+      const source: string = safe.source;
       // 0.1.8+: per-file extraction is best-effort. A single bad file
       // (parser crash, malformed source) must not abort the whole delta.
       let extracted: ReturnType<typeof extractTsFileGraph>;
@@ -265,6 +300,8 @@ const deltaBuildFromSnapshot = async (
       edge_count: graph.edges.length,
       file_hashes,
       file_mtimes,
+      file_sizes,
+      file_inos,
       soft_cap: cfg.graph.max_files,
       hard_cap: cfg.graph.hard_max_files,
       parse_error_count: graph.parse_errors.length,
@@ -401,16 +438,20 @@ const buildGraphFromFiles = async (
 ): Promise<BuildGraphResult> => {
   const repoId = identity.repoId;
   const repoPath = identity.repoPath;
-  const tsLoaded = await loadTypescript(repoPath);
+  const tsLoaded = await loadTypescript(repoPath, {
+    allowRepoLocal: cfg.graph.allow_repo_local_typescript === true,
+  });
   if (!tsLoaded.ok) return tsLoaded;
 
-  const deadline = Date.now() + cfg.graph.build_timeout_ms;
+  const deadline = performance.now() + cfg.graph.build_timeout_ms;
   const fileSet = new Set(files);
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const parse_errors: Graph["parse_errors"] = [];
   const file_hashes: Record<string, string> = {};
   const file_mtimes: Record<string, number> = {};
+  const file_sizes: Record<string, number> = {};
+  const file_inos: Record<string, number> = {};
 
   // Build the tsconfig-paths resolver once per build, share across every
   // file's extraction. Skipped when disabled or when TypeScript isn't
@@ -432,32 +473,18 @@ const buildGraphFromFiles = async (
 
   const localSkipped: string[] = [];
   for (const file of files) {
-    if (Date.now() > deadline) return fail("timeout");
+    if (performance.now() > deadline) return fail("timeout");
     const absPath = join(repoPath, ...file.split("/"));
-    let st;
-    try {
-      st = statSync(absPath);
-    } catch (e) {
-      // 0.1.8+: file enumerated but vanished mid-build (rebase, rm). Don't
-      // abort the whole graph — record + continue.
-      parse_errors.push({ file, message: `stat failed: ${(e as Error).message}` });
+    const safe = safeReadStable(absPath);
+    if (!safe.ok) {
+      parse_errors.push({ file, message: safe.reason });
       continue;
     }
-    try {
-      file_hashes[file] = sha256FileSync(absPath);
-    } catch (e) {
-      // 0.1.8+ codex round 2: same per-file resilience as delta path.
-      parse_errors.push({ file, message: `hash failed: ${(e as Error).message}` });
-      continue;
-    }
-    file_mtimes[file] = st.mtimeMs;
-    let source: string;
-    try {
-      source = readFileSync(absPath, "utf8");
-    } catch (e) {
-      parse_errors.push({ file, message: `read failed: ${(e as Error).message}` });
-      continue;
-    }
+    file_hashes[file] = safe.sha;
+    file_mtimes[file] = safe.stat.mtimeMs;
+    file_sizes[file] = safe.stat.size;
+    file_inos[file] = safe.stat.ino;
+    const source: string = safe.source;
     // 0.1.8+: per-file extraction is best-effort. Single bad file (parser
     // crash, malformed source) must not abort the whole build.
     let extracted: ReturnType<typeof extractTsFileGraph>;
@@ -514,6 +541,8 @@ const buildGraphFromFiles = async (
     edge_count: graph.edges.length,
     file_hashes,
     file_mtimes,
+    file_sizes,
+    file_inos,
     soft_cap: cfg.graph.max_files,
     hard_cap: cfg.graph.hard_max_files,
     parse_error_count: graph.parse_errors.length,
@@ -636,6 +665,13 @@ const postBuildSuccess = (
   startSnap: DirtySnapshot | null,
 ): void => {
   postBuildHousekeeping(identity, cfg);
+  // 0.1.10+ P10e: fold the NDJSON delta log into the snapshot when it
+  // crosses 1MB. Best-effort; failure leaves the log in place.
+  try {
+    maybeCompactRebuildStats(identity, cfg);
+  } catch {
+    // best-effort
+  }
   try {
     const dirty = graphDirtySentinelPath(identity, cfg.graph);
     if (existsSync(dirty)) {
@@ -653,7 +689,48 @@ const postBuildSuccess = (
         cur.ino === startSnap.ino &&
         cur.mtimeMs === startSnap.mtimeMs &&
         cur.size === startSnap.size;
-      if (unchanged) rmSync(dirty, { force: true });
+      if (unchanged) {
+        // 0.1.10+ P10d: foreign-user .dirty. When the sentinel was
+        // written by another uid (e.g. root from a CI hook, or sudo)
+        // rmSync raises EPERM and the sentinel never clears — every
+        // subsequent read flags stale, every read triggers a rebuild,
+        // every rebuild can't clear, and the loop never exits.
+        // Fall back to truncating the file via writeFileSync, which
+        // only needs write perms (not unlink perms). On hard EPERM
+        // surface a one-shot stderr note so the user can fix the owner.
+        try {
+          rmSync(dirty, { force: true });
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code === "EPERM" || code === "EACCES") {
+            // 0.1.10+ codex round 5 P2: rename the foreign-owned
+            // sentinel out of the way instead of truncating in place.
+            // A zero-byte .dirty still triggers worker registration,
+            // fs.watch/poll gates, and reflectPostBuildSentinel's
+            // existsSync — pre-fix the EPERM recovery continued the
+            // very loop it was meant to break. renameSync only needs
+            // write perm on the parent dir, not on the file, so a
+            // foreign-owned sentinel can still be moved aside.
+            const aside = `${dirty}.foreign-${process.pid}-${Date.now()}`;
+            try {
+              renameSync(dirty, aside);
+            } catch {
+              // renameSync also failed — fall back to truncate as
+              // the least-bad option and log so doctor can surface.
+              try {
+                writeFileSync(dirty, "");
+              } catch {
+                // empty
+              }
+              process.stderr.write(
+                `[tokenomy] sentinel-clear-failed-eperm: ${dirty} — chown to current user to resolve\n`,
+              );
+            }
+          } else {
+            throw e;
+          }
+        }
+      }
       // Else: leave it. The next rebuild cycle (read-side or worker) picks up.
     }
   } catch {
@@ -668,7 +745,7 @@ const postBuildSuccess = (
 };
 
 export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraphResult> => {
-  const start = Date.now();
+  const start = performance.now();
   const identity = resolveRepoId(options.cwd);
   const store = new JsonGraphStore();
 
@@ -744,7 +821,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
               node_count: existingMeta.node_count,
               edge_count: existingMeta.edge_count,
               parse_error_count: existingMeta.parse_error_count,
-              duration_ms: Date.now() - start,
+              duration_ms: Math.round(performance.now() - start),
               skipped_files: existingMeta.skipped_files ?? [],
             },
           };
@@ -776,7 +853,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
                 options.config,
               );
               if (delta.ok) {
-                delta.data.duration_ms = Date.now() - start;
+                delta.data.duration_ms = Math.round(performance.now() - start);
                 logGraphBuild(identity, delta, options.config.graph);
                 // 0.1.8+ codex round 2: clear `.dirty` + async-failure
                 // here too. Pre-fix the delta path returned BEFORE the
@@ -813,7 +890,7 @@ export const buildGraph = async (options: BuildGraphOptions): Promise<BuildGraph
       logGraphBuild(identity, built, options.config.graph);
       return built;
     }
-    built.data.duration_ms = Date.now() - start;
+    built.data.duration_ms = Math.round(performance.now() - start);
     logGraphBuild(identity, built, options.config.graph);
     // 0.1.8+: shared post-success cleanup (housekeeping + `.dirty` +
     // async-failure clear). See postBuildSuccess.

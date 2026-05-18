@@ -94,7 +94,14 @@ export const runAnalyze = async (opts: AnalyzeOptions): Promise<number> => {
     since = new Date(Date.now() - DEFAULT_SINCE_DAYS * 86_400_000);
   }
   const tokenizerChoice = opts.tokenizer ?? "auto";
-  const colorEnabled = opts.color !== false && process.stdout.isTTY === true;
+  // 0.1.10+ P10i: respect NO_COLOR + --no-color in addition to the
+  // per-call `opts.color` flag and the TTY detection that already
+  // existed.
+  const colorEnabled =
+    opts.color !== false &&
+    process.env["NO_COLOR"] === undefined &&
+    !process.argv.includes("--no-color") &&
+    process.stdout.isTTY === true;
   const width = typeof process.stdout.columns === "number" ? process.stdout.columns : 100;
   const verbose = opts.verbose === true;
 

@@ -12,6 +12,233 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-05-17
+
+Reliability + availability bump. Two independent reviews (opencode qwen
+3.6+ and codex CLI) plus internal audit drove the work. Sixteen phases
+shipped on branch `feat/reliability-0.1.10`. Several plan phases
+deferred to follow-ups (P4b cross-process build lock, P6b/P6c OSS +
+git lockdown, P7 watcher self-heal, P8/P9 batches, P10 keepalive,
+P11/P12).
+
+### Security (RCE surface)
+
+- **PSEC1 — Self-update `--ignore-scripts` + verify.**
+  `tokenomy update` now passes `--ignore-scripts` to `npm install -g`
+  so a registry compromise or any transitive dep with a pre/postinstall
+  lifecycle script cannot execute under the user's shell. Post-install
+  runs `npm ls -g --json tokenomy` and warns on version mismatch.
+- **PSEC2 — Repo-local TypeScript trust gate.** The graph builder now
+  prefers Tokenomy's bundled/process-local `typescript` over the
+  repo's own `node_modules/typescript`. Repo-local resolution is the
+  fallback when bundled is missing, controlled by
+  `cfg.graph.allow_repo_local_typescript` (default true so prod
+  installs without bundled TS keep working; codex round 4 flip from
+  the initial opt-in default). Security-sensitive deployments
+  lock down with `tokenomy config set graph.allow_repo_local_typescript
+  false`. `loadTypescript` result carries
+  `source: "bundled" | "repo-local"` so doctor / health surface the
+  path used per build.
+
+### Storage atomicity
+
+- **P1 — atomicWrite retry + EPERM fallback.** `atomicWrite` wraps
+  both `writeFileSync` and `renameSync` in a synchronous retry loop
+  (50/150/300 ms) on `EAGAIN`, `EBUSY`, `ETXTBSY`, `EPERM`, `EACCES`,
+  `EMFILE`. After three rename failures (Windows antivirus / Search
+  indexer holding the target open), falls back to `copyFileSync` +
+  `unlinkSync`. Target gets `fsync` after rename for power-loss
+  durability. Structured `AtomicWriteError` on hard failure; tmp
+  cleanup on every path. Test seam `_internal` lets tests stub fs.
+- **P2 — Storage integrity: paired commit + SHA + identity check +
+  quarantine.** `JsonGraphStore.save` writes snapshot + meta to a
+  per-build `<graphDir>/.commit-<pid>-<rand>/` temp dir, computes
+  `snapshot_sha256` over the serialized snapshot bytes, embeds it in
+  meta, then renames both into place. Crash between renames produces
+  a fresh snapshot + stale meta — the loader's SHA check quarantines
+  the pair to `<graphDir>/.corrupt/<iso>/` and the next build runs
+  fresh. Loader also verifies `meta.repo_id === current identity` so
+  a `.tokenomy-graph` copied between repos gets quarantined. Orphan
+  `.commit-<dead-pid>-*/` dirs are swept on the next save (alive-pid
+  guard prevents self-deletion). New `<graphDir>/.integrity.json`
+  rolling counter (verified, mismatched, quarantined_total,
+  last_quarantine_at). Pre-0.1.10 meta without `snapshot_sha256`
+  loads fine — triggers a one-time rebuild, not a quarantine.
+- **P2b — Schema forward-compat.** `MIN_SUPPORTED_SCHEMA_VERSION` /
+  `MAX_KNOWN_SCHEMA_VERSION` band in `graph/schema.ts`. Versions
+  below MIN quarantine; above MAX_KNOWN log a warn but attempt to
+  parse so future-version snapshots fail gracefully.
+
+### Build correctness
+
+- **P10b — Build-time TOCTOU guard + equal-mtime defense.**
+  `safeReadStable(absPath)` does stat → sha → read → stat and
+  verifies inode/mtime/size stability across the read; mutates
+  mid-read retry once, then surface `parse_error reason:
+  "unstable-during-build"` and keep `.dirty` for the next cycle.
+  Meta persists `file_sizes` + `file_inos`; the cheap stale check's
+  equality test now requires all three match when meta carries them.
+  Defends against `touch -r` content edits and rotation/replace
+  patterns that left mtime equal but bytes different.
+- **P10c — Sentinel cap + drive-letter normalize.** `markGraphDirty`
+  rotates `<graphDir>/.dirty` when it grows beyond 1 MB — parses,
+  dedupes, keeps the most recent 10 000 entries, atomicWrites back.
+  A failed-build loop no longer grows the sentinel without bound.
+  `readDirtySentinel` now recognizes Windows-absolute paths (`C:\...`,
+  `c:/...`) regardless of process platform; POSIX readers drop those
+  lines instead of emitting corrupt repo-relative keys.
+- **P10d — Foreign-user `.dirty` truncate-on-EPERM.**
+  `postBuildSuccess` catches EPERM / EACCES on `rmSync(.dirty)` and
+  falls back to `writeFileSync(.dirty, "")` (truncate). Sentinel
+  written by root via a CI hook no longer wedges every read into a
+  perpetual rebuild loop. Hard EPERM writes a one-shot stderr note.
+- **P10e — Freshness-stats concurrent-safe NDJSON deltas.** Switched
+  the per-repo `.rebuild-stats.json` read-modify-write to an
+  append-only NDJSON log at `.rebuild-stats.log`. Three writers
+  (recordRebuild on a successful build, recordScopedStaleSample on
+  every MCP query, markStatsInactive on shutdown) now race-free
+  thanks to `appendFileSync` of sub-PIPE_BUF lines being atomic on
+  POSIX. `readFoldedStats` folds the log on top of the snapshot;
+  `maybeCompactRebuildStats` in `postBuildSuccess` folds the log
+  into the snapshot and truncates when it crosses 1 MB. Concurrent
+  100-iteration parallel writes no longer lose increments.
+- **P10f — Drift cache periodic sweep.** `stale.ts` lazy-inits a
+  5-second `setInterval(.unref())` that walks `driftCacheByRepo`,
+  `addedCacheByRepo`, and `tsconfigFpCacheByRepo`, removing entries
+  whose `computed_at` is older than `DRIFT_CACHE_TTL_MS * 4`. Self-
+  cancels when all caches empty. Users hopping across N repos no
+  longer accumulate N cache entries for the lifetime of the MCP
+  server.
+- **P10g — Monotonic clocks for in-process durations.** `Date.now()`
+  replaced with `performance.now()` for build deadlines, build
+  duration measurement, statusline budget, doctor smoke-spawn
+  elapsed, scan elapsed, hook elapsed, and drift cache TTL math.
+  Wall-clock ISO retained for persisted timestamps and age-vs-file-
+  mtime comparisons.
+- **P10h — Windows reserved-name guard.** New
+  `util/win-reserved.ts` matches `CON`, `PRN`, `AUX`, `NUL`,
+  `COM1-9`, `LPT1-9` (case-insensitive, with or without single-
+  segment extension). `enumerate.ts` skips matching files,
+  surfacing them under `skipped_files` with reason
+  `"windows-reserved"`. Cross-platform — a POSIX user committing
+  `CON.ts` no longer wedges the build for Windows contributors.
+
+### MCP server hardening
+
+- **P3 — Top-level structured-error catch.** `mcp/server.ts`
+  wraps `dispatchGraphTool` in try/catch and converts every throw
+  (Error, string, or arbitrary value) into a clean
+  `{ok:false, code:"internal", message, request_id}` payload.
+  Pre-0.1.10 a bare throw escaped to the SDK and killed the
+  transport. UUID `request_id` per call.
+- **P4 — Inflight cap + per-tool deadline.** New `mcp/inflight.ts`.
+  `acquire()` returns null at cap (default 8 via
+  `cfg.mcp.max_inflight`); overflow surfaces
+  `{code:"busy", retry_after_ms:50, request_id}` immediately.
+  `withDeadline(fn, ms)` races the dispatch against a monotonic
+  timer (default 5 000 ms via `cfg.mcp.tool_deadline_ms`); timeout
+  surfaces `{code:"timeout", elapsed_ms, request_id}`. Inner work
+  isn't cancellable mid-flight today — needs cooperative signal
+  threading; deferred to a follow-up.
+- **P5 — `health` MCP tool.** New `health` tool returns
+  `{worker_active, last_build_ms, schema_version,
+  snapshot_integrity_ok, snapshot_sha256, inflight, inflight_max,
+  version, uptime_ms}`. Routed before the graph-load /
+  cross-repo registration dance so the probe doesn't itself
+  trigger work.
+
+### Security / observability
+
+- **P6 — JSON depth limit on hook stdin.** `hook/entry.ts`
+  pre-scans the payload string for nesting depth before calling
+  `JSON.parse`. Max 64. Rejects 100k-deep `[[[[...]]]]` DoS
+  payloads without burning O(depth) memory.
+- **P10i — `NO_COLOR` + `--no-color` + TTY detection.** New
+  `util/color.ts` exposes `colorsEnabled()` honoring the
+  no-color.org contract. `cli/analyze.ts` checks the env + argv
+  flags alongside the existing `opts.color` and TTY conditions.
+
+### Internal
+
+- Test suite grew from 840 → 891 passing tests.
+- Per-phase commits on `feat/reliability-0.1.10` keep the review
+  paging tractable.
+
+### Additional phases shipped after the P13 commit
+
+- **P8a — compactJson on the MCP response path.** Dropped the
+  pretty-print indent emitted by `stableStringify` for every MCP
+  reply; cuts wire bytes ~30-50% on typical payloads.
+- **P8b — glob compile caps + ReDoS guard.** Patterns longer than
+  256 chars or with more than 16 `*` chars get rejected via
+  `GlobCompileError`. `compileGlobs` logs the failed pattern and
+  skips it instead of crashing the whole enumerate.
+- **P9a — Multi-repo discovery in `tokenomy report`.** New
+  `cli/report-repos.ts` scans `~/.tokenomy/graphs/<repoId>/` plus
+  in-repo entries via `projects.json`. Report renders a
+  "Repos tracked: N" table with shortId · path · nodes ·
+  last_build · integrity status. Pre-0.1.10 the report only
+  counted the cwd's repo, so users with N tracked repos saw a
+  single-repo summary.
+- **P9g — Repo identity canonicalization.** `resolveRepoId` hashes
+  `realpathSync.native(path)` so symlinked workspaces and macOS
+  case variants collapse to one identity. Display repoPath
+  remains the lexical resolve() so users see what they typed.
+- **P11 — README zero-touch walkthrough entries.** Section h3)
+  walks the user through `mcp.max_inflight`,
+  `mcp.tool_deadline_ms`, the quarantine default, and the
+  repo-local TypeScript trust gate (with UNSAFE warning).
+- **P12c — Backup retention.** `backupFile` prunes
+  `*.tokenomy-bak-*` siblings down to the newest 10 after each
+  fresh backup. Init/uninstall cycles no longer accumulate
+  hundreds of backups next to `settings.json`.
+
+### Second batch (post-checkpoint, same session)
+
+- **P6b** OSS-search response cap (5 MB) + `snippet_caveat` on
+  every repo-search result so an attacker-planted comment in a
+  matched file ships framed as data, not as a directive.
+- **P6c** `util/git-bin.ts` resolves git via `which`/`where`, then
+  verifies the absolute path is under a known-safe prefix
+  (`/usr/bin`, `/usr/local/bin`, `/opt`, `/Applications`, Windows
+  `Program Files\Git\`). `GIT_EXEC_PATH` env override bypasses for
+  airgapped systems / containers. Wired into `repo-id.ts` +
+  `enumerate.ts`.
+- **P7** watcher self-heal + polling fallback. `WorkerEntry.mode`
+  is `"watch"|"poll"|"off"`. `fs.watch` failure (EMFILE, ENOSPC,
+  ENOTSUP) falls through to a `setInterval(500).unref()` that
+  statSyncs the sentinel and edge-triggers schedule on mtime
+  change. `inotify-quota` failures write a structured
+  `.last-async-failure.json` with the actionable hint.
+- **P8c** binary-search truncation in `clipResultToBudget`. Each
+  array drops via `O(log n)` stringifies instead of O(n).
+- **P8d** process-local snapshot LRU cache (max 4 entries) keyed
+  on snapshot path + mtimeMs. Eliminates the sub-100ms re-parse
+  penalty on burst reads.
+- **P9a** multi-repo discovery in `tokenomy report`. (already
+  recorded above)
+- **P9g** repo identity canonicalization. (already recorded above)
+- **P12** cross-platform CI matrix: ubuntu/macos/windows × node
+  20/22 = 6 jobs. Non-Linux jobs are `continue-on-error` while
+  the test suite gets fully cross-platform.
+- **P12b** `audit:supply` + `audit:vuln` npm scripts, wired into
+  CI as soft-fail steps.
+- **P12d** projects registry lazy compaction. `listProjects()`
+  folds the dedupe pass into the on-disk file when it crosses
+  1 MB.
+
+### Still deferred (follow-up 0.1.10.x or 0.1.11)
+
+- **P4b** cross-process build lock with pid + hrtime + uuid.
+- **P6 Zod input validation + size caps** for every MCP tool.
+- **P8** NDJSON events log + rotation (P8a, P8b, P8c, P8d all
+  shipped; the durable event-log piece is the only P8 sub-phase
+  still outstanding).
+- **P9b–f** per-repo roll-up `--repos-top` CLI flag,
+  feature-coverage drift test, Raven scoped+total split, analyze
+  rollups, HTML report parity.
+- **P10 stdio keepalive** (SDK shape verification needed).
+
 ## [0.1.9] — 2026-05-16
 
 ### Fixed (graph staleness — core architectural pass)
@@ -1287,7 +1514,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.10
 [0.1.9]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.9
 [0.1.8]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.8
 [0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7

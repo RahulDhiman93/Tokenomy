@@ -110,6 +110,14 @@ export interface McpRuleConfig {
   max_text_bytes: number;
   per_block_head: number;
   per_block_tail: number;
+  // 0.1.10+ P4: MCP server-side concurrency cap. Overflow returns
+  // {ok:false, code:"busy"} immediately (no queueing) so the agent
+  // retries via its own backoff. Default 8.
+  max_inflight?: number;
+  // 0.1.10+ P4: per-tool monotonic deadline. The handler races
+  // against this; on timeout returns {ok:false, code:"timeout",
+  // elapsed_ms}. Default 5000.
+  tool_deadline_ms?: number;
   // Optional: additional user trim profiles (merged with BUILTIN_PROFILES).
   // Empty / undefined → use built-ins only.
   profiles?: import("../rules/profiles.js").TrimProfile[];
@@ -266,6 +274,13 @@ export interface GraphConfig {
     enabled: boolean;
     debounce_ms: number;
   };
+  // 0.1.10+ PSEC2 (codex round 4): the LOADER prefers process-local
+  // typescript first; this flag controls the repo-local FALLBACK
+  // when process-local resolution fails. Default true so prod
+  // installs without a bundled typescript keep building TS repos.
+  // Security-sensitive deployments can flip to false to require
+  // bundled typescript and refuse repo-local execution.
+  allow_repo_local_typescript?: boolean;
 }
 
 export interface PerToolOverride {
