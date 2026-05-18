@@ -1514,7 +1514,8 @@ First public alpha. Phase 1 scope: transparent MCP tool-output trimming via `Pos
 - Statusline with live savings counter — Phase 2.
 - `tokenomy analyze` over transcripts — Phase 2.
 
-[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/RahulDhiman93/Tokenomy/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.10
 [0.1.9]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.9
 [0.1.8]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.8
 [0.1.7]: https://github.com/RahulDhiman93/Tokenomy/releases/tag/v0.1.7
