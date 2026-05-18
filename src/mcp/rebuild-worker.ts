@@ -254,8 +254,19 @@ const triggerBuild = (entry: WorkerEntry): void => {
         // mid-build append into a single event we already consumed,
         // so the worker can otherwise go idle while `.dirty` still
         // exists. Re-arm a follow-up build if so.
-        if (existsSync(graphDirtySentinelPath(entry.identity, entry.cfg.graph))) {
-          schedule(entry);
+        //
+        // opencode round 1 P3: gate on size > 0 — the foreign-user
+        // EPERM truncate-fallback leaves an empty `.dirty`, and
+        // rotateSentinelIfOversize can write an empty file too.
+        // Pre-fix existsSync was true for those, scheduling a
+        // useless rebuild every cycle.
+        try {
+          const sentinel = graphDirtySentinelPath(entry.identity, entry.cfg.graph);
+          if (existsSync(sentinel) && statSync(sentinel).size > 0) {
+            schedule(entry);
+          }
+        } catch {
+          // best-effort
         }
         return;
       }
@@ -519,7 +530,14 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
       // schedule a redundant no-op rebuild after every successful
       // build — costly on large graphs. Only schedule when the
       // sentinel actually exists at event time.
-      if (!existsSync(graphDirtySentinelPath(identity, cfg.graph))) return;
+      // opencode round 1 P3: size > 0 — see explanation in the
+      // worker re-arm path above.
+      try {
+        const sentinel = graphDirtySentinelPath(identity, cfg.graph);
+        if (!existsSync(sentinel) || statSync(sentinel).size === 0) return;
+      } catch {
+        return;
+      }
       const entry = workers.get(identity.repoPath);
       if (entry) schedule(entry);
     });
@@ -622,7 +640,11 @@ export const registerRepo = (cwd: string, cfg: Config): void => {
   // only reports FUTURE changes, so without this kick the sentinel
   // would sit forever and every read would observe stale data.
   try {
-    if (existsSync(graphDirtySentinelPath(identity, cfg.graph))) {
+    // opencode round 1 P3: empty sentinel doesn't represent a real
+    // pending edit — see size-guard rationale in the worker re-arm
+    // and fs.watch event paths.
+    const sentinel = graphDirtySentinelPath(identity, cfg.graph);
+    if (existsSync(sentinel) && statSync(sentinel).size > 0) {
       schedule(entry);
     }
   } catch {

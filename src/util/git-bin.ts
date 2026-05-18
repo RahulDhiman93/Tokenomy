@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 // 0.1.10+ P6c: lock the `git` binary to a verified absolute path
@@ -61,10 +61,22 @@ const resolvePathInProcess = (): string | null => {
       try {
         const st = statSync(full);
         if (!st.isFile()) continue;
-        if (isUnderSafePrefix(full)) {
-          return full;
+        // 0.1.10+ opencode round 1 P1: resolve symlinks BEFORE the
+        // safe-prefix check. An attacker can plant a symlink at
+        // `/usr/local/bin/git` pointing at `/tmp/evil`; pre-fix the
+        // lexical prefix check passed and the malicious binary ran.
+        // realpath gives the true target; the prefix check applies
+        // to that.
+        let resolvedFull: string;
+        try {
+          resolvedFull = realpathSync(full);
+        } catch {
+          resolvedFull = full; // fall back if realpath fails
         }
-        if (firstUnsafe === null) firstUnsafe = full;
+        if (isUnderSafePrefix(resolvedFull)) {
+          return resolvedFull;
+        }
+        if (firstUnsafe === null) firstUnsafe = resolvedFull;
       } catch {
         // missing or unreadable — try next
       }
@@ -83,7 +95,15 @@ const which = (): string | null => {
   const explicit = process.env["TOKENOMY_GIT_BIN"];
   if (explicit && explicit.length > 0) {
     try {
-      if (statSync(explicit).isFile()) return explicit;
+      if (statSync(explicit).isFile()) {
+        // 0.1.10+ opencode round 1 P1: realpath the override too —
+        // a user might point TOKENOMY_GIT_BIN at a symlink.
+        try {
+          return realpathSync(explicit);
+        } catch {
+          return explicit;
+        }
+      }
     } catch {
       // fall through to PATH-walk; explicit was a typo or stale env
     }
@@ -100,15 +120,32 @@ let warnedUnsafe = false;
 // would matter on hot paths (repo-id, stale check).
 export const getVerifiedGitBin = (): string | null => {
   if (cached !== undefined) return cached;
+  // 0.1.10+ opencode round 1 P1: when TOKENOMY_GIT_BIN is set,
+  // trust it (after realpath) regardless of safe-prefix. The
+  // explicit override is the supported escape hatch for unusual
+  // installs. Resolve symlinks defensively so a malicious symlink
+  // at the env value's path still produces the true target.
+  const explicit = process.env["TOKENOMY_GIT_BIN"];
+  if (explicit && explicit.length > 0) {
+    try {
+      if (statSync(explicit).isFile()) {
+        let trusted: string;
+        try {
+          trusted = realpathSync(explicit);
+        } catch {
+          trusted = explicit;
+        }
+        cached = trusted;
+        return trusted;
+      }
+    } catch {
+      // env points at a missing file — fall through to PATH walk
+    }
+  }
   const resolved = which();
   if (resolved === null) {
     cached = null;
     return null;
-  }
-  if (process.env["TOKENOMY_GIT_BIN"] === resolved) {
-    // Explicit override — trust it.
-    cached = resolved;
-    return resolved;
   }
   if (!existsSync(resolved)) {
     cached = null;

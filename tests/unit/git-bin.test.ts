@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,7 +36,10 @@ test("getVerifiedGitBin: TOKENOMY_GIT_BIN override trusted verbatim when path re
   _resetGitBinForTests();
   withFakeGit((_dir, exe) => {
     withEnv("TOKENOMY_GIT_BIN", exe, () => {
-      assert.equal(getVerifiedGitBin(), exe);
+      // 0.1.10+ opencode round 1 P1: result is realpath'd so
+      // symlink-bypass attacks can't fool the safe-prefix check.
+      // On macOS /var/folders/... → /private/var/folders/...
+      assert.equal(getVerifiedGitBin(), realpathSync(exe));
     });
   });
 });
@@ -89,13 +92,13 @@ test("_resetGitBinForTests: clears cache between cases", () => {
   _resetGitBinForTests();
   withFakeGit((_dir, exeA) => {
     withEnv("TOKENOMY_GIT_BIN", exeA, () => {
-      assert.equal(getVerifiedGitBin(), exeA);
+      assert.equal(getVerifiedGitBin(), realpathSync(exeA));
     });
   });
   _resetGitBinForTests();
   withFakeGit((_dir, exeB) => {
     withEnv("TOKENOMY_GIT_BIN", exeB, () => {
-      assert.equal(getVerifiedGitBin(), exeB);
+      assert.equal(getVerifiedGitBin(), realpathSync(exeB));
     });
   });
 });

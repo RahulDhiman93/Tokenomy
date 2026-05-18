@@ -352,30 +352,19 @@ export class JsonGraphStore implements GraphStore {
         quarantine(identity, cfg, snapPath, metaPath, "snapshot-sha-mismatch");
         return null;
       }
-    } else if (
-      metaForCheck &&
-      typeof metaForCheck === "object" &&
-      isGraphMetaShape(metaForCheck)
-    ) {
-      // 0.1.10+ codex round 3 P2: pre-0.1.10 meta lacks
-      // snapshot_sha256. Backfill the missing field by computing
-      // the SHA over current bytes and atomically rewriting the
-      // meta. Future loads then run the full integrity check.
-      // Pre-fix, legacy graphs were served indefinitely without
-      // ever writing a SHA — the new quarantine path stayed
-      // disabled for upgraded users until an unrelated rebuild.
-      try {
-        const computedSha = sha256OfString(raw);
-        const upgraded: GraphMeta = {
-          ...(metaForCheck as GraphMeta),
-          snapshot_sha256: computedSha,
-        };
-        atomicWrite(metaPath, `${stableStringify(upgraded)}\n`, false);
-      } catch {
-        // best-effort — failure to backfill leaves the legacy
-        // meta in place; the next load attempts again.
-      }
     }
+    // 0.1.10+ opencode round 1 P2: SHA backfill removed.
+    // Previously legacy meta without snapshot_sha256 got upgraded
+    // by computing the SHA from already-read bytes and writing a
+    // fresh meta. Race: a concurrent writer could swap the live
+    // snapshot between our read and our meta-write, leaving meta
+    // with a sha for the OLD snapshot but the file holding the
+    // NEW one. The next read then quarantined a healthy pair.
+    // Pre-0.1.10 meta now just loads without verification (the
+    // declaredSha-is-null branch above). Forced rebuild via
+    // `tokenomy graph build --force` is the supported path to
+    // start writing the SHA. Quarantine still applies to any
+    // future writes that include snapshot_sha256.
 
     bumpIntegrity(graphIntegrityStatsPath(identity, cfg), (cur) => ({
       verified: cur.verified + 1,
