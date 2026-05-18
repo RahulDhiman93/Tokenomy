@@ -441,8 +441,12 @@ test("analyze, scan, tune, and diff run against synthetic source transcripts", a
     const tunePath = writeGolemTune(tune.state);
     assert.equal(tunePath, golemTunePath());
 
+    // Use `--since=all` instead of `--since=4w`: synthetic data is
+    // dated 2026-04-18 which falls outside a 4-week window from any
+    // run-date past 2026-05-16. Pre-fix this test became a flake
+    // that hard-failed once the calendar moved.
     const diff = await captureOut(() =>
-      runDiff(["--tool", "mcp__fake__big", "--grep", "needle", "--tokenizer=heuristic", "--since=4w"]),
+      runDiff(["--tool", "mcp__fake__big", "--grep", "needle", "--tokenizer=heuristic", "--since=all"]),
     );
     assert.equal(diff.value, 0);
     assert.match(diff.out, /applied rules:/);
