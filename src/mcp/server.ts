@@ -27,6 +27,14 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
   // restart the server.
   let bootCfgInflight = 8;
   let bootCfgDeadlineMs = 5_000;
+  // 0.1.10+ codex round 14 P2: tools that internally trigger a
+  // full graph build (`build_or_update_graph`, and any read-path
+  // that hits ensureFreshGraph's await branch) can legitimately
+  // take longer than the 5s default. Bound them by the build
+  // timeout instead so a slow first build doesn't surface
+  // {code:"timeout"} to the client while the work continues in
+  // the background.
+  let bootCfgBuildTimeoutMs = 30_000;
   try {
     let cfgPath = cwd;
     try {
@@ -41,10 +49,16 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     if (typeof bootCfg.mcp.tool_deadline_ms === "number") {
       bootCfgDeadlineMs = bootCfg.mcp.tool_deadline_ms;
     }
+    if (typeof bootCfg.graph.build_timeout_ms === "number") {
+      bootCfgBuildTimeoutMs = bootCfg.graph.build_timeout_ms;
+    }
   } catch {
     // best-effort — defaults stand
   }
   configureInflight(bootCfgInflight);
+
+  // Build-triggering tools get the longer build deadline.
+  const BUILD_TOOLS = new Set(["build_or_update_graph"]);
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -92,7 +106,14 @@ export const startGraphServer = async (cwd: string): Promise<void> => {
     const releaseOnce = (): void => slot.release();
     innerPromise.then(releaseOnce, releaseOnce);
     try {
-      const outcome = await withDeadline(() => innerPromise, bootCfgDeadlineMs);
+      // codex round 14 P2: build tools use the larger build
+      // deadline so a slow first build doesn't return {timeout}.
+      // max(...) so users explicitly tuning tool_deadline_ms up
+      // above build_timeout_ms still get the larger value.
+      const deadlineForCall = BUILD_TOOLS.has(request.params.name)
+        ? Math.max(bootCfgBuildTimeoutMs, bootCfgDeadlineMs)
+        : bootCfgDeadlineMs;
+      const outcome = await withDeadline(() => innerPromise, deadlineForCall);
       if (outcome.kind === "timeout") {
         return {
           content: [

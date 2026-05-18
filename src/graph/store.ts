@@ -192,11 +192,21 @@ const commitRename = (from: string, to: string): void => {
   // Fallback: copy + unlink. Less atomic than rename, but the snapshot
   // is already SHA-pinned in meta — a crash mid-copy still leaves the
   // loader's integrity check able to quarantine.
+  //
+  // codex round 14 P2: the unlink is best-effort. Once copyFileSync
+  // succeeds, the canonical file IS written; a Windows AV / Search
+  // Indexer holding the temp file open shouldn't fail the whole
+  // save — sweepOrphanCommitDirs on the next save handles the
+  // leftover.
   try {
     copyFileSync(from, to);
-    unlinkSync(from);
   } catch {
     throw lastErr ?? new Error(`commitRename: ${from} → ${to} failed`);
+  }
+  try {
+    unlinkSync(from);
+  } catch {
+    // best-effort
   }
 };
 

@@ -344,16 +344,28 @@ const buildHealthReport = (cwd: string): QueryResult<HealthReport> => {
       last_quarantine_at?: string | null;
     }>(fsReadFileSync(graphIntegrityStatsPath(identity, cfg.graph), "utf8"));
     if (integ) {
-      const meta = healthSafeParse<{ built_at?: string }>(
-        fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
-      );
-      const builtAt = typeof meta?.built_at === "string" ? Date.parse(meta.built_at) : NaN;
+      // codex round 14 P2: read meta defensively. When corruption
+      // just quarantined the pair, meta.json is missing — the
+      // readFileSync throws and the outer catch would otherwise
+      // leave integrityOk at true (false positive). Treat missing
+      // meta + last_quarantine_at present as integrity FAILURE.
+      let builtAt = NaN;
+      try {
+        const meta = healthSafeParse<{ built_at?: string }>(
+          fsReadFileSync(graphMetaPath(identity, cfg.graph), "utf8"),
+        );
+        builtAt = typeof meta?.built_at === "string" ? Date.parse(meta.built_at) : NaN;
+      } catch {
+        builtAt = NaN;
+      }
       const lastQ =
         typeof integ.last_quarantine_at === "string"
           ? Date.parse(integ.last_quarantine_at)
           : NaN;
       // Healthy when no quarantine ever fired, OR when the current
-      // built_at post-dates the most recent quarantine.
+      // built_at post-dates the most recent quarantine. Missing
+      // meta + a quarantine timestamp present means corruption was
+      // just quarantined; surface integrity FALSE.
       if (Number.isFinite(lastQ) && (!Number.isFinite(builtAt) || builtAt <= lastQ)) {
         integrityOk = false;
       }
