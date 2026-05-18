@@ -366,12 +366,19 @@ export class JsonGraphStore implements GraphStore {
     // start writing the SHA. Quarantine still applies to any
     // future writes that include snapshot_sha256.
 
-    bumpIntegrity(graphIntegrityStatsPath(identity, cfg), (cur) => ({
-      verified: cur.verified + 1,
-      mismatched: cur.mismatched,
-      quarantined_total: cur.quarantined_total,
-      last_quarantine_at: cur.last_quarantine_at,
-    }));
+    // 0.1.10+ codex round 11 P2: only count as verified when an
+    // actual SHA comparison ran. Pre-fix legacy meta (no
+    // snapshot_sha256) bumped the counter without verification,
+    // so `tokenomy report` claimed integrity success on unverified
+    // bytes. Legacy meta now loads silently but doesn't count.
+    if (declaredSha !== null) {
+      bumpIntegrity(graphIntegrityStatsPath(identity, cfg), (cur) => ({
+        verified: cur.verified + 1,
+        mismatched: cur.mismatched,
+        quarantined_total: cur.quarantined_total,
+        last_quarantine_at: cur.last_quarantine_at,
+      }));
+    }
     return parsed;
   }
 
