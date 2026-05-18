@@ -266,15 +266,33 @@ const sweepOrphanCommitDirs = (
     const pidStr = dashIdx > 0 ? rest.slice(0, dashIdx) : rest;
     const pid = Number.parseInt(pidStr, 10);
     if (!Number.isFinite(pid) || pid <= 0) continue;
-    if (pid === process.pid) continue; // never sweep our own in-flight dir
-    let alive = false;
-    try {
-      process.kill(pid, 0);
-      alive = true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "EPERM") alive = true;
+    // 0.1.10+ codex round 16 P2: sweep stale current-pid dirs too,
+    // but only when they're older than 60 seconds. Pre-fix we
+    // unconditionally skipped own-pid; if a prior save's finally
+    // rmSync failed (Windows AV/Indexer lock), the leftover dir
+    // made commitInFlight() return true on every subsequent load
+    // until process exit. 60s threshold protects against sweeping
+    // a sibling save() invocation legitimately in flight in
+    // another part of the same process.
+    if (pid === process.pid) {
+      try {
+        const st = statSync(join(dir, name));
+        if (Date.now() - st.mtimeMs < 60_000) continue; // recent — keep
+      } catch {
+        continue; // can't stat — leave alone
+      }
+      // Fall through: own-pid dir > 60s old gets swept like a dead
+      // pid's would.
+    } else {
+      let alive = false;
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EPERM") alive = true;
+      }
+      if (alive) continue;
     }
-    if (alive) continue;
     try {
       rmSync(join(dir, name), { recursive: true, force: true });
     } catch {

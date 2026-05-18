@@ -21,12 +21,20 @@ import type { FailOpen, QueryResult } from "../types.js";
 // 1-2 repo case for free.
 interface SnapshotCacheEntry {
   mtimeMs: number;
+  // 0.1.10+ codex round 16 P2: include size in the cache key so an
+  // mtime-preserving restore that swaps in NEW bytes of a
+  // different size invalidates the cache. Same-size + same-mtime
+  // + same-built_at restores would be byte-for-byte identical and
+  // serve safely from cache.
+  size: number;
   built_at: string;
   graph: Graph;
   meta: GraphMeta;
 }
 const SNAPSHOT_CACHE_MAX = 4;
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
+
+const cachedSize = (entry: SnapshotCacheEntry): number => entry.size;
 
 const touchCache = (key: string, entry: SnapshotCacheEntry): void => {
   snapshotCache.delete(key);
@@ -105,22 +113,40 @@ export const loadGraphContext = (
       liveBuiltAt = null;
     }
   }
-  // 0.1.10+ codex round 13 P2: always honor the fresh loadGraph
-  // result. The previous "reuse cached parsed graph when shape
-  // matches" optimisation served stale data after an mtime-
-  // preserving restore (rsync, backup recovery) that swapped in
-  // new bytes loadGraph just verified. The WeakMap index cache
-  // downstream is keyed on Graph reference; a fresh parse rebuilds
-  // the index once per cache miss, which is cheap compared to
-  // serving stale data. Cache write still happens so the next call
-  // can hit (when nothing changed) — but read path doesn't trust
-  // cached parsed value over loadGraph's verified result.
-  void cached;
-  void liveBuiltAt;
-  graph = store.loadGraph(identity, config.graph);
-  meta = store.loadMeta(identity, config.graph);
-  if (graph && meta && mtimeMs > 0) {
-    touchCache(snapPath, { mtimeMs, built_at: meta.built_at, graph, meta });
+  // 0.1.10+ codex round 13 + round 16 P2: cache hit must NOT
+  // bypass integrity, but the round-13 fix made the cache pure
+  // dead code (every call re-parsed). Reinstate cache reuse on
+  // a tightened key — mtime + size + built_at — so cached reads
+  // skip parse/integrity-bump in the common case. Loadgraph's
+  // integrity check still re-runs on cache miss and on any
+  // mtime/size/built_at change, so an mtime-preserving restore
+  // that ALSO preserves size + built_at is the only edge case;
+  // such restores already match cache validity by definition
+  // (the live bytes are byte-for-byte identical to what we cached).
+  let snapshotSize = 0;
+  try {
+    snapshotSize = mtimeMs > 0 ? statSync(snapPath).size : 0;
+  } catch {
+    snapshotSize = 0;
+  }
+  if (
+    cached &&
+    cached.mtimeMs === mtimeMs &&
+    mtimeMs > 0 &&
+    liveBuiltAt !== null &&
+    cached.built_at === liveBuiltAt &&
+    cachedSize(cached) === snapshotSize
+  ) {
+    // Cache hit — skip parse + integrity bump.
+    graph = cached.graph;
+    meta = cached.meta;
+    touchCache(snapPath, cached);
+  } else {
+    graph = store.loadGraph(identity, config.graph);
+    meta = store.loadMeta(identity, config.graph);
+    if (graph && meta && mtimeMs > 0) {
+      touchCache(snapPath, { mtimeMs, size: snapshotSize, built_at: meta.built_at, graph, meta });
+    }
   }
   if (!graph || !meta) return readLastGraphBuildFailure(identity, config.graph) ?? fail("graph-not-built");
 

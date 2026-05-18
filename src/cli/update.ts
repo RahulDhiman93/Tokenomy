@@ -338,10 +338,17 @@ export const runUpdate = async (opts: UpdateOptions): Promise<number> => {
       };
       const installedVersion = parsed?.dependencies?.tokenomy?.version;
       if (typeof installedVersion === "string" && resolved && installedVersion !== resolved) {
+        // 0.1.10+ codex round 16 P2: bail before re-init. Pre-fix
+        // we logged a warning and still spawned `tokenomy init`,
+        // which would stage the mismatched package the
+        // verification just flagged — leaving the user on an
+        // unexpected build (e.g. dist-tag moved between resolve
+        // and install).
         process.stderr.write(
           `tokenomy update: version-mismatch — expected ${resolved}, got ${installedVersion}. ` +
-            "Re-run `tokenomy update` to converge.\n",
+            "Re-run `tokenomy update` to converge; skipping re-init this round.\n",
         );
+        return 1;
       }
     } catch {
       // best-effort
